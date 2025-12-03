@@ -385,6 +385,7 @@ export async function streamChat(
   jobId: string,
   message: string,
   mode: "auto" | "template",
+  reasoning: "none" | "low" = "none",
   onTrace: (trace: AgentTrace) => void,
   onResult: (result: ChatResponse) => void,
   onError: (error: string) => void
@@ -392,7 +393,7 @@ export async function streamChat(
   const response = await fetch(`/api/jobs/${jobId}/chat/stream`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message, mode }),
+    body: JSON.stringify({ message, mode, reasoning }),
   });
 
   if (!response.ok) {

@@ -308,12 +308,58 @@ export function JobEditor({ jobId, onBack, initialPrompt, initialFiles }: JobEdi
           <div className="w-[380px] border-r border-[#d2d2d7] bg-white overflow-y-auto">
             <div className="p-6">
               {isReady ? (
-                <FieldsEditor
-                  template={template}
-                  job={{ ...job, fields: localFields }}
-                  onFieldChange={handleFieldChange}
-                  disabled={updateFields.isPending}
-                />
+                <>
+                  {/* Populated Fields Summary */}
+                  {(() => {
+                    const populatedFields = Object.entries(localFields).filter(
+                      ([, value]) => value !== null && value !== ""
+                    );
+                    const totalFields = template.fields.length;
+                    const populatedCount = populatedFields.length;
+
+                    if (populatedCount === 0) return null;
+
+                    return (
+                      <div className="mb-6 p-4 bg-[#f5f5f7] rounded-xl">
+                        <div className="flex items-center justify-between mb-3">
+                          <span className="text-[11px] font-semibold uppercase tracking-wider text-[#86868b]">
+                            Extracted Data
+                          </span>
+                          <span className="text-[12px] font-medium text-[#1d1d1f]">
+                            {populatedCount} / {totalFields} fields
+                          </span>
+                        </div>
+                        <div className="flex flex-wrap gap-1.5">
+                          {populatedFields.slice(0, 8).map(([fieldName, value]) => (
+                            <div
+                              key={fieldName}
+                              className="px-2 py-1 bg-white rounded-md text-[11px] text-[#1d1d1f] shadow-sm"
+                              title={`${fieldName}: ${value}`}
+                            >
+                              <span className="text-[#86868b]">
+                                {fieldName.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, c => c.toUpperCase())}:
+                              </span>{" "}
+                              <span className="font-medium">
+                                {String(value).length > 15 ? String(value).slice(0, 15) + "..." : value}
+                              </span>
+                            </div>
+                          ))}
+                          {populatedFields.length > 8 && (
+                            <div className="px-2 py-1 bg-white rounded-md text-[11px] text-[#86868b] shadow-sm">
+                              +{populatedFields.length - 8} more
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })()}
+                  <FieldsEditor
+                    template={template}
+                    job={{ ...job, fields: localFields }}
+                    onFieldChange={handleFieldChange}
+                    disabled={updateFields.isPending}
+                  />
+                </>
               ) : (
                 <div className="flex flex-col items-center justify-center py-16">
                   <svg className="animate-spin h-6 w-6 text-[#86868b] mb-3" viewBox="0 0 24 24">

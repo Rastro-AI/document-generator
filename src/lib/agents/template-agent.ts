@@ -1,7 +1,7 @@
 /**
  * Template Editing Agent
  * Uses OpenAI Agents SDK to edit PDF templates
- * Optimized for speed - single run, no image injection loops
+ * Optimized for speed - diff-based edits, template in context
  */
 
 import {
@@ -16,6 +16,7 @@ import fs from "fs/promises";
 import path from "path";
 import { getTemplateRoot } from "@/lib/paths";
 import { getJobTemplateContent, updateJobTemplateContent } from "@/lib/fs-utils";
+import { TimingLogger } from "@/lib/timing-logger";
 
 // Initialize the OpenAI provider
 let providerInitialized = false;
@@ -30,80 +31,100 @@ function ensureProvider() {
 }
 
 /**
- * Instructions for the template editing agent - optimized for speed
+ * Instructions for the template editing agent - optimized for speed with diff-based edits
  */
 const TEMPLATE_AGENT_INSTRUCTIONS = `
 You are a React PDF template editor. Edit templates that use @react-pdf/renderer.
 
+The current template code is provided in the user message. Make changes using the patch_template tool with search/replace operations.
+
 WORKFLOW:
-1. Read the template with read_template
-2. Make changes with edit_template
+1. Analyze the template code provided in context
+2. Use patch_template with one or more search/replace operations
 3. Respond with a brief summary of what you changed
 
-RULES:
+RULES FOR patch_template:
+- Each operation finds an exact string and replaces it
+- The "search" string must match EXACTLY (including whitespace/indentation)
+- Keep changes minimal - only modify what's needed
+- You can include multiple operations in one call
+
+TEMPLATE RULES:
 - Keep function signature: export function render(fields, assets, templateRoot)
 - Only use: Document, Page, View, Text, Image, StyleSheet, Font
 - Styles must use StyleSheet.create()
-- Make minimal, targeted changes
 
-TIPS:
-- Colors: change hex values like "#0099CC"
+COMMON EDITS:
+- Colors: change hex values like "#0099CC" to "#FF0000"
+- Font size: change fontSize: 12 to fontSize: 24
 - Spacing: modify padding/margin values
-- Fonts: adjust fontSize, fontWeight
 - Layout: modify flexDirection, width, height
 `.trim();
 
 /**
- * Create read_template tool
+ * Get template content for a job
  */
-function createReadTemplateTool(jobId: string, templateId: string, onEvent?: AgentEventCallback) {
-  return tool({
-    name: "read_template",
-    description: "Read the template.tsx file contents.",
-    parameters: z.object({}),
-    execute: async () => {
-      onEvent?.({ type: "status", content: "Reading template..." });
-      const jobTemplateContent = await getJobTemplateContent(jobId);
-      if (jobTemplateContent) {
-        return jobTemplateContent;
-      }
+async function getTemplateContent(jobId: string, templateId: string): Promise<string> {
+  const jobTemplateContent = await getJobTemplateContent(jobId);
+  if (jobTemplateContent) {
+    return jobTemplateContent;
+  }
 
-      const templateRoot = getTemplateRoot(templateId);
-      const templatePath = path.join(templateRoot, "template.tsx");
-      try {
-        return await fs.readFile(templatePath, "utf8");
-      } catch {
-        return "Error: Template file not found";
-      }
-    },
-  });
+  const templateRoot = getTemplateRoot(templateId);
+  const templatePath = path.join(templateRoot, "template.tsx");
+  try {
+    return await fs.readFile(templatePath, "utf8");
+  } catch {
+    return "Error: Template file not found";
+  }
 }
 
 /**
  * Track template changes for this session
  */
 let sessionTemplateChanged = false;
+let currentTemplateContent = "";
 
 /**
- * Create edit_template tool
+ * Create patch_template tool - diff-based editing for speed
  */
-function createEditTemplateTool(jobId: string, onEvent?: AgentEventCallback) {
+function createPatchTemplateTool(jobId: string, onEvent?: AgentEventCallback) {
   return tool({
-    name: "edit_template",
-    description: "Edit template.tsx. Provide complete modified file content.",
+    name: "patch_template",
+    description: "Edit template using search/replace operations. Provide one or more operations to find and replace exact strings in the template.",
     parameters: z.object({
-      new_content: z.string().describe("Complete new template.tsx content"),
+      operations: z.array(z.object({
+        search: z.string().describe("Exact string to find in the template (must match exactly including whitespace)"),
+        replace: z.string().describe("String to replace it with"),
+      })).describe("Array of search/replace operations to apply"),
     }),
-    execute: async ({ new_content }) => {
-      onEvent?.({ type: "status", content: "Applying changes to template..." });
+    execute: async ({ operations }) => {
+      onEvent?.({ type: "status", content: "Applying changes..." });
       try {
-        if (!new_content.includes("export function render")) {
-          return JSON.stringify({ error: "Must export render function" });
+        let content = currentTemplateContent;
+        const results: string[] = [];
+
+        for (const op of operations) {
+          if (!content.includes(op.search)) {
+            results.push(`NOT FOUND: "${op.search.substring(0, 50)}..."`);
+            continue;
+          }
+          content = content.replace(op.search, op.replace);
+          results.push(`OK: replaced "${op.search.substring(0, 30)}..."`);
         }
-        await updateJobTemplateContent(jobId, new_content);
+
+        // Validate the result
+        if (!content.includes("export function render")) {
+          return JSON.stringify({ error: "Result missing render function", results });
+        }
+
+        // Save the updated content
+        await updateJobTemplateContent(jobId, content);
+        currentTemplateContent = content;
         sessionTemplateChanged = true;
-        onEvent?.({ type: "status", content: "Template updated successfully" });
-        return JSON.stringify({ success: true });
+        onEvent?.({ type: "status", content: "Template updated" });
+
+        return JSON.stringify({ success: true, results });
       } catch (error) {
         return JSON.stringify({ error: String(error) });
       }
@@ -192,10 +213,11 @@ export interface TemplateAgentResult {
   traces?: AgentTrace[];
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   history?: any[];
+  timingLogPath?: string;
 }
 
 /**
- * Run the template editing agent - optimized for speed
+ * Run the template editing agent - optimized for speed with diff-based edits
  */
 export async function runTemplateAgent(
   jobId: string,
@@ -205,9 +227,14 @@ export async function runTemplateAgent(
   templateFields: Array<{ name: string; type: string; description: string }>,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   previousHistory: any[] = [],
-  onEvent?: AgentEventCallback
+  onEvent?: AgentEventCallback,
+  reasoning: "none" | "low" = "none"
 ): Promise<TemplateAgentResult> {
+  const timing = new TimingLogger(`agent_${jobId}`);
+
+  timing.start("provider_init");
   ensureProvider();
+  timing.end();
 
   // Emit initial status
   onEvent?.({ type: "status", content: "Thinking..." });
@@ -216,45 +243,66 @@ export async function runTemplateAgent(
   sessionTemplateChanged = false;
   let fieldUpdates: Record<string, string> | undefined;
 
-  // Create tools with event callback
-  const readTemplateTool = createReadTemplateTool(jobId, templateId, onEvent);
-  const updateFieldsTool = createUpdateFieldsTool(currentFields, templateFields, onEvent);
-  const editTemplateTool = createEditTemplateTool(jobId, onEvent);
+  timing.start("load_template");
+  // Load template content upfront - no tool call needed
+  currentTemplateContent = await getTemplateContent(jobId, templateId);
+  timing.end();
 
-  // Create agent with reasoning disabled for speed
+  timing.start("create_tools");
+  // Create tools with event callback
+  const updateFieldsTool = createUpdateFieldsTool(currentFields, templateFields, onEvent);
+  const patchTemplateTool = createPatchTemplateTool(jobId, onEvent);
+  timing.end();
+
+  timing.start("create_agent");
+  // Create agent with gpt-5.1 - fast mode (none) or slow mode (low reasoning)
   const agent = new Agent({
     name: "TemplateEditor",
     instructions: TEMPLATE_AGENT_INSTRUCTIONS,
     model: "gpt-5.1",
-    tools: [readTemplateTool, updateFieldsTool, editTemplateTool],
+    modelSettings: {
+      reasoning: { effort: reasoning },
+    },
+    tools: [updateFieldsTool, patchTemplateTool],
   });
+  timing.end();
 
   try {
-    // Build input - continue from previous history or start fresh
+    timing.start("build_input");
+    // Build input with template in context (no need for read_template tool call)
+    const contextMessage = `Current fields: ${JSON.stringify(currentFields)}
+
+CURRENT TEMPLATE CODE:
+\`\`\`tsx
+${currentTemplateContent}
+\`\`\`
+
+Request: ${userMessage}`;
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const input: any = previousHistory.length > 0
       ? [
           ...previousHistory,
-          {
-            role: "user",
-            content: `Current fields: ${JSON.stringify(currentFields)}\n\nRequest: ${userMessage}`,
-          },
+          { role: "user", content: contextMessage },
         ]
-      : `Current fields: ${JSON.stringify(currentFields)}\n\nRequest: ${userMessage}`;
+      : contextMessage;
+    timing.end();
 
-    // Single run - no loops, no image injection
+    timing.start("agent_run");
+    // Single run - no loops
     const result = await run(agent, input, { maxTurns: 5 });
+    timing.end();
 
+    timing.start("extract_traces");
     // Collect traces for UI display
     const traces: AgentTrace[] = [];
 
     // Extract traces and field updates from run items
-    // SDK returns RunItem wrappers with type like "tool_call_item", actual data in rawItem
     for (const item of result.newItems || []) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const anyItem = item as any;
 
-      // Capture reasoning traces (RunReasoningItem has type: "reasoning_item")
+      // Capture reasoning traces
       if (anyItem.type === "reasoning_item" && anyItem.rawItem) {
         const reasoningText = extractReasoningText(anyItem.rawItem);
         if (reasoningText) {
@@ -262,7 +310,7 @@ export async function runTemplateAgent(
         }
       }
 
-      // Capture tool calls (RunToolCallItem has type: "tool_call_item")
+      // Capture tool calls
       if (anyItem.type === "tool_call_item" && anyItem.rawItem) {
         const rawItem = anyItem.rawItem;
         const toolName = rawItem.name || "unknown";
@@ -273,7 +321,7 @@ export async function runTemplateAgent(
         });
       }
 
-      // Capture tool results (RunToolCallOutputItem has type: "tool_call_output_item")
+      // Capture tool results
       if (anyItem.type === "tool_call_output_item") {
         const rawItem = anyItem.rawItem;
         const toolName = rawItem?.name || "unknown";
@@ -299,6 +347,7 @@ export async function runTemplateAgent(
         }
       }
     }
+    timing.end();
 
     // Determine mode
     let mode: "fields" | "template" | "both" | "none" = "none";
@@ -314,6 +363,9 @@ export async function runTemplateAgent(
       console.log("Agent traces:", JSON.stringify(traces, null, 2));
     }
 
+    // Save timing log
+    const timingLogPath = await timing.save();
+
     return {
       success: true,
       mode,
@@ -322,13 +374,17 @@ export async function runTemplateAgent(
       templateChanged: sessionTemplateChanged,
       traces,
       history: result.history,
+      timingLogPath,
     };
   } catch (error) {
     console.error("Template agent error:", error);
+    // Save timing log even on error
+    const timingLogPath = await timing.save();
     return {
       success: false,
       mode: "none",
       message: `Failed: ${error}`,
+      timingLogPath,
     };
   }
 }
