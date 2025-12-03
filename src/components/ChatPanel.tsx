@@ -1,0 +1,671 @@
+"use client";
+
+import { useState, useRef, useEffect } from "react";
+import { useUploadFiles, useRemoveUploadedFile, streamChat } from "@/hooks/useJobs";
+import { UploadedFile } from "@/lib/types";
+
+interface AgentTrace {
+  type: "reasoning" | "tool_call" | "tool_result" | "status";
+  content: string;
+  toolName?: string;
+}
+
+interface ChatMessage {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  timestamp: Date;
+  attachments?: { filename: string; type: "document" | "image" }[];
+  traces?: AgentTrace[];
+}
+
+interface ChatPanelProps {
+  jobId: string;
+  initialMessage?: string;
+  uploadedFiles?: UploadedFile[];
+  initialUserPrompt?: string;
+  initialUserFiles?: { name: string; type: string }[];
+  onFieldsUpdated: (fields: Record<string, string | number | null>) => void;
+  onTemplateUpdated: () => void;
+  onFilesChanged?: () => void;
+}
+
+/**
+ * TracesDisplay - Expandable reasoning traces like o3's UI
+ */
+function TracesDisplay({ traces }: { traces: AgentTrace[] }) {
+  const [isExpanded, setIsExpanded] = useState(false);
+
+  const reasoningCount = traces.filter(t => t.type === "reasoning").length;
+  const toolCount = traces.filter(t => t.type === "tool_call").length;
+
+  return (
+    <div className="mb-2">
+      <button
+        onClick={() => setIsExpanded(!isExpanded)}
+        className="flex items-center gap-1.5 text-[11px] text-[#86868b] hover:text-[#1d1d1f] transition-colors"
+      >
+        <svg
+          className={`w-3 h-3 transition-transform ${isExpanded ? "rotate-90" : ""}`}
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+        </svg>
+        <span className="font-medium">
+          {reasoningCount > 0 && `${reasoningCount} thought${reasoningCount > 1 ? "s" : ""}`}
+          {reasoningCount > 0 && toolCount > 0 && ", "}
+          {toolCount > 0 && `${toolCount} tool call${toolCount > 1 ? "s" : ""}`}
+        </span>
+      </button>
+
+      {isExpanded && (
+        <div className="mt-2 pl-4 border-l-2 border-[#e8e8ed] space-y-2">
+          {traces.map((trace, idx) => (
+            <div key={idx} className="text-[11px]">
+              {trace.type === "reasoning" && (
+                <div className="text-[#86868b] italic">
+                  {trace.content}
+                </div>
+              )}
+              {trace.type === "tool_call" && (
+                <div className="flex items-center gap-1">
+                  <span className="text-[#0066CC] font-mono">{trace.toolName}</span>
+                  <span className="text-[#86868b]">()</span>
+                </div>
+              )}
+              {trace.type === "tool_result" && (
+                <div className="text-[#00aa00] font-mono text-[10px] bg-white/50 px-1.5 py-0.5 rounded">
+                  {trace.content}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function ChatPanel({ jobId, initialMessage, uploadedFiles, initialUserPrompt, initialUserFiles, onFieldsUpdated, onTemplateUpdated, onFilesChanged }: ChatPanelProps) {
+  const [messages, setMessages] = useState<ChatMessage[]>(() => {
+    const msgs: ChatMessage[] = [];
+
+    // Show initial user message immediately (before server response)
+    if (initialUserPrompt || (initialUserFiles && initialUserFiles.length > 0)) {
+      const fileNames = initialUserFiles?.map(f => f.name) || [];
+      const content = initialUserPrompt
+        ? (fileNames.length > 0 ? `${initialUserPrompt} [${fileNames.join(", ")}]` : initialUserPrompt)
+        : `Uploaded files [${fileNames.join(", ")}]`;
+      msgs.push({
+        id: "initial-user",
+        role: "user",
+        content,
+        timestamp: new Date(),
+      });
+    }
+
+    // Show initial assistant message (don't show files as message, we'll show them separately)
+    if (initialMessage) {
+      msgs.push({
+        id: "initial",
+        role: "assistant",
+        content: initialMessage,
+        timestamp: new Date(),
+      });
+    }
+
+    return msgs;
+  });
+  const [input, setInput] = useState("");
+  const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
+  const [isFocused, setIsFocused] = useState(false);
+  const [previewFile, setPreviewFile] = useState<UploadedFile | null>(null);
+  const [isStreaming, setIsStreaming] = useState(false);
+  const [liveStatus, setLiveStatus] = useState<string | null>(null);
+  const [liveTraces, setLiveTraces] = useState<AgentTrace[]>([]);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const uploadFilesHook = useUploadFiles();
+  const removeFile = useRemoveUploadedFile();
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages]);
+
+  // Add assistant message when it arrives from server
+  useEffect(() => {
+    if (initialMessage && !messages.some(m => m.id === "initial")) {
+      setMessages(prev => [...prev, {
+        id: "initial",
+        role: "assistant",
+        content: initialMessage,
+        timestamp: new Date(),
+      }]);
+    }
+  }, [initialMessage]);
+
+  // Handle click outside to unfocus
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setIsFocused(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  const handleRemoveUploadedFile = async (filename: string) => {
+    try {
+      await removeFile.mutateAsync({ jobId, filename });
+      onFilesChanged?.();
+    } catch (error) {
+      console.error("Failed to remove file:", error);
+    }
+  };
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    if (files.length > 0) {
+      setAttachedFiles((prev) => [...prev, ...files]);
+    }
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+  };
+
+  const removeAttachedFile = (index: number) => {
+    setAttachedFiles((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const handlePaste = (e: React.ClipboardEvent) => {
+    const items = Array.from(e.clipboardData.items);
+    const imageFiles: File[] = [];
+
+    for (const item of items) {
+      if (item.type.startsWith("image/")) {
+        const file = item.getAsFile();
+        if (file) {
+          imageFiles.push(file);
+        }
+      }
+    }
+
+    if (imageFiles.length > 0) {
+      e.preventDefault();
+      setAttachedFiles((prev) => [...prev, ...imageFiles]);
+    }
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    const files = Array.from(e.dataTransfer.files);
+    if (files.length > 0) {
+      setAttachedFiles((prev) => [...prev, ...files]);
+    }
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+  };
+
+  const isProcessing = isStreaming || uploadFilesHook.isPending;
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if ((!input.trim() && attachedFiles.length === 0) || isProcessing) return;
+
+    const userMessage: ChatMessage = {
+      id: Date.now().toString(),
+      role: "user",
+      content: attachedFiles.length > 0
+        ? `${input || "Uploaded files"} [${attachedFiles.map(f => f.name).join(", ")}]`
+        : input,
+      timestamp: new Date(),
+    };
+
+    setMessages((prev) => [...prev, userMessage]);
+    const currentInput = input;
+    const currentFiles = [...attachedFiles];
+    setInput("");
+    setAttachedFiles([]);
+
+    try {
+      // If files are attached, upload them first
+      if (currentFiles.length > 0) {
+        const uploadResult = await uploadFilesHook.mutateAsync({
+          jobId,
+          files: currentFiles,
+          prompt: currentInput || undefined,
+          regenerate: true,
+        });
+
+        const assistantMessage: ChatMessage = {
+          id: (Date.now() + 1).toString(),
+          role: "assistant",
+          content: uploadResult.message,
+          timestamp: new Date(),
+        };
+
+        setMessages((prev) => [...prev, assistantMessage]);
+
+        // Notify parent of field updates
+        if (uploadResult.job?.fields) {
+          onFieldsUpdated(uploadResult.job.fields);
+        }
+      } else {
+        // Use streaming chat for real-time updates
+        setIsStreaming(true);
+        setLiveStatus("Thinking...");
+        setLiveTraces([]);
+
+        await streamChat(
+          jobId,
+          currentInput,
+          "auto",
+          // onTrace - live status updates
+          (trace) => {
+            if (trace.type === "status") {
+              setLiveStatus(trace.content);
+            }
+            setLiveTraces((prev) => [...prev, trace]);
+          },
+          // onResult - final result
+          (result) => {
+            const assistantMessage: ChatMessage = {
+              id: (Date.now() + 1).toString(),
+              role: "assistant",
+              content: result.message || "Done",
+              timestamp: new Date(),
+              traces: result.traces,
+            };
+
+            setMessages((prev) => [...prev, assistantMessage]);
+
+            // Notify parent of updates
+            if (result.mode === "fields" && result.fields) {
+              onFieldsUpdated(result.fields);
+            } else if (result.mode === "template" || result.templateChanged) {
+              onTemplateUpdated();
+            }
+          },
+          // onError
+          (error) => {
+            const errorMessage: ChatMessage = {
+              id: (Date.now() + 1).toString(),
+              role: "assistant",
+              content: `Error: ${error}`,
+              timestamp: new Date(),
+            };
+            setMessages((prev) => [...prev, errorMessage]);
+          }
+        );
+
+        setIsStreaming(false);
+        setLiveStatus(null);
+        setLiveTraces([]);
+      }
+    } catch (error) {
+      setIsStreaming(false);
+      setLiveStatus(null);
+      const errorMessage: ChatMessage = {
+        id: (Date.now() + 1).toString(),
+        role: "assistant",
+        content: `Error: ${error instanceof Error ? error.message : "Something went wrong"}`,
+        timestamp: new Date(),
+      };
+      setMessages((prev) => [...prev, errorMessage]);
+    }
+  };
+
+  return (
+    <div
+      ref={containerRef}
+      onClick={() => setIsFocused(true)}
+      className={`flex flex-col h-full bg-white rounded-xl transition-all duration-200 cursor-text overflow-visible ${
+        isFocused
+          ? "ring-2 ring-[#1d1d1f] shadow-lg"
+          : "border border-[#d2d2d7] hover:border-[#86868b]"
+      }`}
+    >
+      {/* Uploaded files section - shown at top */}
+      {uploadedFiles && uploadedFiles.length > 0 && (
+        <div className="flex-shrink-0 px-4 pt-3 pb-2 border-b border-[#e8e8ed]">
+          <div className="flex items-center flex-wrap gap-2">
+            {uploadedFiles.map((file) => (
+              <div
+                key={file.filename}
+                className="group flex items-center gap-2 px-2.5 py-1.5 bg-[#f5f5f7] hover:bg-[#e8e8ed] rounded-lg text-[12px] text-[#1d1d1f] cursor-pointer transition-colors"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setPreviewFile(file);
+                }}
+              >
+                {file.type === "image" ? (
+                  <svg className="w-3.5 h-3.5 text-[#86868b]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                  </svg>
+                ) : (
+                  <svg className="w-3.5 h-3.5 text-[#86868b]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  </svg>
+                )}
+                <span className="max-w-[100px] truncate">{file.filename}</span>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleRemoveUploadedFile(file.filename);
+                  }}
+                  disabled={removeFile.isPending}
+                  className="ml-0.5 text-[#86868b] hover:text-[#ff3b30] opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-50"
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+            ))}
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                fileInputRef.current?.click();
+              }}
+              disabled={isProcessing}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 text-[12px] text-[#86868b] hover:text-[#1d1d1f] hover:bg-[#f5f5f7] rounded-lg transition-colors disabled:opacity-50"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+              </svg>
+              Add document or image
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Messages */}
+      <div className="flex-1 overflow-y-auto p-4 space-y-3 min-h-0">
+        {messages.length === 0 && (!uploadedFiles || uploadedFiles.length === 0) && (
+          <div className="text-center text-[13px] text-[#86868b] py-8">
+            <p className="font-medium text-[#1d1d1f] mb-1">Edit with AI</p>
+            <p>Ask me to update values or modify the design.</p>
+            <p className="mt-2 text-[12px]">
+              Examples: &quot;Change wattage to 15W&quot; &bull; &quot;Make the header blue&quot;
+            </p>
+          </div>
+        )}
+
+        {messages.map((msg) => (
+          <div
+            key={msg.id}
+            className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
+          >
+            <div
+              className={`max-w-[80%] px-3 py-2 rounded-xl text-[13px] ${
+                msg.role === "user"
+                  ? "bg-[#1d1d1f] text-white"
+                  : "bg-[#f5f5f7] text-[#1d1d1f]"
+              }`}
+            >
+              {msg.attachments && msg.attachments.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 mb-2">
+                  {msg.attachments.map((att, i) => (
+                    <div
+                      key={`${att.filename}-${i}`}
+                      className={`flex items-center gap-1.5 px-2 py-1 rounded-md text-[11px] ${
+                        msg.role === "user"
+                          ? "bg-white/20 text-white"
+                          : "bg-white text-[#1d1d1f]"
+                      }`}
+                    >
+                      {att.type === "image" ? (
+                        <svg className="w-3 h-3 opacity-70" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                        </svg>
+                      ) : (
+                        <svg className="w-3 h-3 opacity-70" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                        </svg>
+                      )}
+                      <span className="max-w-[100px] truncate">{att.filename}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {/* Traces display - o3-style reasoning UI */}
+              {msg.traces && msg.traces.length > 0 && (
+                <TracesDisplay traces={msg.traces} />
+              )}
+              <p className="whitespace-pre-wrap">{msg.content}</p>
+            </div>
+          </div>
+        ))}
+
+        {isProcessing && (
+          <div className="flex justify-start">
+            <div className="bg-[#f5f5f7] px-3 py-2 rounded-xl max-w-[80%]">
+              <div className="flex items-center gap-2">
+                <svg className="animate-spin h-4 w-4 text-[#86868b] flex-shrink-0" viewBox="0 0 24 24">
+                  <circle
+                    className="opacity-25"
+                    cx="12"
+                    cy="12"
+                    r="10"
+                    stroke="currentColor"
+                    strokeWidth="4"
+                    fill="none"
+                  />
+                  <path
+                    className="opacity-75"
+                    fill="currentColor"
+                    d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+                  />
+                </svg>
+                <span className="text-[13px] text-[#86868b]">
+                  {uploadFilesHook.isPending ? "Processing files..." : liveStatus || "Thinking..."}
+                </span>
+              </div>
+              {/* Live traces - expandable view of what's happening */}
+              {liveTraces.length > 0 && (
+                <div className="mt-2 pt-2 border-t border-[#e8e8ed]">
+                  <details className="text-[11px] text-[#86868b]">
+                    <summary className="cursor-pointer hover:text-[#1d1d1f] transition-colors">
+                      View details ({liveTraces.length} step{liveTraces.length !== 1 ? "s" : ""})
+                    </summary>
+                    <div className="mt-1 pl-2 border-l-2 border-[#e8e8ed] space-y-1 max-h-[150px] overflow-y-auto">
+                      {liveTraces.map((trace, idx) => (
+                        <div key={idx} className="text-[10px]">
+                          {trace.type === "status" && (
+                            <span className="text-[#86868b]">{trace.content}</span>
+                          )}
+                          {trace.type === "tool_call" && (
+                            <span className="text-[#0066CC] font-mono">{trace.toolName}()</span>
+                          )}
+                          {trace.type === "tool_result" && (
+                            <span className="text-[#00aa00]">✓ {trace.toolName}</span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </details>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        <div ref={messagesEndRef} />
+      </div>
+
+      {/* Input - ChatGPT style */}
+      <form onSubmit={handleSubmit} className="px-4 pb-4">
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          accept=".xlsx,.xlsm,.xls,.csv,.pdf,.png,.jpg,.jpeg,.gif,.webp"
+          onChange={handleFileSelect}
+          className="hidden"
+        />
+
+        <div
+          className="bg-[#f5f5f7] rounded-2xl overflow-hidden"
+          onDrop={handleDrop}
+          onDragOver={handleDragOver}
+        >
+          {/* Attached files preview - inside the input box */}
+          {attachedFiles.length > 0 && (
+            <div className="flex flex-wrap gap-2 px-4 pt-3">
+              {attachedFiles.map((file, index) => (
+                <div
+                  key={`${file.name}-${index}`}
+                  className="flex items-center gap-2 px-2.5 py-1.5 bg-white rounded-lg text-[12px] text-[#1d1d1f] shadow-sm"
+                >
+                  {file.type.startsWith("image/") ? (
+                    <svg className="w-3.5 h-3.5 text-[#86868b]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                    </svg>
+                  ) : (
+                    <svg className="w-3.5 h-3.5 text-[#86868b]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                  )}
+                  <span className="max-w-[120px] truncate">{file.name}</span>
+                  <button
+                    type="button"
+                    onClick={() => removeAttachedFile(index)}
+                    className="ml-1 text-[#86868b] hover:text-[#1d1d1f]"
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Text input */}
+          <input
+            type="text"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onPaste={handlePaste}
+            onFocus={() => setIsFocused(true)}
+            onKeyDown={(e) => {
+              if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+                e.preventDefault();
+                if (input.trim() || attachedFiles.length > 0) {
+                  handleSubmit(e as unknown as React.FormEvent);
+                }
+              }
+            }}
+            placeholder="Ask to edit values or design..."
+            disabled={isProcessing}
+            className="w-full px-4 py-3 bg-transparent text-[14px] text-[#1d1d1f]
+                      placeholder-[#86868b] border-0
+                      focus:outline-none focus:ring-0
+                      focus-visible:outline-none focus-visible:ring-0
+                      disabled:opacity-50"
+          />
+
+          {/* Bottom row - attachment button left, send button right */}
+          <div className="flex items-center justify-between px-3 pb-3">
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={isProcessing}
+              className="w-8 h-8 flex items-center justify-center rounded-lg text-[#86868b]
+                        hover:bg-white hover:text-[#1d1d1f]
+                        disabled:opacity-40 disabled:cursor-not-allowed
+                        transition-all duration-200"
+              title="Attach files (or paste/drag images)"
+            >
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M18.375 12.739l-7.693 7.693a4.5 4.5 0 01-6.364-6.364l10.94-10.94A3 3 0 1119.5 7.372L8.552 18.32m.009-.01l-.01.01m5.699-9.941l-7.81 7.81a1.5 1.5 0 002.112 2.13" />
+              </svg>
+            </button>
+
+            <button
+              type="submit"
+              disabled={(!input.trim() && attachedFiles.length === 0) || isProcessing}
+              className="w-8 h-8 flex items-center justify-center rounded-lg bg-[#1d1d1f] text-white
+                        hover:bg-[#424245] active:scale-[0.95]
+                        disabled:opacity-40 disabled:cursor-not-allowed
+                        transition-all duration-200"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M5 12h14M12 5l7 7-7 7" />
+              </svg>
+            </button>
+          </div>
+        </div>
+      </form>
+
+      {/* File preview modal */}
+      {previewFile && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+          onClick={() => setPreviewFile(null)}
+        >
+          <div
+            className="relative bg-white rounded-2xl shadow-xl max-w-2xl max-h-[80vh] overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-4 py-3 border-b border-[#e8e8ed]">
+              <span className="text-[14px] font-medium text-[#1d1d1f] truncate max-w-[300px]">
+                {previewFile.filename}
+              </span>
+              <button
+                onClick={() => setPreviewFile(null)}
+                className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-[#f5f5f7] transition-colors"
+              >
+                <svg className="w-5 h-5 text-[#86868b]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <div className="p-4 overflow-auto max-h-[60vh]">
+              {previewFile.type === "image" ? (
+                <img
+                  src={`/api/jobs/${jobId}/files/${encodeURIComponent(previewFile.filename)}`}
+                  alt={previewFile.filename}
+                  className="max-w-full h-auto rounded-lg"
+                />
+              ) : previewFile.filename.toLowerCase().endsWith(".pdf") ? (
+                <iframe
+                  src={`/api/jobs/${jobId}/files/${encodeURIComponent(previewFile.filename)}`}
+                  className="w-full h-[500px] rounded-lg border border-[#e8e8ed]"
+                  title={previewFile.filename}
+                />
+              ) : previewFile.filename.toLowerCase().match(/\.(xlsx?|csv)$/) ? (
+                <iframe
+                  src={`/api/jobs/${jobId}/files/${encodeURIComponent(previewFile.filename)}/preview`}
+                  className="w-full h-[500px] rounded-lg border border-[#e8e8ed] bg-white"
+                  title={previewFile.filename}
+                />
+              ) : (
+                <div className="flex flex-col items-center justify-center py-12 text-[#86868b]">
+                  <svg className="w-16 h-16 mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  </svg>
+                  <p className="text-[14px]">Document preview not available</p>
+                  <p className="text-[12px] mt-1">{previewFile.filename}</p>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

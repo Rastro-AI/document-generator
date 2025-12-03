@@ -1,0 +1,49 @@
+{
+  "id": "sunco-spec-v1",
+  "name": "Sunco One-Page Spec Sheet",
+  "version": 1,
+  "canvas": {
+    "width": 816,
+    "height": 1056
+  },
+  "fonts": [
+    {
+      "family": "Inter",
+      "weights": {
+        "400": "fonts/Inter-Regular.ttf",
+        "700": "fonts/Inter-Bold.ttf"
+      }
+    }
+  ],
+  "fields": [
+    { "name": "PRODUCT_NAME", "type": "string", "description": "Main product title", "example": "PAR38 LED BULB" },
+    { "name": "PRODUCT_DESCRIPTION", "type": "string", "description": "Marketing description", "example": "Save up to 85% on your electric bill..." },
+    { "name": "MODELS", "type": "array", "description": "Model numbers (array of strings)", "example": ["PAR38_13W-2700K", "PAR38_13W-3000K"] },
+    { "name": "VOLTAGE", "type": "string", "description": "Input voltage", "example": "120V" },
+    { "name": "WATTAGE", "type": "string", "description": "Power consumption", "example": "13W" },
+    { "name": "CURRENT", "type": "string", "description": "Current draw", "example": "0.145A" },
+    { "name": "POWER_FACTOR", "type": "string", "description": "Power factor rating", "example": "0.7" },
+    { "name": "LUMENS", "type": "string", "description": "Light output", "example": "1,050 lm" },
+    { "name": "EQUIVALENCY", "type": "string", "description": "Incandescent equivalent", "example": "100W" },
+    { "name": "FREQUENCY", "type": "string", "description": "AC frequency", "example": "60 Hz" },
+    { "name": "CRI", "type": "string", "description": "Color Rendering Index", "example": "80" },
+    { "name": "BEAM_ANGLE", "type": "string", "description": "Beam spread angle", "example": "40°" },
+    { "name": "DIMMABLE", "type": "string", "description": "Dimming capability", "example": "Yes" },
+    { "name": "EFFICACY", "type": "string", "description": "Lumens per watt", "example": "81 lm/w" },
+    { "name": "COLOR_TEMPERATURE", "type": "string", "description": "Available CCTs", "example": "2700K/3000K/4000K/5000K/6000K" },
+    { "name": "OPERATING_TEMP", "type": "string", "description": "Operating temperature range", "example": "-4° F - 104° F" },
+    { "name": "MOISTURE_RATING", "type": "string", "description": "Wet/Damp/Dry rating", "example": "Wet" },
+    { "name": "HOUSING_MATERIAL", "type": "string", "description": "Construction materials", "example": "Aluminum + PC" },
+    { "name": "WEIGHT", "type": "string", "description": "Product weight", "example": "0.22 lbs" },
+    { "name": "LIFETIME", "type": "string", "description": "Rated lifetime hours", "example": "25,000+ hrs" },
+    { "name": "WARRANTY", "type": "string", "description": "Warranty period", "example": "5 Years" }
+  ],
+  "assetSlots": [
+    { "name": "PRODUCT_IMAGE", "kind": "photo", "description": "Hero product photo" },
+    { "name": "POLAR_GRAPH", "kind": "graph", "description": "Light distribution polar graph" },
+    { "name": "DISTANCE_TABLE", "kind": "graph", "description": "Distance/lux table image" },
+    { "name": "CERT_FCC", "kind": "logo", "description": "FCC certification mark" },
+    { "name": "CERT_ROHS", "kind": "logo", "description": "RoHS certification mark" },
+    { "name": "CERT_UL", "kind": "logo", "description": "UL certification mark" }
+  ]
+}
