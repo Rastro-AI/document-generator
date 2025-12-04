@@ -36,6 +36,8 @@ export function TemplateEditorModal({
 
   // Generation state
   const [selectedPdf, setSelectedPdf] = useState<File | null>(null);
+  const [pdfPreviewUrl, setPdfPreviewUrl] = useState<string | null>(null);
+  const [showPdfPreview, setShowPdfPreview] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [generationStatus, setGenerationStatus] = useState<string | null>(null);
   const [generationTraces, setGenerationTraces] = useState<GeneratorTrace[]>([]);
@@ -134,7 +136,12 @@ export function render(
   useEffect(() => {
     if (isOpen) {
       setActiveTab(isCreating ? "generate" : "code");
+      if (pdfPreviewUrl) {
+        URL.revokeObjectURL(pdfPreviewUrl);
+      }
       setSelectedPdf(null);
+      setPdfPreviewUrl(null);
+      setShowPdfPreview(false);
       setIsGenerating(false);
       setGenerationStatus(null);
       setGenerationTraces([]);
@@ -207,8 +214,22 @@ export function render(
   const handlePdfSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file && file.type === "application/pdf") {
+      // Revoke old URL if exists
+      if (pdfPreviewUrl) {
+        URL.revokeObjectURL(pdfPreviewUrl);
+      }
       setSelectedPdf(file);
+      setPdfPreviewUrl(URL.createObjectURL(file));
     }
+  };
+
+  const handleClearPdf = () => {
+    if (pdfPreviewUrl) {
+      URL.revokeObjectURL(pdfPreviewUrl);
+    }
+    setSelectedPdf(null);
+    setPdfPreviewUrl(null);
+    setShowPdfPreview(false);
   };
 
   const handleGenerate = async () => {
@@ -392,18 +413,24 @@ export function render(
               ) : (
                 <div className="flex flex-col h-full">
                   {/* Selected file */}
-                  <div className="flex items-center gap-3 p-4 bg-[#f5f5f7] rounded-xl mb-4">
+                  <div
+                    onClick={() => setShowPdfPreview(true)}
+                    className="flex items-center gap-3 p-4 bg-[#f5f5f7] rounded-xl mb-4 cursor-pointer hover:bg-[#e8e8ed] transition-colors"
+                  >
                     <svg className="w-10 h-10 text-red-500" fill="currentColor" viewBox="0 0 24 24">
                       <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6zm-1 2l5 5h-5V4zM8.5 13h7a.5.5 0 010 1h-7a.5.5 0 010-1zm0 2h7a.5.5 0 010 1h-7a.5.5 0 010-1zm0 2h4a.5.5 0 010 1h-4a.5.5 0 010-1z"/>
                     </svg>
                     <div className="flex-1 min-w-0">
                       <p className="text-[14px] font-medium text-[#1d1d1f] truncate">{selectedPdf.name}</p>
                       <p className="text-[12px] text-[#86868b]">
-                        {(selectedPdf.size / 1024).toFixed(1)} KB
+                        {(selectedPdf.size / 1024).toFixed(1)} KB - Click to preview
                       </p>
                     </div>
                     <button
-                      onClick={() => setSelectedPdf(null)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleClearPdf();
+                      }}
                       disabled={isGenerating}
                       className="p-2 hover:bg-white rounded-lg transition-colors disabled:opacity-50"
                     >
@@ -415,16 +442,10 @@ export function render(
 
                   {/* Generation status */}
                   {generationStatus && (
-                    <div className={`p-3 rounded-lg mb-4 text-[13px] ${
-                      generationStatus.includes("Error") || generationStatus.includes("failed")
-                        ? "bg-red-50 text-red-700"
-                        : generationStatus.includes("successfully")
-                          ? "bg-green-50 text-green-700"
-                          : "bg-blue-50 text-blue-700"
-                    }`}>
+                    <div className="p-3 rounded-lg mb-4 text-[13px] bg-[#f5f5f7] text-[#1d1d1f]">
                       <div className="flex items-center gap-2">
                         {isGenerating && (
-                          <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
+                          <svg className="animate-spin h-4 w-4 text-[#86868b]" viewBox="0 0 24 24">
                             <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
                             <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                           </svg>
@@ -467,14 +488,9 @@ export function render(
                   {!isGenerating && !generationStatus?.includes("successfully") && (
                     <button
                       onClick={handleGenerate}
-                      className="w-full py-3 bg-gradient-to-r from-purple-600 to-blue-600 text-white text-[14px] font-medium rounded-xl hover:from-purple-700 hover:to-blue-700 transition-all"
+                      className="w-full py-3 bg-[#1d1d1f] text-white text-[14px] font-medium rounded-xl hover:bg-[#424245] transition-all"
                     >
-                      <span className="flex items-center justify-center gap-2">
-                        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456z" />
-                        </svg>
-                        Generate Template with AI
-                      </span>
+                      Generate Template
                     </button>
                   )}
                 </div>
@@ -550,6 +566,40 @@ export function render(
           </button>
         </div>
       </div>
+
+      {/* PDF Preview Modal */}
+      {showPdfPreview && pdfPreviewUrl && selectedPdf && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50"
+          onClick={() => setShowPdfPreview(false)}
+        >
+          <div
+            className="relative bg-white rounded-2xl shadow-xl w-full max-w-3xl max-h-[85vh] overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-4 py-3 border-b border-[#e8e8ed]">
+              <span className="text-[14px] font-medium text-[#1d1d1f] truncate max-w-[400px]">
+                {selectedPdf.name}
+              </span>
+              <button
+                onClick={() => setShowPdfPreview(false)}
+                className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-[#f5f5f7] transition-colors"
+              >
+                <svg className="w-5 h-5 text-[#86868b]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <div className="p-4">
+              <iframe
+                src={pdfPreviewUrl}
+                className="w-full h-[65vh] rounded-lg border border-[#e8e8ed]"
+                title={selectedPdf.name}
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

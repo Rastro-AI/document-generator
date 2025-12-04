@@ -125,6 +125,7 @@ export function ChatPanel({ jobId, initialMessage, uploadedFiles, initialUserPro
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
   const [isFocused, setIsFocused] = useState(false);
   const [previewFile, setPreviewFile] = useState<UploadedFile | null>(null);
+  const [previewAttachment, setPreviewAttachment] = useState<{ file: File; url: string } | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
   const [liveStatus, setLiveStatus] = useState<string | null>(null);
   const [liveTraces, setLiveTraces] = useState<AgentTrace[]>([]);
@@ -187,6 +188,18 @@ export function ChatPanel({ jobId, initialMessage, uploadedFiles, initialUserPro
 
   const removeAttachedFile = (index: number) => {
     setAttachedFiles((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const openAttachmentPreview = (file: File) => {
+    const url = URL.createObjectURL(file);
+    setPreviewAttachment({ file, url });
+  };
+
+  const closeAttachmentPreview = () => {
+    if (previewAttachment) {
+      URL.revokeObjectURL(previewAttachment.url);
+    }
+    setPreviewAttachment(null);
   };
 
   const handlePaste = (e: React.ClipboardEvent) => {
@@ -532,7 +545,8 @@ export function ChatPanel({ jobId, initialMessage, uploadedFiles, initialUserPro
               {attachedFiles.map((file, index) => (
                 <div
                   key={`${file.name}-${index}`}
-                  className="flex items-center gap-2 px-2.5 py-1.5 bg-white rounded-lg text-[12px] text-[#1d1d1f] shadow-sm"
+                  onClick={() => openAttachmentPreview(file)}
+                  className="flex items-center gap-2 px-2.5 py-1.5 bg-white rounded-lg text-[12px] text-[#1d1d1f] shadow-sm cursor-pointer hover:bg-[#f5f5f7] transition-colors"
                 >
                   {file.type.startsWith("image/") ? (
                     <svg className="w-3.5 h-3.5 text-[#86868b]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -546,8 +560,11 @@ export function ChatPanel({ jobId, initialMessage, uploadedFiles, initialUserPro
                   <span className="max-w-[120px] truncate">{file.name}</span>
                   <button
                     type="button"
-                    onClick={() => removeAttachedFile(index)}
-                    className="ml-1 text-[#86868b] hover:text-[#1d1d1f]"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      removeAttachedFile(index);
+                    }}
+                    className="ml-1 text-[#86868b] hover:text-[#ff3b30]"
                   >
                     <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
