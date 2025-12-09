@@ -17,7 +17,7 @@
   ],
   "fields": [
     { "name": "PRODUCT_NAME", "type": "string", "description": "Main product title", "example": "PAR38 LED BULB" },
-    { "name": "PRODUCT_DESCRIPTION", "type": "string", "description": "Marketing description", "example": "Save up to 85% on your electric bill..." },
+    { "name": "PRODUCT_DESCRIPTION", "type": "string", "description": "Marketing description - REQUIRED. Must include a compelling product description highlighting energy savings, features, and benefits. This field is essential and should never be left empty.", "example": "Save up to 85% on your electric bill..." },
     { "name": "MODELS", "type": "array", "description": "Model numbers (array of strings)", "example": ["PAR38_13W-2700K", "PAR38_13W-3000K"] },
     { "name": "VOLTAGE", "type": "string", "description": "Input voltage", "example": "120V" },
     { "name": "WATTAGE", "type": "string", "description": "Power consumption", "example": "13W" },

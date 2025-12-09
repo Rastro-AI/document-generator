@@ -5,10 +5,15 @@ import { CreateJobForm } from "@/components/CreateJobForm";
 import { JobEditor } from "@/components/JobEditor";
 import { Sidebar } from "@/components/Sidebar";
 
+type ReasoningMode = "none" | "low";
+
 interface InitialJobData {
   jobId: string;
+  templateId: string;
   prompt?: string;
-  files?: { name: string; type: string }[];
+  files?: File[];
+  assetIds?: string[];
+  reasoningMode?: ReasoningMode;
 }
 
 export default function Home() {
@@ -22,9 +27,12 @@ export default function Home() {
         <div className="lg:pl-64 h-screen flex flex-col transition-all duration-300">
           <JobEditor
             jobId={currentJob.jobId}
+            templateId={currentJob.templateId}
             onBack={() => setCurrentJob(null)}
             initialPrompt={currentJob.prompt}
             initialFiles={currentJob.files}
+            initialAssetIds={currentJob.assetIds}
+            initialReasoningMode={currentJob.reasoningMode}
           />
         </div>
       </>
@@ -42,13 +50,13 @@ export default function Home() {
               Document Workspace
             </h1>
             <p className="mt-2 text-[15px] text-[#86868b]">
-              Generate spec sheets and manuals from raw data
+              Generate and fill PDF documents.
             </p>
           </div>
 
           {/* Card */}
           <div className="bg-white rounded-2xl shadow-sm p-8 overflow-visible">
-            <CreateJobForm onJobCreated={(jobId, prompt, files) => setCurrentJob({ jobId, prompt, files })} />
+            <CreateJobForm onJobCreated={(data) => setCurrentJob(data)} />
           </div>
 
 

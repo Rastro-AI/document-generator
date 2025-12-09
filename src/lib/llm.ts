@@ -33,7 +33,7 @@ export async function extractFieldsFromFile(
   template: Template,
   filePath: string,
   userPrompt?: string
-): Promise<Record<string, string | number | null>> {
+): Promise<Record<string, unknown>> {
   const fieldDescriptions = template.fields
     .map((f) => `- ${f.name} (${f.type}): ${f.description}`)
     .join("\n");
@@ -198,7 +198,8 @@ export async function extractFieldsAndAssetsFromFiles(
   documentFiles: { path: string; filename: string }[],
   imageFiles: { path: string; filename: string }[],
   userPrompt?: string,
-  onEvent?: ExtractionEventCallback
+  onEvent?: ExtractionEventCallback,
+  reasoning: "none" | "low" = "none"
 ): Promise<{
   fields: Record<string, string | number | null>;
   assets: Record<string, string | null>;
@@ -332,7 +333,7 @@ Example:
 
     const response = await openai.responses.create({
       model: "gpt-5.1",
-      reasoning: { effort: "none" },
+      reasoning: { effort: reasoning },
       input: prompt,
       tools: tools.length > 0 ? tools : undefined,
     });

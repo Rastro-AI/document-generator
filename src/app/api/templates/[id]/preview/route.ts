@@ -31,9 +31,9 @@ export async function GET(
     }
 
     // Generate placeholder values from template fields
-    const fields: Record<string, string | string[]> = {};
+    const fields: Record<string, unknown> = {};
     for (const field of template.fields) {
-      if (field.type === "string[]") {
+      if (field.type === "array") {
         fields[field.name] = [`{{${field.name}[0]}}`, `{{${field.name}[1]}}`];
       } else {
         fields[field.name] = `{{${field.name}}}`;

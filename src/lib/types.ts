@@ -1,9 +1,23 @@
 // Template types
+
+// Field value can be primitive, array, or nested object
+export type FieldValue = string | number | boolean | null | FieldValue[] | { [key: string]: FieldValue };
+
+// Alias for fields record used throughout the app
+export type FieldsRecord = Record<string, FieldValue>;
+
 export interface TemplateField {
   name: string;
-  type: "string" | "string[]" | "number";
+  type: "string" | "number" | "boolean" | "array" | "object";
   description: string;
-  example?: string | string[];
+  example?: FieldValue;
+  // For arrays: describes the item structure
+  items?: {
+    type: "string" | "number" | "object";
+    properties?: Record<string, { type: string; description?: string }>;
+  };
+  // For objects: describes the nested structure
+  properties?: Record<string, { type: string; description?: string; example?: FieldValue }>;
 }
 
 export interface TemplateAssetSlot {
@@ -48,7 +62,8 @@ export interface UploadedFile {
 // History entry for versioning
 export interface JobHistoryEntry {
   id: string;
-  fields: Record<string, string | number | null>;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  fields: Record<string, any>;
   assets: Record<string, string | null>;
   timestamp: string;
   description: string;
@@ -58,7 +73,8 @@ export interface JobHistoryEntry {
 export interface Job {
   id: string;
   templateId: string;
-  fields: Record<string, string | number | null>;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  fields: Record<string, any>;
   assets: Record<string, string | null>;
   createdAt: string;
   renderedAt?: string;

@@ -313,7 +313,9 @@ export async function streamCreateJob(
   assetIds: string[] | undefined,
   onTrace: (trace: { type: string; content: string }) => void,
   onResult: (result: { jobId: string; job: Job }) => void,
-  onError: (error: string) => void
+  onError: (error: string) => void,
+  signal?: AbortSignal,
+  reasoning?: "none" | "low"
 ): Promise<void> {
   const formData = new FormData();
   formData.append("jobId", jobId);
@@ -327,10 +329,14 @@ export async function streamCreateJob(
   if (assetIds && assetIds.length > 0) {
     formData.append("assetIds", JSON.stringify(assetIds));
   }
+  if (reasoning) {
+    formData.append("reasoning", reasoning);
+  }
 
   const response = await fetch("/api/jobs/stream", {
     method: "POST",
     body: formData,
+    signal,
   });
 
   if (!response.ok) {
@@ -388,12 +394,14 @@ export async function streamChat(
   reasoning: "none" | "low" = "none",
   onTrace: (trace: AgentTrace) => void,
   onResult: (result: ChatResponse) => void,
-  onError: (error: string) => void
+  onError: (error: string) => void,
+  signal?: AbortSignal
 ): Promise<void> {
   const response = await fetch(`/api/jobs/${jobId}/chat/stream`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ message, mode, reasoning }),
+    signal,
   });
 
   if (!response.ok) {

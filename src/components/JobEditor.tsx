@@ -1,25 +1,35 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { useJob, useUpdateJobFields, useRenderJob } from "@/hooks/useJobs";
+import { useJob, useUpdateJobFields, useRenderJob, streamCreateJob } from "@/hooks/useJobs";
 import { useTemplate } from "@/hooks/useTemplates";
 import { FieldsEditor } from "./FieldsEditor";
 import { PdfPreview } from "./PdfPreview";
 import { ChatPanel } from "./ChatPanel";
 import { HistoryPanel } from "./HistoryPanel";
 
+type ReasoningMode = "none" | "low";
+
 interface JobEditorProps {
   jobId: string;
+  templateId: string;
   onBack: () => void;
   initialPrompt?: string;
-  initialFiles?: { name: string; type: string }[];
+  initialFiles?: File[];
+  initialAssetIds?: string[];
+  initialReasoningMode?: ReasoningMode;
 }
 
-export function JobEditor({ jobId, onBack, initialPrompt, initialFiles }: JobEditorProps) {
+export function JobEditor({ jobId, templateId, onBack, initialPrompt, initialFiles, initialAssetIds, initialReasoningMode }: JobEditorProps) {
   const { data: job, isLoading: jobLoading, error: jobError, refetch } = useJob(jobId);
   const { data: template, isLoading: templateLoading } = useTemplate(
-    job?.templateId || null
+    job?.templateId || templateId || null
   );
+
+  // Initial creation streaming state
+  const [isCreating, setIsCreating] = useState(!!initialFiles || !!initialAssetIds || !!initialPrompt);
+  const [creationStatus, setCreationStatus] = useState<string>("Starting...");
+  const hasStartedCreation = useRef(false);
 
   const [localFields, setLocalFields] = useState<
     Record<string, string | number | null>
@@ -58,9 +68,43 @@ export function JobEditor({ jobId, onBack, initialPrompt, initialFiles }: JobEdi
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
+  // Start job creation streaming when component mounts
+  useEffect(() => {
+    if (hasStartedCreation.current) return;
+    if (!templateId) return;
+
+    hasStartedCreation.current = true;
+
+    streamCreateJob(
+      jobId,
+      templateId,
+      initialFiles || [],
+      initialPrompt,
+      initialAssetIds,
+      // onTrace
+      (trace) => {
+        if (trace.type === "status") {
+          setCreationStatus(trace.content);
+        }
+      },
+      // onResult
+      () => {
+        setIsCreating(false);
+        refetch();
+      },
+      // onError
+      (error) => {
+        setIsCreating(false);
+        setCreationStatus(`Error: ${error}`);
+      },
+      undefined, // signal
+      initialReasoningMode // reasoning mode
+    );
+  }, [jobId, templateId, initialFiles, initialPrompt, initialAssetIds, initialReasoningMode, refetch]);
+
   // Auto-render once on first load if not already rendered
   useEffect(() => {
-    if (job && !job.renderedAt && !hasAutoRendered.current && !renderJob.isPending) {
+    if (job && !job.renderedAt && !hasAutoRendered.current && !renderJob.isPending && !isCreating) {
       hasAutoRendered.current = true;
       renderJob.mutateAsync(jobId).then(() => {
         setPdfKey((k) => k + 1);
@@ -69,7 +113,7 @@ export function JobEditor({ jobId, onBack, initialPrompt, initialFiles }: JobEdi
         hasAutoRendered.current = false; // Allow retry on error
       });
     }
-  }, [job, jobId]);
+  }, [job, jobId, isCreating]);
 
   const handleFieldChange = (name: string, value: string | number | null) => {
     setLocalFields((prev) => ({ ...prev, [name]: value }));
@@ -307,52 +351,12 @@ export function JobEditor({ jobId, onBack, initialPrompt, initialFiles }: JobEdi
           {/* Left: Fields editor */}
           <div className="w-[380px] border-r border-[#d2d2d7] bg-white overflow-y-auto">
             <div className="p-6">
+              {/* Sidebar Title */}
+              <h2 className="text-[17px] font-semibold text-[#1d1d1f] mb-6">
+                Extracted Data
+              </h2>
               {isReady ? (
                 <>
-                  {/* Populated Fields Summary */}
-                  {(() => {
-                    const populatedFields = Object.entries(localFields).filter(
-                      ([, value]) => value !== null && value !== ""
-                    );
-                    const totalFields = template.fields.length;
-                    const populatedCount = populatedFields.length;
-
-                    if (populatedCount === 0) return null;
-
-                    return (
-                      <div className="mb-6 p-4 bg-[#f5f5f7] rounded-xl">
-                        <div className="flex items-center justify-between mb-3">
-                          <span className="text-[11px] font-semibold uppercase tracking-wider text-[#86868b]">
-                            Extracted Data
-                          </span>
-                          <span className="text-[12px] font-medium text-[#1d1d1f]">
-                            {populatedCount} / {totalFields} fields
-                          </span>
-                        </div>
-                        <div className="flex flex-wrap gap-1.5">
-                          {populatedFields.slice(0, 8).map(([fieldName, value]) => (
-                            <div
-                              key={fieldName}
-                              className="px-2 py-1 bg-white rounded-md text-[11px] text-[#1d1d1f] shadow-sm"
-                              title={`${fieldName}: ${value}`}
-                            >
-                              <span className="text-[#86868b]">
-                                {fieldName.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, c => c.toUpperCase())}:
-                              </span>{" "}
-                              <span className="font-medium">
-                                {String(value).length > 15 ? String(value).slice(0, 15) + "..." : value}
-                              </span>
-                            </div>
-                          ))}
-                          {populatedFields.length > 8 && (
-                            <div className="px-2 py-1 bg-white rounded-md text-[11px] text-[#86868b] shadow-sm">
-                              +{populatedFields.length - 8} more
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })()}
                   <FieldsEditor
                     template={template}
                     job={{ ...job, fields: localFields }}
@@ -395,7 +399,7 @@ export function JobEditor({ jobId, onBack, initialPrompt, initialFiles }: JobEdi
                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                 </svg>
                 <p className="text-[15px] font-medium text-[#1d1d1f] mb-1">Creating document...</p>
-                <p className="text-[13px] text-[#86868b]">Processing your files</p>
+                <p className="text-[13px] text-[#86868b]">{isCreating ? creationStatus : "Loading..."}</p>
               </div>
             )}
           </div>
@@ -410,39 +414,45 @@ export function JobEditor({ jobId, onBack, initialPrompt, initialFiles }: JobEdi
 
         {/* Chat panel - collapsible */}
         <div className={`flex-shrink-0 px-4 pb-4 bg-[#f5f5f7] transition-all duration-300 ${chatMinimized ? "" : "h-[350px]"}`}>
-          {/* Chat header - clickable to toggle */}
-          <div
-            onClick={() => setChatMinimized(!chatMinimized)}
-            className="flex items-center justify-between py-2 cursor-pointer group"
-          >
-            <span className="text-[12px] font-medium text-[#86868b] group-hover:text-[#1d1d1f] transition-colors">
-              Chat
-            </span>
-            <svg
-              className={`w-4 h-4 text-[#86868b] group-hover:text-[#1d1d1f] transition-all ${chatMinimized ? "" : "rotate-180"}`}
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-              strokeWidth={2}
+          {/* Chat container with outline */}
+          <div className={`bg-white rounded-xl border border-[#e8e8ed] overflow-hidden ${chatMinimized ? "" : "h-full flex flex-col"}`}>
+            {/* Chat header - clickable to toggle */}
+            <div
+              onClick={() => setChatMinimized(!chatMinimized)}
+              className="flex items-center justify-between px-4 py-3 cursor-pointer group border-b border-[#e8e8ed] hover:bg-[#f9f9fb] transition-colors"
             >
-              <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-            </svg>
-          </div>
-          {/* Chat content */}
-          {!chatMinimized && (
-            <div className="h-[calc(100%-32px)]">
-              <ChatPanel
+              <span className="text-[13px] font-medium text-[#1d1d1f]">
+                Chat
+              </span>
+              <svg
+                className={`w-4 h-4 text-[#86868b] group-hover:text-[#1d1d1f] transition-all ${chatMinimized ? "" : "rotate-180"}`}
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth={2}
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+              </svg>
+            </div>
+            {/* Chat content */}
+            {!chatMinimized && (
+              <div className="flex-1 min-h-0">
+                <ChatPanel
                 jobId={jobId}
                 initialMessage={job?.initialMessage}
                 uploadedFiles={job?.uploadedFiles}
                 initialUserPrompt={initialPrompt}
-                initialUserFiles={initialFiles}
+                initialUserFiles={initialFiles?.map(f => ({ name: f.name, type: f.type }))}
+                isCreating={isCreating}
+                creationStatus={creationStatus}
+                initialReasoningMode={initialReasoningMode}
                 onFieldsUpdated={handleFieldsUpdated}
                 onTemplateUpdated={handleTemplateUpdated}
                 onFilesChanged={() => refetch()}
               />
-            </div>
-          )}
+              </div>
+            )}
+          </div>
         </div>
       </div>
 

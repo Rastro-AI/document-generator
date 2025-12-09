@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import fs from "fs/promises";
-import { getTemplateTsxPath, getTemplateJsonPath } from "@/lib/paths";
+import path from "path";
+import { getTemplateTsxPath, getTemplateDir } from "@/lib/paths";
 import { pathExists } from "@/lib/fs-utils";
 
 // GET - Get template code
@@ -38,6 +39,10 @@ export async function PUT(
     const { id } = await params;
     const code = await request.text();
     const codePath = getTemplateTsxPath(id);
+    const templateDir = getTemplateDir(id);
+
+    // Ensure template directory exists
+    await fs.mkdir(templateDir, { recursive: true });
 
     await fs.writeFile(codePath, code, "utf-8");
 

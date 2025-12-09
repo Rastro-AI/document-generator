@@ -29,15 +29,7 @@ export function useSaveTemplate() {
 
   return useMutation({
     mutationFn: async ({ template, code }: { template: Template; code?: string }) => {
-      // Save template metadata
-      const metaRes = await fetch(`/api/templates/${template.id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(template),
-      });
-      if (!metaRes.ok) throw new Error("Failed to save template");
-
-      // Save template code if provided
+      // Save template code first if provided (so thumbnail can be generated)
       if (code !== undefined) {
         const codeRes = await fetch(`/api/templates/${template.id}/code`, {
           method: "PUT",
@@ -47,11 +39,36 @@ export function useSaveTemplate() {
         if (!codeRes.ok) throw new Error("Failed to save template code");
       }
 
+      // Save template metadata (this also generates thumbnail)
+      const metaRes = await fetch(`/api/templates/${template.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(template),
+      });
+      if (!metaRes.ok) throw new Error("Failed to save template");
+
       return template;
     },
     onSuccess: (template) => {
       queryClient.invalidateQueries({ queryKey: ["templates"] });
       queryClient.invalidateQueries({ queryKey: ["template", template.id] });
+    },
+  });
+}
+
+export function useDeleteTemplate() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (templateId: string) => {
+      const res = await fetch(`/api/templates/${templateId}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) throw new Error("Failed to delete template");
+      return templateId;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["templates"] });
     },
   });
 }

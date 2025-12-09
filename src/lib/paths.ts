@@ -23,6 +23,14 @@ export function getTemplateTsxPath(templateId: string): string {
   return path.join(getTemplateDir(templateId), "template.tsx");
 }
 
+export function getTemplateCodePath(templateId: string): string {
+  return getTemplateTsxPath(templateId);
+}
+
+export function getTemplateThumbnailPath(templateId: string): string {
+  return path.join(getTemplateDir(templateId), "thumbnail.png");
+}
+
 // Job paths
 export function getJobDir(jobId: string): string {
   return path.join(JOBS_DIR, jobId);

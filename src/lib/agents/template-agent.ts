@@ -31,34 +31,45 @@ function ensureProvider() {
 }
 
 /**
- * Instructions for the template editing agent - optimized for speed with diff-based edits
+ * Instructions for the template editing agent - handles both field values and design changes
  */
 const TEMPLATE_AGENT_INSTRUCTIONS = `
-You are a React PDF template editor. Edit templates that use @react-pdf/renderer.
+You are a document editor that can modify BOTH the content (field values) AND the design (template code).
 
-The current template code is provided in the user message. Make changes using the patch_template tool with search/replace operations.
+AVAILABLE TOOLS:
+1. update_fields - Change text content, copy, descriptions, values, specifications
+2. patch_template - Change visual design, colors, fonts, layout, spacing
+
+DECISION GUIDE - Use update_fields when user asks to:
+- Change text, copy, descriptions, titles, or marketing language
+- Update product names, model numbers, specifications, values
+- Edit any text content that appears in the document
+- Examples: "change the description to...", "update the product name", "make the copy say..."
+
+DECISION GUIDE - Use patch_template when user asks to:
+- Change colors, fonts, sizes, spacing, layout
+- Modify the visual appearance or structure
+- Examples: "make the header blue", "increase font size", "add more padding"
 
 WORKFLOW:
-1. Analyze the template code provided in context
-2. Use patch_template with one or more search/replace operations
-3. Respond with a brief summary of what you changed
+1. Determine if the request is about CONTENT (use update_fields) or DESIGN (use patch_template)
+2. For content changes: call update_fields with the field names and new values
+3. For design changes: call patch_template with search/replace operations
+4. You can use BOTH tools in one response if the user asks for both content and design changes
+
+RULES FOR update_fields:
+- Use the exact field names from the available fields list
+- Pass a JSON object with field names as keys and new values as values
 
 RULES FOR patch_template:
 - Each operation finds an exact string and replaces it
 - The "search" string must match EXACTLY (including whitespace/indentation)
 - Keep changes minimal - only modify what's needed
-- You can include multiple operations in one call
 
-TEMPLATE RULES:
+TEMPLATE CODE RULES (when using patch_template):
 - Keep function signature: export function render(fields, assets, templateRoot)
 - Only use: Document, Page, View, Text, Image, StyleSheet, Font
 - Styles must use StyleSheet.create()
-
-COMMON EDITS:
-- Colors: change hex values like "#0099CC" to "#FF0000"
-- Font size: change fontSize: 12 to fontSize: 24
-- Spacing: modify padding/margin values
-- Layout: modify flexDirection, width, height
 `.trim();
 
 /**
@@ -214,6 +225,13 @@ export interface TemplateAgentResult {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   history?: any[];
   timingLogPath?: string;
+}
+
+export interface CodeTweakResult {
+  success: boolean;
+  code?: string;
+  message: string;
+  traces?: AgentTrace[];
 }
 
 /**
@@ -385,6 +403,151 @@ Request: ${userMessage}`;
       mode: "none",
       message: `Failed: ${error}`,
       timingLogPath,
+    };
+  }
+}
+
+/**
+ * Instructions for code tweaking agent
+ */
+const CODE_TWEAK_INSTRUCTIONS = `
+You are a React PDF template editor. Edit templates that use @react-pdf/renderer.
+
+The current template code is provided in the user message. Make changes using the patch_code tool with search/replace operations.
+
+WORKFLOW:
+1. Analyze the template code provided
+2. Use patch_code with one or more search/replace operations to make the requested changes
+3. Respond with a brief summary of what you changed
+
+RULES FOR patch_code:
+- Each operation finds an exact string and replaces it
+- The "search" string must match EXACTLY (including whitespace/indentation)
+- Keep changes minimal - only modify what's needed
+- You can include multiple operations in one call
+
+TEMPLATE RULES:
+- Keep function signature: export function render(fields, assets, templateRoot)
+- Only use: Document, Page, View, Text, Image, StyleSheet, Font
+- Styles must use StyleSheet.create()
+`.trim();
+
+/**
+ * Run a code tweak agent - edits raw code without job context
+ * Used for tweaking generated templates before saving
+ */
+export async function runCodeTweakAgent(
+  code: string,
+  prompt: string,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  previousHistory: any[] = [],
+  onEvent?: AgentEventCallback
+): Promise<CodeTweakResult> {
+  ensureProvider();
+  onEvent?.({ type: "status", content: "Thinking..." });
+
+  // Track code modifications in memory
+  let currentCode = code;
+  let codeChanged = false;
+
+  // Create patch_code tool for in-memory edits
+  const patchCodeTool = tool({
+    name: "patch_code",
+    description: "Edit template code using search/replace operations.",
+    parameters: z.object({
+      operations: z.array(z.object({
+        search: z.string().describe("Exact string to find in the template"),
+        replace: z.string().describe("String to replace it with"),
+      })).describe("Array of search/replace operations"),
+    }),
+    execute: async ({ operations }) => {
+      onEvent?.({ type: "status", content: "Applying changes..." });
+      const results: string[] = [];
+
+      for (const op of operations) {
+        if (!currentCode.includes(op.search)) {
+          results.push(`NOT FOUND: "${op.search.substring(0, 50)}..."`);
+          continue;
+        }
+        currentCode = currentCode.replace(op.search, op.replace);
+        results.push(`OK: replaced "${op.search.substring(0, 30)}..."`);
+        codeChanged = true;
+      }
+
+      if (!currentCode.includes("export function render")) {
+        return JSON.stringify({ error: "Result missing render function", results });
+      }
+
+      onEvent?.({ type: "status", content: "Code updated" });
+      return JSON.stringify({ success: true, results });
+    },
+  });
+
+  // Create agent
+  const agent = new Agent({
+    name: "CodeTweaker",
+    instructions: CODE_TWEAK_INSTRUCTIONS,
+    model: "gpt-5.1",
+    modelSettings: {
+      reasoning: { effort: "none" },
+    },
+    tools: [patchCodeTool],
+  });
+
+  try {
+    // Build input with code in context
+    const contextMessage = `CURRENT TEMPLATE CODE:
+\`\`\`tsx
+${code}
+\`\`\`
+
+Request: ${prompt}`;
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const input: any = previousHistory.length > 0
+      ? [...previousHistory, { role: "user", content: contextMessage }]
+      : contextMessage;
+
+    const result = await run(agent, input, { maxTurns: 5 });
+
+    // Collect traces
+    const traces: AgentTrace[] = [];
+    for (const item of result.newItems || []) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const anyItem = item as any;
+
+      if (anyItem.type === "reasoning_item" && anyItem.rawItem) {
+        const reasoningText = extractReasoningText(anyItem.rawItem);
+        if (reasoningText) {
+          traces.push({ type: "reasoning", content: reasoningText });
+        }
+      }
+
+      if (anyItem.type === "tool_call_item" && anyItem.rawItem) {
+        const toolName = anyItem.rawItem.name || "unknown";
+        traces.push({ type: "tool_call", content: `Calling ${toolName}`, toolName });
+      }
+
+      if (anyItem.type === "tool_call_output_item") {
+        const toolName = anyItem.rawItem?.name || "unknown";
+        const output = typeof anyItem.output === "string"
+          ? anyItem.output.substring(0, 100)
+          : String(anyItem.output).substring(0, 100);
+        traces.push({ type: "tool_result", content: output, toolName });
+      }
+    }
+
+    return {
+      success: true,
+      code: codeChanged ? currentCode : undefined,
+      message: result.finalOutput || "Done.",
+      traces,
+    };
+  } catch (error) {
+    console.error("Code tweak agent error:", error);
+    return {
+      success: false,
+      message: `Failed: ${error}`,
     };
   }
 }

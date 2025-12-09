@@ -56,7 +56,7 @@ export function PdfPreview({ jobId, renderedAt, isRendering }: PdfPreviewProps) 
   const pdfUrl = `/api/jobs/${jobId}/pdf?t=${renderedAt}#toolbar=0&navpanes=0&scrollbar=0&view=FitH`;
 
   return (
-    <div className="h-full rounded-2xl overflow-hidden bg-white shadow-sm">
+    <div className="h-full rounded-2xl overflow-hidden bg-white shadow-sm border border-[#d2d2d7]">
       <iframe
         key={renderedAt}
         src={pdfUrl}

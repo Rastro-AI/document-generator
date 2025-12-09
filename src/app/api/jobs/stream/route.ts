@@ -25,6 +25,7 @@ export async function POST(request: NextRequest) {
   const prompt = formData.get("prompt") as string | null;
   const assetIdsJson = formData.get("assetIds") as string | null;
   const assetIds: string[] = assetIdsJson ? JSON.parse(assetIdsJson) : [];
+  const reasoning = (formData.get("reasoning") as "none" | "low" | null) || "none";
 
   if (!templateId) {
     return new Response(JSON.stringify({ error: "templateId is required" }), {
@@ -170,7 +171,8 @@ export async function POST(request: NextRequest) {
           // Event callback for real-time updates
           (event) => {
             sendEvent("trace", event);
-          }
+          },
+          reasoning
         );
 
         // Merge extracted fields

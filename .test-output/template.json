@@ -1,0 +1,228 @@
+{
+  "id": "par38-13w-spec-sheet",
+  "name": "PAR38 13W Spec Sheet",
+  "canvas": {
+    "width": 612,
+    "height": 792
+  },
+  "fields": [
+    {
+      "name": "TITLE",
+      "type": "string",
+      "description": "Main product title",
+      "example": "PAR38 LED BULB"
+    },
+    {
+      "name": "DESCRIPTION",
+      "type": "string",
+      "description": "Introductory description paragraph under the title",
+      "example": "Save up to 85% on your electric bill with Sunco Lighting long-lasting lamp life 25,000 hour LEDs. Low power usage replacement for incandescent, halogen and fluorescent light bulbs."
+    },
+    {
+      "name": "MODELS_HEADING",
+      "type": "string",
+      "description": "Heading label for models section",
+      "example": "MODELS"
+    },
+    {
+      "name": "MODELS_COLUMN_LEFT",
+      "type": "string",
+      "description": "Left column list of model numbers",
+      "example": "PAR38_13W-2700K\nPAR38_13W-3000K\nPAR38_13W-4000K"
+    },
+    {
+      "name": "MODELS_COLUMN_RIGHT",
+      "type": "string",
+      "description": "Right column list of model numbers",
+      "example": "PAR38_13W-5000K\nPAR38_13W-6000K"
+    },
+    {
+      "name": "LIGHT_DISTRIBUTION_HEADING",
+      "type": "string",
+      "description": "Heading for light distribution section",
+      "example": "LIGHT DISTRIBUTION ANGLE"
+    },
+    {
+      "name": "LIGHT_DISTRIBUTION_NOTE",
+      "type": "string",
+      "description": "Small note text under light distribution chart",
+      "example": "NOTE: The curves indicate the illuminated area and the average illumination at different distances."
+    },
+    {
+      "name": "CERTIFICATIONS_HEADING",
+      "type": "string",
+      "description": "Heading for certifications section",
+      "example": "CERTIFICATIONS"
+    },
+    {
+      "name": "SPECIFICATIONS_HEADING",
+      "type": "string",
+      "description": "Main heading above specifications box",
+      "example": "SPECIFICATIONS"
+    },
+    {
+      "name": "SPEC_VOLTAGE",
+      "type": "string",
+      "description": "Voltage specification",
+      "example": "120V"
+    },
+    {
+      "name": "SPEC_WATTAGE",
+      "type": "string",
+      "description": "Wattage specification",
+      "example": "13W"
+    },
+    {
+      "name": "SPEC_CURRENT",
+      "type": "string",
+      "description": "Current specification",
+      "example": "0.145A"
+    },
+    {
+      "name": "SPEC_POWER_FACTOR",
+      "type": "string",
+      "description": "Power factor specification",
+      "example": "0.7"
+    },
+    {
+      "name": "LIGHTING_PERFORMANCE_HEADING",
+      "type": "string",
+      "description": "Heading for lighting performance section",
+      "example": "LIGHTING PERFORMANCE"
+    },
+    {
+      "name": "PERF_LUMENS",
+      "type": "string",
+      "description": "Lumen output",
+      "example": "1,050 lm"
+    },
+    {
+      "name": "PERF_EQUIVALENCY",
+      "type": "string",
+      "description": "Incandescent equivalency",
+      "example": "100W"
+    },
+    {
+      "name": "PERF_FREQUENCY",
+      "type": "string",
+      "description": "Operating frequency",
+      "example": "60 Hz"
+    },
+    {
+      "name": "PERF_CRI",
+      "type": "string",
+      "description": "Color Rendering Index value",
+      "example": "80"
+    },
+    {
+      "name": "PERF_BEAM_ANGLE",
+      "type": "string",
+      "description": "Beam angle value",
+      "example": "40°"
+    },
+    {
+      "name": "PERF_DIMMABLE",
+      "type": "string",
+      "description": "Dimmable yes/no",
+      "example": "Yes"
+    },
+    {
+      "name": "PERF_EFFICACY",
+      "type": "string",
+      "description": "Efficacy value",
+      "example": "81 lm/w"
+    },
+    {
+      "name": "PERF_COLOR_TEMPERATURE",
+      "type": "string",
+      "description": "Color temperature options",
+      "example": "2700K/3000K/4000K/5000K/6000K"
+    },
+    {
+      "name": "ENVIRONMENT_HEADING",
+      "type": "string",
+      "description": "Heading for environment section",
+      "example": "ENVIRONMENT"
+    },
+    {
+      "name": "ENV_OPERATING_TEMPERATURE",
+      "type": "string",
+      "description": "Operating temperature range",
+      "example": "-4° F - 104° F"
+    },
+    {
+      "name": "ENV_MOISTURE_RATING",
+      "type": "string",
+      "description": "Moisture rating",
+      "example": "Wet"
+    },
+    {
+      "name": "CONSTRUCTION_HEADING",
+      "type": "string",
+      "description": "Heading for construction section",
+      "example": "CONSTRUCTION"
+    },
+    {
+      "name": "CONSTR_HOUSING_MATERIAL",
+      "type": "string",
+      "description": "Housing material description",
+      "example": "Aluminum + PC"
+    },
+    {
+      "name": "CONSTR_WEIGHT",
+      "type": "string",
+      "description": "Product weight",
+      "example": "0.22 lbs"
+    },
+    {
+      "name": "LIFETIME_HEADING",
+      "type": "string",
+      "description": "Heading for lifetime section",
+      "example": "LIFETIME"
+    },
+    {
+      "name": "LIFE_AVERAGE_LIFETIME",
+      "type": "string",
+      "description": "Average lifetime",
+      "example": "25,000+ hrs"
+    },
+    {
+      "name": "LIFE_WARRANTY",
+      "type": "string",
+      "description": "Warranty duration",
+      "example": "5 Years"
+    }
+  ],
+  "assetSlots": [
+    {
+      "name": "LOGO",
+      "kind": "logo",
+      "description": "Brand logo displayed in the top left teal header bar"
+    },
+    {
+      "name": "PRODUCT_IMAGE",
+      "kind": "photo",
+      "description": "Main product photo shown in the top right of the header bar"
+    },
+    {
+      "name": "LIGHT_DISTRIBUTION_CHART",
+      "kind": "chart",
+      "description": "Combined light distribution polar chart and beam angle table"
+    },
+    {
+      "name": "CERT_FCC_ICON",
+      "kind": "logo",
+      "description": "FCC certification logo"
+    },
+    {
+      "name": "CERT_ROHS_ICON",
+      "kind": "logo",
+      "description": "RoHS certification logo"
+    },
+    {
+      "name": "CERT_UL_ICON",
+      "kind": "logo",
+      "description": "UL certification logo"
+    }
+  ]
+}

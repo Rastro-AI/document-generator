@@ -3,6 +3,8 @@
 import { useState, useRef, useEffect } from "react";
 import { useUploadFiles, useRemoveUploadedFile, streamChat } from "@/hooks/useJobs";
 import { UploadedFile } from "@/lib/types";
+import { AssetBankModal } from "./AssetBankModal";
+import { Asset } from "@/hooks/useAssetBank";
 
 interface AgentTrace {
   type: "reasoning" | "tool_call" | "tool_result" | "status";
@@ -25,6 +27,9 @@ interface ChatPanelProps {
   uploadedFiles?: UploadedFile[];
   initialUserPrompt?: string;
   initialUserFiles?: { name: string; type: string }[];
+  isCreating?: boolean;
+  creationStatus?: string;
+  initialReasoningMode?: ReasoningMode;
   onFieldsUpdated: (fields: Record<string, string | number | null>) => void;
   onTemplateUpdated: () => void;
   onFilesChanged?: () => void;
@@ -90,8 +95,8 @@ function TracesDisplay({ traces }: { traces: AgentTrace[] }) {
 
 type ReasoningMode = "none" | "low";
 
-export function ChatPanel({ jobId, initialMessage, uploadedFiles, initialUserPrompt, initialUserFiles, onFieldsUpdated, onTemplateUpdated, onFilesChanged }: ChatPanelProps) {
-  const [reasoningMode, setReasoningMode] = useState<ReasoningMode>("none");
+export function ChatPanel({ jobId, initialMessage, uploadedFiles, initialUserPrompt, initialUserFiles, isCreating, creationStatus, initialReasoningMode, onFieldsUpdated, onTemplateUpdated, onFilesChanged }: ChatPanelProps) {
+  const [reasoningMode, setReasoningMode] = useState<ReasoningMode>(initialReasoningMode || "none");
   const [messages, setMessages] = useState<ChatMessage[]>(() => {
     const msgs: ChatMessage[] = [];
 
@@ -129,9 +134,12 @@ export function ChatPanel({ jobId, initialMessage, uploadedFiles, initialUserPro
   const [isStreaming, setIsStreaming] = useState(false);
   const [liveStatus, setLiveStatus] = useState<string | null>(null);
   const [liveTraces, setLiveTraces] = useState<AgentTrace[]>([]);
+  const [showAssetBank, setShowAssetBank] = useState(false);
+  const [selectedAssets, setSelectedAssets] = useState<Asset[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   const uploadFilesHook = useUploadFiles();
   const removeFile = useRemoveUploadedFile();
@@ -233,11 +241,39 @@ export function ChatPanel({ jobId, initialMessage, uploadedFiles, initialUserPro
     e.preventDefault();
   };
 
-  const isProcessing = isStreaming || uploadFilesHook.isPending;
+  // Handle asset bank selection - fetch asset file and add to attachedFiles
+  const handleToggleAsset = async (asset: Asset) => {
+    // Check if already in selectedAssets
+    const isSelected = selectedAssets.some(a => a.id === asset.id);
+    if (isSelected) {
+      setSelectedAssets(prev => prev.filter(a => a.id !== asset.id));
+    } else {
+      setSelectedAssets(prev => [...prev, asset]);
+      // Fetch the asset file and add to attachedFiles
+      try {
+        const response = await fetch(`/api/assets/${asset.id}`);
+        if (response.ok) {
+          const blob = await response.blob();
+          const file = new File([blob], asset.filename, { type: blob.type });
+          setAttachedFiles(prev => [...prev, file]);
+        }
+      } catch (err) {
+        console.error("Failed to fetch asset:", err);
+      }
+    }
+  };
+
+  const isProcessing = isStreaming || uploadFilesHook.isPending || isCreating;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if ((!input.trim() && attachedFiles.length === 0) || isProcessing) return;
+    if (!input.trim() && attachedFiles.length === 0) return;
+
+    // Abort any ongoing request to allow interruption
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
 
     const userMessage: ChatMessage = {
       id: Date.now().toString(),
@@ -283,52 +319,70 @@ export function ChatPanel({ jobId, initialMessage, uploadedFiles, initialUserPro
         setLiveStatus("Thinking...");
         setLiveTraces([]);
 
-        await streamChat(
-          jobId,
-          currentInput,
-          "auto",
-          reasoningMode,
-          // onTrace - live status updates
-          (trace) => {
-            if (trace.type === "status") {
-              setLiveStatus(trace.content);
-            }
-            setLiveTraces((prev) => [...prev, trace]);
-          },
-          // onResult - final result
-          (result) => {
-            const assistantMessage: ChatMessage = {
-              id: (Date.now() + 1).toString(),
-              role: "assistant",
-              content: result.message || "Done",
-              timestamp: new Date(),
-              traces: result.traces,
-            };
+        // Create abort controller for this request
+        const abortController = new AbortController();
+        abortControllerRef.current = abortController;
 
-            setMessages((prev) => [...prev, assistantMessage]);
+        try {
+          await streamChat(
+            jobId,
+            currentInput,
+            "auto",
+            reasoningMode,
+            // onTrace - live status updates
+            (trace) => {
+              if (trace.type === "status") {
+                setLiveStatus(trace.content);
+              }
+              setLiveTraces((prev) => [...prev, trace]);
+            },
+            // onResult - final result
+            (result) => {
+              const assistantMessage: ChatMessage = {
+                id: (Date.now() + 1).toString(),
+                role: "assistant",
+                content: result.message || "Done",
+                timestamp: new Date(),
+                traces: result.traces,
+              };
 
-            // Notify parent of updates
-            if (result.mode === "fields" && result.fields) {
-              onFieldsUpdated(result.fields);
-            } else if (result.mode === "template" || result.templateChanged) {
-              onTemplateUpdated();
-            }
-          },
-          // onError
-          (error) => {
-            const errorMessage: ChatMessage = {
-              id: (Date.now() + 1).toString(),
-              role: "assistant",
-              content: `Error: ${error}`,
-              timestamp: new Date(),
-            };
-            setMessages((prev) => [...prev, errorMessage]);
+              setMessages((prev) => [...prev, assistantMessage]);
+
+              // Notify parent of updates
+              if (result.mode === "fields" && result.fields) {
+                onFieldsUpdated(result.fields);
+              } else if (result.mode === "template" || result.templateChanged) {
+                onTemplateUpdated();
+              }
+            },
+            // onError
+            (error) => {
+              // Don't show error if it was aborted (user interrupted)
+              if (abortController.signal.aborted) return;
+              const errorMessage: ChatMessage = {
+                id: (Date.now() + 1).toString(),
+                role: "assistant",
+                content: `Error: ${error}`,
+                timestamp: new Date(),
+              };
+              setMessages((prev) => [...prev, errorMessage]);
+            },
+            abortController.signal
+          );
+        } catch (err) {
+          // Silently ignore abort errors (user interrupted)
+          if (err instanceof Error && err.name === "AbortError") {
+            // User interrupted, don't show error
           }
-        );
+        }
 
-        setIsStreaming(false);
-        setLiveStatus(null);
-        setLiveTraces([]);
+        // Only clear state if this wasn't aborted
+        if (!abortController.signal.aborted) {
+          setIsStreaming(false);
+          setLiveStatus(null);
+          setLiveTraces([]);
+        }
+        abortControllerRef.current = null;
       }
     } catch (error) {
       setIsStreaming(false);
@@ -488,7 +542,7 @@ export function ChatPanel({ jobId, initialMessage, uploadedFiles, initialUserPro
                   />
                 </svg>
                 <span className="text-[13px] text-[#86868b]">
-                  {uploadFilesHook.isPending ? "Processing files..." : liveStatus || "Thinking..."}
+                  {isCreating ? creationStatus || "Creating document..." : uploadFilesHook.isPending ? "Processing files..." : liveStatus || "Thinking..."}
                 </span>
               </div>
               {/* Live traces - expandable view of what's happening */}
@@ -599,22 +653,42 @@ export function ChatPanel({ jobId, initialMessage, uploadedFiles, initialUserPro
                       disabled:opacity-50"
           />
 
-          {/* Bottom row - attachment button left, mode picker and send button right */}
+          {/* Bottom row - attachment buttons left, mode picker and send button right */}
           <div className="flex items-center justify-between px-3 pb-3">
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={isProcessing}
-              className="w-8 h-8 flex items-center justify-center rounded-lg text-[#86868b]
-                        hover:bg-white hover:text-[#1d1d1f]
-                        disabled:opacity-40 disabled:cursor-not-allowed
-                        transition-all duration-200"
-              title="Attach files (or paste/drag images)"
-            >
-              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M18.375 12.739l-7.693 7.693a4.5 4.5 0 01-6.364-6.364l10.94-10.94A3 3 0 1119.5 7.372L8.552 18.32m.009-.01l-.01.01m5.699-9.941l-7.81 7.81a1.5 1.5 0 002.112 2.13" />
-              </svg>
-            </button>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={isProcessing}
+                className="h-8 px-2.5 flex items-center gap-1.5 rounded-lg text-[12px] font-medium text-[#86868b]
+                          hover:bg-white hover:text-[#1d1d1f]
+                          disabled:opacity-40 disabled:cursor-not-allowed
+                          transition-all duration-200"
+                title="Attach files (or paste/drag images)"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M18.375 12.739l-7.693 7.693a4.5 4.5 0 01-6.364-6.364l10.94-10.94A3 3 0 1119.5 7.372L8.552 18.32m.009-.01l-.01.01m5.699-9.941l-7.81 7.81a1.5 1.5 0 002.112 2.13" />
+                </svg>
+                Attach
+              </button>
+
+              {/* Asset Bank Button */}
+              <button
+                type="button"
+                onClick={() => setShowAssetBank(true)}
+                disabled={isProcessing}
+                className="h-8 px-2.5 flex items-center gap-1.5 rounded-lg text-[12px] font-medium text-[#86868b]
+                          hover:bg-white hover:text-[#1d1d1f]
+                          disabled:opacity-40 disabled:cursor-not-allowed
+                          transition-all duration-200"
+                title="Select from Asset Bank"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
+                </svg>
+                Asset Bank
+              </button>
+            </div>
 
             <div className="flex items-center gap-2">
               {/* Model picker - Fast/Slow toggle */}
@@ -622,23 +696,19 @@ export function ChatPanel({ jobId, initialMessage, uploadedFiles, initialUserPro
                 type="button"
                 onClick={() => setReasoningMode(reasoningMode === "none" ? "low" : "none")}
                 disabled={isProcessing}
-                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-medium transition-all duration-200
-                          ${reasoningMode === "low"
-                            ? "bg-amber-100 text-amber-700 hover:bg-amber-200"
-                            : "bg-white text-[#86868b] hover:text-[#1d1d1f] hover:bg-[#e8e8ed]"}
-                          disabled:opacity-40 disabled:cursor-not-allowed`}
+                className="h-8 px-3 flex items-center gap-1.5 rounded-lg text-[12px] font-medium bg-white border border-[#e8e8ed] text-[#86868b] hover:text-[#1d1d1f] hover:border-[#d2d2d7] disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-200"
                 title={reasoningMode === "low" ? "Slow mode (more reasoning)" : "Fast mode (no reasoning)"}
               >
                 {reasoningMode === "low" ? (
                   <>
-                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                       <path strokeLinecap="round" strokeLinejoin="round" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
                     </svg>
                     Slow
                   </>
                 ) : (
                   <>
-                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                       <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
                     </svg>
                     Fast
@@ -718,6 +788,14 @@ export function ChatPanel({ jobId, initialMessage, uploadedFiles, initialUserPro
           </div>
         </div>
       )}
+
+      {/* Asset Bank Modal */}
+      <AssetBankModal
+        isOpen={showAssetBank}
+        onClose={() => setShowAssetBank(false)}
+        selectedAssets={selectedAssets}
+        onToggleAsset={handleToggleAsset}
+      />
     </div>
   );
 }
