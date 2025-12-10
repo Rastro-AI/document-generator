@@ -349,9 +349,12 @@ export function ChatPanel({ jobId, initialMessage, uploadedFiles, initialUserPro
               setMessages((prev) => [...prev, assistantMessage]);
 
               // Notify parent of updates
-              if (result.mode === "fields" && result.fields) {
+              // Check for field updates (mode could be "fields" or "both")
+              if ((result.mode === "fields" || result.mode === "both") && result.fields) {
                 onFieldsUpdated(result.fields);
-              } else if (result.mode === "template" || result.templateChanged) {
+              }
+              // Check for template updates (separate from fields)
+              if (result.mode === "template" || result.mode === "both" || result.templateChanged) {
                 onTemplateUpdated();
               }
             },

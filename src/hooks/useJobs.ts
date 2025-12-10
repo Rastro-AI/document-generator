@@ -131,7 +131,7 @@ interface AgentTrace {
 
 interface ChatResponse {
   success: boolean;
-  mode: "fields" | "template";
+  mode: "fields" | "template" | "both" | "none";
   message: string;
   fields?: Record<string, string | number | null>;
   traces?: AgentTrace[];
