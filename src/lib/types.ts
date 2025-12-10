@@ -3,6 +3,70 @@
 // Field value can be primitive, array, or nested object
 export type FieldValue = string | number | boolean | null | FieldValue[] | { [key: string]: FieldValue };
 
+// ===========================================
+// Form-based Template Types (PDF form filling)
+// ===========================================
+
+export interface FormFieldBbox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface FormTextStyle {
+  fontFamily?: string;
+  fontWeight?: number;
+  fontSize?: number;
+  color?: string;
+  alignment?: "left" | "center" | "right";
+  lineHeight?: number;
+}
+
+export interface FormTextField {
+  name: string;
+  type: "text";
+  bbox: FormFieldBbox;
+  style?: FormTextStyle;
+}
+
+export interface FormImageField {
+  name: string;
+  type: "image";
+  bbox: FormFieldBbox;
+  objectFit?: "contain" | "cover" | "fill";
+}
+
+export type FormField = FormTextField | FormImageField;
+
+export interface FormPageSchema {
+  pageNumber: number;
+  fields: FormField[];
+}
+
+export interface FormFontDefinition {
+  name: string;
+  regular?: string;
+  bold?: string;
+  italic?: string;
+  boldItalic?: string;
+}
+
+export interface FormTemplateSchema {
+  version: number;
+  pages: FormPageSchema[];
+  fonts?: FormFontDefinition[];
+}
+
+export interface BlankRegion {
+  pageNumber: number;
+  bbox: FormFieldBbox;
+}
+
+// ===========================================
+// Original Template Types
+// ===========================================
+
 // Alias for fields record used throughout the app
 export type FieldsRecord = Record<string, FieldValue>;
 

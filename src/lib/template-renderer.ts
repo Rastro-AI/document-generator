@@ -40,6 +40,8 @@ export interface RenderOptions {
   templateRoot?: string;
   outputFormat?: "png" | "pdf" | "both";
   dpi?: number;
+  /** Skip validation for existing trusted templates */
+  skipValidation?: boolean;
 }
 
 // Allowed imports for templates
@@ -121,6 +123,7 @@ export async function renderTemplateCode(
     templateRoot = path.join(process.cwd(), "templates", "sunco-spec-v1"),
     outputFormat = "png",
     dpi = 150,
+    skipValidation = false,
   } = options;
 
   // Use a temp directory inside the project so compiled code can resolve node_modules
@@ -145,28 +148,32 @@ export async function renderTemplateCode(
     log.info("Starting template render", { tempId, outputFormat, dpi });
     log.debug("Template code length", templateCode.length);
 
-    // Validate template code before compilation
-    log.info("Validating template code...");
-    const validation = validateTemplateCode(templateCode);
-    if (!validation.valid) {
-      log.error("Template validation failed", validation.errors);
-      await cleanup();
-      return {
-        success: false,
-        error: `Template validation failed:\n${validation.errors.join("\n")}`,
-      };
+    // Validate template code before compilation (can be skipped for trusted templates)
+    if (!skipValidation) {
+      log.info("Validating template code...");
+      const validation = validateTemplateCode(templateCode);
+      if (!validation.valid) {
+        log.error("Template validation failed", validation.errors);
+        await cleanup();
+        return {
+          success: false,
+          error: `Template validation failed:\n${validation.errors.join("\n")}`,
+        };
+      }
+      log.info("Template validation passed");
+    } else {
+      log.info("Skipping validation for trusted template");
     }
-    log.info("Template validation passed");
 
     // Write template to temp file
     log.info("Writing template to temp file", templatePath);
     await fs.writeFile(templatePath, templateCode);
 
-    // Compile with esbuild - bundle everything so the output is self-contained
-    // No external modules means the compiled file doesn't need to resolve anything at runtime
+    // Compile with esbuild - mark react-pdf as external so Font.register shares the same instance
+    // This is critical: bundling @react-pdf/renderer creates a separate Font registry
     log.info("Compiling template with esbuild...");
     const esbuildPath = path.join(process.cwd(), "node_modules", ".bin", "esbuild");
-    const esbuildCmd = `"${esbuildPath}" "${templatePath}" --bundle --platform=node --outfile="${compiledPath}" --format=cjs --jsx=automatic --loader:.tsx=tsx`;
+    const esbuildCmd = `"${esbuildPath}" "${templatePath}" --bundle --platform=node --outfile="${compiledPath}" --format=cjs --jsx=automatic --loader:.tsx=tsx --external:@react-pdf/renderer --external:react`;
     log.debug("esbuild command", esbuildCmd);
     try {
       const { stdout, stderr } = await execAsync(esbuildCmd);
@@ -209,7 +216,9 @@ export async function renderTemplateCode(
       log.info("Found render function, executing...");
 
       log.debug("Render inputs", { fieldCount: Object.keys(fields).length, assetCount: Object.keys(assets).length, templateRoot });
-      const { renderToFile } = await import("@react-pdf/renderer");
+      // Use require instead of dynamic import to ensure same module instance as the compiled template
+      // Dynamic import can load a different instance which breaks Font.register
+      const { renderToFile } = dynamicRequire("@react-pdf/renderer") as typeof import("@react-pdf/renderer");
       const document = renderFn(fields, assets, templateRoot);
       log.info("Render function executed, generating PDF...");
       await renderToFile(document, pdfPath);

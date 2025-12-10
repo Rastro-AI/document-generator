@@ -14,7 +14,7 @@ import { OpenAIProvider } from "@openai/agents-openai";
 import { z } from "zod";
 import fs from "fs/promises";
 import path from "path";
-import { getTemplateRoot } from "@/lib/paths";
+import { getTemplateRoot, getTemplateSchemaPath } from "@/lib/paths";
 import { getJobTemplateContent, updateJobTemplateContent } from "@/lib/fs-utils";
 import { TimingLogger } from "@/lib/timing-logger";
 
@@ -31,9 +31,42 @@ function ensureProvider() {
 }
 
 /**
- * Instructions for the template editing agent - handles both field values and design changes
+ * Detect if template uses form-fill mode (schema.json) vs TSX mode
  */
-const TEMPLATE_AGENT_INSTRUCTIONS = `
+async function getTemplateMode(templateId: string): Promise<"form-fill" | "tsx"> {
+  const schemaPath = getTemplateSchemaPath(templateId);
+  try {
+    await fs.access(schemaPath);
+    return "form-fill";
+  } catch {
+    return "tsx";
+  }
+}
+
+/**
+ * Get schema content for form-fill templates
+ */
+async function getSchemaContent(templateId: string): Promise<string | null> {
+  const schemaPath = getTemplateSchemaPath(templateId);
+  try {
+    return await fs.readFile(schemaPath, "utf-8");
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Update schema content for form-fill templates
+ */
+async function updateSchemaContent(templateId: string, content: string): Promise<void> {
+  const schemaPath = getTemplateSchemaPath(templateId);
+  await fs.writeFile(schemaPath, content);
+}
+
+/**
+ * Instructions for the template editing agent - TSX mode (handles both field values and design changes)
+ */
+const TEMPLATE_AGENT_INSTRUCTIONS_TSX = `
 You are a document editor that can modify BOTH the content (field values) AND the design (template code).
 
 AVAILABLE TOOLS:
@@ -70,6 +103,48 @@ TEMPLATE CODE RULES (when using patch_template):
 - Keep function signature: export function render(fields, assets, templateRoot)
 - Only use: Document, Page, View, Text, Image, StyleSheet, Font
 - Styles must use StyleSheet.create()
+`.trim();
+
+/**
+ * Instructions for the template editing agent - Form-fill mode
+ */
+const TEMPLATE_AGENT_INSTRUCTIONS_FORM_FILL = `
+You are a document editor that can modify the content (field values) in PDF templates.
+
+This is a FORM-FILL template that overlays text and images onto a base PDF at specific coordinates.
+Design editing (colors, fonts, positions) requires modifying the schema.json coordinates and styles.
+
+AVAILABLE TOOLS:
+1. update_fields - Change text content, copy, descriptions, values, specifications
+2. patch_schema - Change field positions, font sizes, colors, styles in the schema
+
+DECISION GUIDE - Use update_fields when user asks to:
+- Change text, copy, descriptions, titles, or marketing language
+- Update product names, model numbers, specifications, values
+- Edit any text content that appears in the document
+- Examples: "change the description to...", "update the product name", "make the copy say..."
+
+DECISION GUIDE - Use patch_schema when user asks to:
+- Change font sizes, colors, alignment
+- Move fields (change x, y coordinates)
+- Resize fields (change width, height)
+- Examples: "make the title bigger", "change the color to blue", "move the description down"
+
+WORKFLOW:
+1. Determine if the request is about CONTENT (use update_fields) or DESIGN (use patch_schema)
+2. For content changes: call update_fields with the field names and new values
+3. For design changes: call patch_schema with search/replace operations on the schema JSON
+4. You can use BOTH tools in one response if the user asks for both content and design changes
+
+RULES FOR update_fields:
+- Use the exact field names from the available fields list
+- Pass a JSON object with field names as keys and new values as values
+
+RULES FOR patch_schema:
+- Each operation finds an exact string in the schema JSON and replaces it
+- The "search" string must match EXACTLY
+- Keep changes minimal - only modify what's needed
+- Common edits: fontSize, color (hex), alignment, bbox coordinates
 `.trim();
 
 /**
@@ -134,6 +209,61 @@ function createPatchTemplateTool(jobId: string, onEvent?: AgentEventCallback) {
         currentTemplateContent = content;
         sessionTemplateChanged = true;
         onEvent?.({ type: "status", content: "Template updated" });
+
+        return JSON.stringify({ success: true, results });
+      } catch (error) {
+        return JSON.stringify({ error: String(error) });
+      }
+    },
+  });
+}
+
+/**
+ * Track schema changes for form-fill mode
+ */
+let sessionSchemaChanged = false;
+let currentSchemaContent = "";
+
+/**
+ * Create patch_schema tool - edit schema.json for form-fill templates
+ */
+function createPatchSchemaTool(templateId: string, onEvent?: AgentEventCallback) {
+  return tool({
+    name: "patch_schema",
+    description: "Edit the form schema using search/replace operations. Use this to change field positions, sizes, fonts, colors, and styles.",
+    parameters: z.object({
+      operations: z.array(z.object({
+        search: z.string().describe("Exact string to find in the schema JSON (must match exactly)"),
+        replace: z.string().describe("String to replace it with"),
+      })).describe("Array of search/replace operations to apply"),
+    }),
+    execute: async ({ operations }) => {
+      onEvent?.({ type: "status", content: "Applying schema changes..." });
+      try {
+        let content = currentSchemaContent;
+        const results: string[] = [];
+
+        for (const op of operations) {
+          if (!content.includes(op.search)) {
+            results.push(`NOT FOUND: "${op.search.substring(0, 50)}..."`);
+            continue;
+          }
+          content = content.replace(op.search, op.replace);
+          results.push(`OK: replaced "${op.search.substring(0, 30)}..."`);
+        }
+
+        // Validate the result is valid JSON
+        try {
+          JSON.parse(content);
+        } catch {
+          return JSON.stringify({ error: "Invalid JSON after edit", results });
+        }
+
+        // Save the updated schema
+        await updateSchemaContent(templateId, content);
+        currentSchemaContent = content;
+        sessionSchemaChanged = true;
+        onEvent?.({ type: "status", content: "Schema updated" });
 
         return JSON.stringify({ success: true, results });
       } catch (error) {
@@ -236,6 +366,7 @@ export interface CodeTweakResult {
 
 /**
  * Run the template editing agent - optimized for speed with diff-based edits
+ * Supports both TSX-based and form-fill (schema.json) templates
  */
 export async function runTemplateAgent(
   jobId: string,
@@ -259,40 +390,60 @@ export async function runTemplateAgent(
 
   // Reset session tracking
   sessionTemplateChanged = false;
+  sessionSchemaChanged = false;
   let fieldUpdates: Record<string, string> | undefined;
 
   timing.start("load_template");
-  // Load template content upfront - no tool call needed
-  currentTemplateContent = await getTemplateContent(jobId, templateId);
+  // Detect template mode (form-fill vs TSX)
+  const templateMode = await getTemplateMode(templateId);
+
+  // Load appropriate content based on mode
+  let contextContent = "";
+  if (templateMode === "form-fill") {
+    const schemaContent = await getSchemaContent(templateId);
+    currentSchemaContent = schemaContent || "{}";
+    contextContent = currentSchemaContent;
+  } else {
+    currentTemplateContent = await getTemplateContent(jobId, templateId);
+    contextContent = currentTemplateContent;
+  }
   timing.end();
 
   timing.start("create_tools");
-  // Create tools with event callback
+  // Create tools based on template mode
   const updateFieldsTool = createUpdateFieldsTool(currentFields, templateFields, onEvent);
-  const patchTemplateTool = createPatchTemplateTool(jobId, onEvent);
+  const designTool = templateMode === "form-fill"
+    ? createPatchSchemaTool(templateId, onEvent)
+    : createPatchTemplateTool(jobId, onEvent);
   timing.end();
 
   timing.start("create_agent");
-  // Create agent with gpt-5.1 - fast mode (none) or slow mode (low reasoning)
+  // Create agent with gpt-5.1 - use mode-specific instructions
+  const instructions = templateMode === "form-fill"
+    ? TEMPLATE_AGENT_INSTRUCTIONS_FORM_FILL
+    : TEMPLATE_AGENT_INSTRUCTIONS_TSX;
+
   const agent = new Agent({
     name: "TemplateEditor",
-    instructions: TEMPLATE_AGENT_INSTRUCTIONS,
+    instructions,
     model: "gpt-5.1",
     modelSettings: {
       reasoning: { effort: reasoning },
     },
-    tools: [updateFieldsTool, patchTemplateTool],
+    tools: [updateFieldsTool, designTool],
   });
   timing.end();
 
   try {
     timing.start("build_input");
-    // Build input with template in context (no need for read_template tool call)
+    // Build input with template/schema in context
+    const contentLabel = templateMode === "form-fill" ? "CURRENT SCHEMA" : "CURRENT TEMPLATE CODE";
+    const codeBlock = templateMode === "form-fill" ? "json" : "tsx";
     const contextMessage = `Current fields: ${JSON.stringify(currentFields)}
 
-CURRENT TEMPLATE CODE:
-\`\`\`tsx
-${currentTemplateContent}
+${contentLabel}:
+\`\`\`${codeBlock}
+${contextContent}
 \`\`\`
 
 Request: ${userMessage}`;
@@ -367,12 +518,13 @@ Request: ${userMessage}`;
     }
     timing.end();
 
-    // Determine mode
+    // Determine mode (schema changes count as template changes for the return type)
     let mode: "fields" | "template" | "both" | "none" = "none";
     if (fieldUpdates && Object.keys(fieldUpdates).length > 0) {
       mode = "fields";
     }
-    if (sessionTemplateChanged) {
+    const templateOrSchemaChanged = sessionTemplateChanged || sessionSchemaChanged;
+    if (templateOrSchemaChanged) {
       mode = mode === "fields" ? "both" : "template";
     }
 
@@ -389,7 +541,7 @@ Request: ${userMessage}`;
       mode,
       message: result.finalOutput || "Done.",
       fieldUpdates,
-      templateChanged: sessionTemplateChanged,
+      templateChanged: templateOrSchemaChanged,
       traces,
       history: result.history,
       timingLogPath,

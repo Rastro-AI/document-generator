@@ -31,6 +31,19 @@ export function getTemplateThumbnailPath(templateId: string): string {
   return path.join(getTemplateDir(templateId), "thumbnail.png");
 }
 
+// Form-based template paths (PDF form filling approach)
+export function getTemplateSchemaPath(templateId: string): string {
+  return path.join(getTemplateDir(templateId), "schema.json");
+}
+
+export function getTemplateBasePdfPath(templateId: string): string {
+  return path.join(getTemplateDir(templateId), "base.pdf");
+}
+
+export function getTemplateOriginalPdfPath(templateId: string): string {
+  return path.join(getTemplateDir(templateId), "original.pdf");
+}
+
 // Job paths
 export function getJobDir(jobId: string): string {
   return path.join(JOBS_DIR, jobId);

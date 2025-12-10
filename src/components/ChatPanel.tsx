@@ -348,10 +348,12 @@ export function ChatPanel({ jobId, initialMessage, uploadedFiles, initialUserPro
 
               setMessages((prev) => [...prev, assistantMessage]);
 
-              // Notify parent of updates
-              if (result.mode === "fields" && result.fields) {
+              // Notify parent of updates to trigger re-render
+              // Always update if fields are present (regardless of mode)
+              if (result.fields) {
                 onFieldsUpdated(result.fields);
               } else if (result.mode === "template" || result.templateChanged) {
+                // Template-only changes still need re-render
                 onTemplateUpdated();
               }
             },

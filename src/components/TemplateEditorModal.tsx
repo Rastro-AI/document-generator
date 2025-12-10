@@ -52,12 +52,29 @@ interface TemplateJsonField {
   properties?: Record<string, { type: string; description?: string }>;
 }
 
+interface FormTemplateSchema {
+  version: number;
+  pages: Array<{
+    pageNumber: number;
+    fields: Array<{
+      name: string;
+      type: "text" | "image";
+      bbox: { x: number; y: number; width: number; height: number };
+      style?: { fontFamily?: string; fontWeight?: number; fontSize?: number; color?: string; alignment?: string };
+      objectFit?: string;
+    }>;
+  }>;
+  fonts?: Array<{ name: string; regular?: string; bold?: string }>;
+}
+
 interface GeneratorTrace {
-  type: "reasoning" | "tool_call" | "tool_result" | "status" | "version" | "template_json" | "user_feedback";
+  type: "reasoning" | "tool_call" | "tool_result" | "status" | "version" | "template_json" | "schema_updated" | "user_feedback";
   content: string;
   toolName?: string;
   version?: number;
   previewUrl?: string;
+  pdfUrl?: string;
+  schema?: FormTemplateSchema;
   templateJson?: {
     id: string;
     name: string;
@@ -150,12 +167,16 @@ export function TemplateEditorModal({
   const [generationStartTime, setGenerationStartTime] = useState<number | null>(null);
   const [elapsedTime, setElapsedTime] = useState(0);
   const [userPrompt, setUserPrompt] = useState("");
-  const [versions, setVersions] = useState<Array<{ version: number; previewBase64: string; pdfBase64?: string; templateCode?: string }>>([]);
+  const [versions, setVersions] = useState<Array<{ version: number; previewBase64: string; pdfBase64?: string; schema?: FormTemplateSchema }>>([]);
+  const [currentSchema, setCurrentSchema] = useState<FormTemplateSchema | null>(null);
+  const [basePdfBase64, setBasePdfBase64] = useState<string | null>(null);
+  const [originalPdfBase64, setOriginalPdfBase64] = useState<string | null>(null);
   const [selectedVersion, setSelectedVersion] = useState<number>(0);
 
   const [feedbackInput, setFeedbackInput] = useState("");
   const [isRefining, setIsRefining] = useState(false);
   const [expandedTraces, setExpandedTraces] = useState<Set<number>>(new Set());
+  const [isEditingPdf, setIsEditingPdf] = useState(false); // True when editing existing template's PDF
   const fileInputRef = useRef<HTMLInputElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const EXPECTED_DURATION = 10 * 60; // 10 minutes in seconds
@@ -197,6 +218,10 @@ export function TemplateEditorModal({
       setFeedbackInput("");
       setIsRefining(false);
       setExpandedTraces(new Set());
+      setCurrentSchema(null);
+      setBasePdfBase64(null);
+      setOriginalPdfBase64(null);
+      setIsEditingPdf(false);
     }
   }, [isOpen, isCreating]);
 
@@ -300,7 +325,21 @@ export function TemplateEditorModal({
     setIsSaving(true);
     try {
       const parsedTemplate: Template = JSON.parse(jsonText);
-      await onSave(parsedTemplate, code || undefined);
+
+      // For form-fill templates, pass schema and basePdf data
+      if (currentSchema && basePdfBase64) {
+        // Extended save with schema data
+        const saveData = {
+          ...parsedTemplate,
+          schema: currentSchema,
+          basePdfBase64,
+          originalPdfBase64,
+        };
+        await onSave(saveData as Template, undefined);
+      } else {
+        // Legacy save
+        await onSave(parsedTemplate, code || undefined);
+      }
       onClose();
     } catch (error) {
       console.error("Failed to save template:", error);
@@ -352,7 +391,7 @@ export function TemplateEditorModal({
     setIsRefining(true);
     setIsGenerating(true);
     setGenerationComplete(false);
-    setSelectedVersion(0); // Switch to "Running Job" tab
+    // Keep current version selected - don't switch to Input tab
 
     // Add user feedback to traces so it shows in the chat
     setGenerationTraces((prev) => [
@@ -372,11 +411,17 @@ export function TemplateEditorModal({
       formData.append("pdf", selectedPdf);
       formData.append("reasoning", "low");
       formData.append("feedback", feedbackText);
-      formData.append("currentCode", code);
-      formData.append("currentJson", jsonText);
+      // Pass current schema for continuation
+      if (currentSchema) {
+        formData.append("currentSchema", JSON.stringify(currentSchema));
+      }
       // Pass max version number so new versions continue numbering correctly
       const maxVersion = versions.length > 0 ? Math.max(...versions.map(v => v.version)) : 0;
       formData.append("startVersion", String(maxVersion));
+      // CRITICAL: Pass the current base PDF (with all previous edits) so we don't lose progress
+      if (basePdfBase64) {
+        formData.append("currentBasePdf", basePdfBase64);
+      }
 
       const response = await fetch("/api/templates/generate", {
         method: "POST",
@@ -420,23 +465,31 @@ export function TemplateEditorModal({
                   if (parsed.version && parsed.previewUrl) {
                     setVersions((prev) => [
                       ...prev,
-                      { version: parsed.version, previewBase64: parsed.previewUrl, pdfBase64: parsed.pdfUrl, templateCode: parsed.templateCode },
+                      { version: parsed.version, previewBase64: parsed.previewUrl, pdfBase64: parsed.pdfUrl, schema: parsed.schema },
                     ]);
                     setSelectedVersion(parsed.version);
-                    // Update code state with latest version's code
-                    if (parsed.templateCode) {
-                      setCode(parsed.templateCode);
+                    // Update schema state with latest version's schema
+                    if (parsed.schema) {
+                      setCurrentSchema(parsed.schema);
                     }
                   }
+                }
+                if (parsed.type === "schema_updated" && parsed.schema) {
+                  setCurrentSchema(parsed.schema);
                 }
                 if (parsed.type === "template_json" && parsed.templateJson) {
                   setJsonText(JSON.stringify(parsed.templateJson, null, 2));
                 }
                 setGenerationTraces((prev) => [...prev, parsed]);
               } else if (currentEventType === "result") {
-                if (parsed.success && parsed.templateJson && parsed.templateCode) {
-                  setJsonText(JSON.stringify(parsed.templateJson, null, 2));
-                  setCode(parsed.templateCode);
+                if (parsed.success && parsed.schema) {
+                  setCurrentSchema(parsed.schema);
+                  if (parsed.basePdfBase64) {
+                    setBasePdfBase64(parsed.basePdfBase64);
+                  }
+                  if (parsed.templateJson) {
+                    setJsonText(JSON.stringify(parsed.templateJson, null, 2));
+                  }
                   setGenerationStatus("Feedback applied successfully!");
                   setGenerationComplete(true);
                 } else {
@@ -542,48 +595,44 @@ export function TemplateEditorModal({
                   if (parsed.version && parsed.previewUrl) {
                     setVersions((prev) => [
                       ...prev,
-                      { version: parsed.version, previewBase64: parsed.previewUrl, pdfBase64: parsed.pdfUrl, templateCode: parsed.templateCode },
+                      { version: parsed.version, previewBase64: parsed.previewUrl, pdfBase64: parsed.pdfUrl, schema: parsed.schema },
                     ]);
                     setSelectedVersion(parsed.version);
-                    // Update code state with latest version's code
-                    if (parsed.templateCode) {
-                      setCode(parsed.templateCode);
+                    // Update schema state with latest version's schema
+                    if (parsed.schema) {
+                      setCurrentSchema(parsed.schema);
                     }
                   }
                 }
-                // Handle template_json event - update fields in real-time
+                // Handle schema_updated event
+                if (parsed.type === "schema_updated" && parsed.schema) {
+                  setCurrentSchema(parsed.schema);
+                }
+                // Handle template_json event - update fields in real-time (legacy compat)
                 if (parsed.type === "template_json" && parsed.templateJson) {
                   setJsonText(JSON.stringify(parsed.templateJson, null, 2));
                 }
                 setGenerationTraces((prev) => [...prev, parsed]);
               } else if (currentEventType === "result") {
-                if (parsed.success && parsed.templateJson && parsed.templateCode) {
-                  setJsonText(JSON.stringify(parsed.templateJson, null, 2));
-                  setCode(parsed.templateCode);
+                if (parsed.success && parsed.schema) {
+                  // New schema-based result
+                  setCurrentSchema(parsed.schema);
+                  if (parsed.basePdfBase64) {
+                    setBasePdfBase64(parsed.basePdfBase64);
+                  }
+                  if (parsed.originalPdfBase64) {
+                    setOriginalPdfBase64(parsed.originalPdfBase64);
+                  }
+                  if (parsed.templateJson) {
+                    setJsonText(JSON.stringify(parsed.templateJson, null, 2));
+                  }
                   setGenerationStatus("Template generated successfully!");
                   setGenerationComplete(true);
-                  // Auto-render preview
-                  setTimeout(async () => {
-                    const templateData = parsed.templateJson;
-                    // Generate type-appropriate placeholders for previews
-                    const sampleFields: Record<string, unknown> = {};
-                    for (const field of templateData.fields || []) {
-                      sampleFields[field.name] = generatePlaceholderValue(field);
-                    }
-                    try {
-                      const previewResponse = await fetch("/api/templates/preview-code", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ code: parsed.templateCode, fields: sampleFields }),
-                      });
-                      if (previewResponse.ok) {
-                        const blob = await previewResponse.blob();
-                        setGeneratedPreviewUrl(URL.createObjectURL(blob));
-                      }
-                    } catch (e) {
-                      console.error("Failed to render preview:", e);
-                    }
-                  }, 100);
+                } else if (parsed.success && parsed.templateJson) {
+                  // Legacy result handling
+                  setJsonText(JSON.stringify(parsed.templateJson, null, 2));
+                  setGenerationStatus("Template generated successfully!");
+                  setGenerationComplete(true);
                 } else {
                   setGenerationStatus(`Generation failed: ${parsed.message}`);
                 }
@@ -628,8 +677,8 @@ export function TemplateEditorModal({
 
   // Render content based on creation vs editing mode
   const renderContent = () => {
-    // CREATING MODE
-    if (isCreating) {
+    // CREATING MODE or EDITING PDF MODE (when clicking "Edit PDF" on existing template)
+    if (isCreating || isEditingPdf) {
       // Step 1: No PDF selected - show upload area
       if (!selectedPdf) {
         return (
@@ -898,8 +947,8 @@ export function TemplateEditorModal({
                     </div>
 
                     {/* Generation traces - always visible */}
-                    <div className="flex-1 min-h-0 overflow-y-auto border border-[#e8e8ed] rounded-xl bg-[#fafafa]">
-                      <div className="p-3 space-y-2">
+                    <div className="flex-1 min-h-0 overflow-y-auto border border-[#e8e8ed] rounded-xl bg-white">
+                      <div className="p-3 space-y-1">
                         {generationTraces.length === 0 ? (
                           <div className="flex items-center gap-2 text-[12px] text-[#86868b]">
                             <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
@@ -910,11 +959,11 @@ export function TemplateEditorModal({
                           </div>
                         ) : (
                           generationTraces.filter((t) => t.type !== "version").map((trace, idx) => (
-                            <div key={idx} className="text-[11px] leading-relaxed">
-                              {/* User feedback - always visible */}
+                            <div key={idx} className="text-[11px]">
+                              {/* User feedback */}
                               {trace.type === "user_feedback" && (
-                                <div className="flex items-start gap-2 bg-[#e8f4fd] p-2 rounded-lg my-1">
-                                  <svg className="w-3 h-3 flex-shrink-0 text-[#0066CC] mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                <div className="flex items-start gap-2 px-2 py-1.5 bg-[#f5f5f7] rounded-md">
+                                  <svg className="w-3.5 h-3.5 flex-shrink-0 text-[#6e6e73] mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                                     <path strokeLinecap="round" strokeLinejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
                                   </svg>
                                   <span className="text-[#1d1d1f]">{trace.content}</span>
@@ -922,59 +971,61 @@ export function TemplateEditorModal({
                               )}
                               {/* Reasoning - collapsible */}
                               {trace.type === "reasoning" && (
-                                <div className="bg-[#f5f5f7] rounded-lg my-1.5 border-l-2 border-[#6e6e73]">
+                                <div>
                                   <button
                                     onClick={() => toggleTraceExpanded(idx)}
-                                    className="w-full flex items-center gap-2 p-2 text-left hover:bg-[#f0f0f0] rounded-lg transition-colors"
+                                    className="w-full flex items-center gap-2 px-2 py-1.5 text-left hover:bg-[#f5f5f7] rounded-md transition-colors"
                                   >
                                     <svg
-                                      className={`w-2.5 h-2.5 flex-shrink-0 text-[#6e6e73] transition-transform ${expandedTraces.has(idx) ? "rotate-90" : ""}`}
+                                      className={`w-3 h-3 flex-shrink-0 text-[#86868b] transition-transform ${expandedTraces.has(idx) ? "rotate-90" : ""}`}
                                       fill="currentColor"
                                       viewBox="0 0 20 20"
                                     >
                                       <path fillRule="evenodd" d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z" clipRule="evenodd" />
                                     </svg>
-                                    <svg className="w-3 h-3 flex-shrink-0 text-[#6e6e73]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                    <svg className="w-3.5 h-3.5 flex-shrink-0 text-[#86868b]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                                       <path strokeLinecap="round" strokeLinejoin="round" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
                                     </svg>
-                                    <span className="text-[#6e6e73] text-[10px] font-medium">Reasoning</span>
+                                    <span className="text-[#6e6e73]">Reasoning</span>
                                   </button>
                                   {expandedTraces.has(idx) && (
-                                    <div className="px-2 pb-2 pt-0">
-                                      <span className="text-[#1d1d1f] whitespace-pre-wrap text-[10px]">{trace.content}</span>
+                                    <div className="ml-8 px-2 py-1.5 text-[#6e6e73] text-[10px] whitespace-pre-wrap">
+                                      {trace.content}
                                     </div>
                                   )}
                                 </div>
                               )}
-                              {/* Status - always visible */}
+                              {/* Status */}
                               {trace.type === "status" && (
-                                <div className="flex items-start gap-2 py-0.5">
-                                  <span className="text-[#86868b]">{trace.content}</span>
+                                <div className="px-2 py-1 text-[#86868b]">
+                                  {trace.content}
                                 </div>
                               )}
-                              {/* Tool call - collapsible header */}
+                              {/* Tool call - collapsible */}
                               {trace.type === "tool_call" && (
-                                <button
-                                  onClick={() => toggleTraceExpanded(idx)}
-                                  className="flex items-center gap-1.5 text-[#0066CC] hover:bg-[#f5f5f7] px-1.5 py-0.5 rounded transition-colors w-full text-left"
-                                >
-                                  <svg
-                                    className={`w-2.5 h-2.5 flex-shrink-0 transition-transform ${expandedTraces.has(idx) ? "rotate-90" : ""}`}
-                                    fill="currentColor"
-                                    viewBox="0 0 20 20"
+                                <div>
+                                  <button
+                                    onClick={() => toggleTraceExpanded(idx)}
+                                    className="w-full flex items-center gap-2 px-2 py-1.5 text-left hover:bg-[#f5f5f7] rounded-md transition-colors"
                                   >
-                                    <path fillRule="evenodd" d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z" clipRule="evenodd" />
-                                  </svg>
-                                  <svg className="w-3 h-3 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                                  </svg>
-                                  <span className="font-mono">{trace.toolName || trace.content}</span>
-                                </button>
+                                    <svg
+                                      className={`w-3 h-3 flex-shrink-0 text-[#86868b] transition-transform ${expandedTraces.has(idx) ? "rotate-90" : ""}`}
+                                      fill="currentColor"
+                                      viewBox="0 0 20 20"
+                                    >
+                                      <path fillRule="evenodd" d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z" clipRule="evenodd" />
+                                    </svg>
+                                    <svg className="w-3.5 h-3.5 flex-shrink-0 text-[#34c759]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                      <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                                    </svg>
+                                    <span className="text-[#1d1d1f] font-mono">{trace.toolName || trace.content}</span>
+                                  </button>
+                                </div>
                               )}
                               {/* Tool result - only show if parent tool_call is expanded */}
                               {trace.type === "tool_result" && expandedTraces.has(idx - 1) && (
-                                <div className="flex items-start gap-2 pl-5 py-1 text-[#6e6e73] bg-[#fafafa] rounded ml-4 border-l border-[#e8e8ed]">
-                                  <span className="font-mono text-[10px] whitespace-pre-wrap">{trace.content}</span>
+                                <div className="ml-8 px-2 py-1.5 text-[#6e6e73] font-mono text-[10px] whitespace-pre-wrap">
+                                  {trace.content}
                                 </div>
                               )}
                             </div>
@@ -985,8 +1036,8 @@ export function TemplateEditorModal({
 
                     {/* Success message when complete */}
                     {generationComplete && versions.length > 0 && (
-                      <div className="mt-3 p-3 bg-green-50 rounded-lg text-center">
-                        <p className="text-[12px] text-green-700 font-medium">Generation complete!</p>
+                      <div className="mt-3 px-3 py-2 bg-[#f5f5f7] rounded-lg text-center">
+                        <p className="text-[11px] text-[#1d1d1f]">Generation complete</p>
                       </div>
                     )}
                   </>
@@ -1022,99 +1073,157 @@ export function TemplateEditorModal({
       );
     }
 
-    // EDITING MODE - Keep tabs (JSON, Code, Preview)
+    // EDITING MODE - Two-pane layout: Fields on left, Preview on right
     return (
-      <>
-        {/* Tabs */}
-        <div className="flex border-b border-[#d2d2d7] px-6">
-          <button
-            onClick={() => setActiveTab("json")}
-            className={`px-4 py-3 text-[13px] font-medium transition-colors ${
-              activeTab === "json"
-                ? "text-[#1d1d1f] border-b-2 border-[#1d1d1f] -mb-[2px]"
-                : "text-[#86868b] hover:text-[#1d1d1f]"
-            }`}
-          >
-            JSON
-          </button>
-          <button
-            onClick={() => setActiveTab("code")}
-            className={`px-4 py-3 text-[13px] font-medium transition-colors ${
-              activeTab === "code"
-                ? "text-[#1d1d1f] border-b-2 border-[#1d1d1f] -mb-[2px]"
-                : "text-[#86868b] hover:text-[#1d1d1f]"
-            }`}
-          >
-            Code
-          </button>
-          {template && (
+      <div className="h-[550px] flex">
+        {/* Left: Editable Fields */}
+        <div className="w-1/2 border-r border-[#d2d2d7] flex flex-col">
+          <div className="px-4 py-3 border-b border-[#e8e8ed] flex items-center justify-between">
+            <h3 className="text-[13px] font-semibold text-[#1d1d1f]">Template Fields</h3>
             <button
-              onClick={() => {
-                setPreviewKey((k) => k + 1);
-                setActiveTab("preview");
+              onClick={async () => {
+                if (!template) return;
+                try {
+                  // Fetch the base PDF for this template
+                  const response = await fetch(`/api/templates/${template.id}/base-pdf`);
+                  if (!response.ok) {
+                    alert("No base PDF found for this template. It may be a legacy TSX-based template.");
+                    return;
+                  }
+                  const pdfBlob = await response.blob();
+                  const pdfFile = new File([pdfBlob], `${template.id}-base.pdf`, { type: "application/pdf" });
+
+                  // Fetch the schema
+                  const schemaResponse = await fetch(`/api/templates/${template.id}/schema`);
+                  let schema: FormTemplateSchema | null = null;
+                  if (schemaResponse.ok) {
+                    schema = await schemaResponse.json();
+                  }
+
+                  // Switch to creation/generation mode with existing data
+                  setSelectedPdf(pdfFile);
+                  setPdfPreviewUrl(URL.createObjectURL(pdfBlob));
+                  if (schema) {
+                    setCurrentSchema(schema);
+                    // Convert schema to versions for display
+                    setVersions([{ version: 1, previewBase64: "", schema }]);
+                    setSelectedVersion(1);
+                  }
+                  setGenerationComplete(true);
+                  setGenerationStatus("Loaded existing template for editing");
+                  setIsEditingPdf(true); // Switch to PDF editing view
+                } catch (error) {
+                  console.error("Failed to load template for editing:", error);
+                  alert("Failed to load template for editing");
+                }
               }}
-              className={`px-4 py-3 text-[13px] font-medium transition-colors ${
-                activeTab === "preview"
-                  ? "text-[#1d1d1f] border-b-2 border-[#1d1d1f] -mb-[2px]"
-                  : "text-[#86868b] hover:text-[#1d1d1f]"
-              }`}
+              className="px-3 py-1.5 text-[11px] font-medium text-[#1d1d1f] border border-[#d2d2d7] rounded-lg hover:bg-[#f5f5f7] transition-colors flex items-center gap-1.5"
             >
-              Preview
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+              </svg>
+              Edit PDF
             </button>
-          )}
+          </div>
+          <div className="flex-1 overflow-y-auto p-4">
+            {/* Asset Slots */}
+            {parsedTemplate?.assetSlots && parsedTemplate.assetSlots.length > 0 && (
+              <div className="mb-6">
+                <h4 className="text-[11px] font-semibold text-[#86868b] uppercase tracking-wide mb-3">Assets</h4>
+                <div className="space-y-3">
+                  {parsedTemplate.assetSlots.map((slot) => (
+                    <div key={slot.name} className="p-3 bg-[#f5f5f7] rounded-lg">
+                      <div className="flex items-center gap-2 mb-2">
+                        <span className="text-[12px] font-medium text-[#1d1d1f]">{slot.name}</span>
+                        <span className="px-1.5 py-0.5 text-[9px] font-medium text-[#6e6e73] bg-white rounded">
+                          {slot.kind}
+                        </span>
+                      </div>
+                      <input
+                        type="text"
+                        value={slot.description}
+                        onChange={(e) => {
+                          try {
+                            const parsed = JSON.parse(jsonText);
+                            const idx = parsed.assetSlots?.findIndex((s: { name: string }) => s.name === slot.name);
+                            if (idx !== undefined && idx >= 0) {
+                              parsed.assetSlots[idx].description = e.target.value;
+                              setJsonText(JSON.stringify(parsed, null, 2));
+                            }
+                          } catch { /* ignore */ }
+                        }}
+                        className="w-full px-2 py-1.5 text-[11px] text-[#6e6e73] bg-white border border-[#e8e8ed] rounded-md focus:outline-none focus:ring-1 focus:ring-[#424245]"
+                        placeholder="Description for this asset..."
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Text Fields */}
+            {parsedTemplate?.fields && parsedTemplate.fields.length > 0 && (
+              <div>
+                <h4 className="text-[11px] font-semibold text-[#86868b] uppercase tracking-wide mb-3">Fields</h4>
+                <div className="space-y-3">
+                  {parsedTemplate.fields.map((field) => (
+                    <div key={field.name} className="p-3 bg-[#f5f5f7] rounded-lg">
+                      <div className="flex items-center gap-2 mb-2">
+                        <span className="text-[12px] font-medium text-[#1d1d1f]">{field.name}</span>
+                        <span className="px-1.5 py-0.5 text-[9px] font-medium text-[#6e6e73] bg-white rounded">
+                          {field.type}
+                        </span>
+                      </div>
+                      <input
+                        type="text"
+                        value={field.description}
+                        onChange={(e) => handleFieldUpdate(field.name, "description", e.target.value)}
+                        className="w-full px-2 py-1.5 text-[11px] text-[#6e6e73] bg-white border border-[#e8e8ed] rounded-md focus:outline-none focus:ring-1 focus:ring-[#424245]"
+                        placeholder="Description for this field..."
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Empty state */}
+            {(!parsedTemplate?.fields || parsedTemplate.fields.length === 0) &&
+             (!parsedTemplate?.assetSlots || parsedTemplate.assetSlots.length === 0) && (
+              <div className="h-full flex items-center justify-center">
+                <p className="text-[12px] text-[#86868b]">No fields defined</p>
+              </div>
+            )}
+          </div>
         </div>
 
-        {/* Content */}
-        <div className="h-[450px] overflow-y-auto p-6">
-          {activeTab === "json" && (
-            <div className="h-[400px] flex flex-col">
-              {jsonError && (
-                <div className="mb-2 px-3 py-2 bg-red-50 text-red-600 text-[12px] rounded-lg">
-                  {jsonError}
-                </div>
-              )}
-              <textarea
-                value={jsonText}
-                onChange={(e) => handleJsonChange(e.target.value)}
-                className="w-full flex-1 px-4 py-3 bg-[#1d1d1f] text-[#e8e8ed] font-mono text-[13px]
-                          rounded-xl resize-none focus:outline-none focus:ring-2 focus:ring-[#424245]"
-                placeholder='{"id": "my-template", "name": "My Template", ...}'
-                spellCheck={false}
-              />
-            </div>
-          )}
-
-          {activeTab === "code" && (
-            <div className="h-[400px] flex flex-col gap-2">
-              <p className="text-[11px] text-[#86868b]">
-                @react-pdf/renderer template code
-              </p>
-              <textarea
-                value={code}
-                onChange={(e) => setCode(e.target.value)}
-                className="w-full flex-1 px-4 py-3 bg-[#1d1d1f] text-[#e8e8ed] font-mono text-[13px]
-                          rounded-xl resize-none focus:outline-none focus:ring-2 focus:ring-[#424245]"
-                placeholder="// Template code (template.tsx)"
-                spellCheck={false}
-              />
-            </div>
-          )}
-
-          {activeTab === "preview" && template && (
-            <div className="h-[400px] flex flex-col gap-2">
-              <p className="text-[12px] text-[#86868b]">
-                Preview with placeholder values
-              </p>
+        {/* Right: Preview */}
+        <div className="w-1/2 flex flex-col">
+          <div className="px-4 py-3 border-b border-[#e8e8ed] flex items-center justify-between">
+            <h3 className="text-[13px] font-semibold text-[#1d1d1f]">Preview</h3>
+            <button
+              onClick={() => setPreviewKey((k) => k + 1)}
+              className="px-2 py-1 text-[11px] text-[#6e6e73] hover:text-[#1d1d1f] transition-colors"
+            >
+              Refresh
+            </button>
+          </div>
+          <div className="flex-1 p-4">
+            {template ? (
               <iframe
                 key={previewKey}
                 src={`/api/templates/${template.id}/preview?t=${previewKey}`}
-                className="flex-1 w-full rounded-xl border border-[#d2d2d7]"
+                className="w-full h-full rounded-xl border border-[#d2d2d7]"
                 title="Template preview"
               />
-            </div>
-          )}
+            ) : (
+              <div className="h-full flex items-center justify-center rounded-xl border border-[#d2d2d7] bg-[#f5f5f7]">
+                <p className="text-[12px] text-[#86868b]">Save template to see preview</p>
+              </div>
+            )}
+          </div>
         </div>
-      </>
+      </div>
     );
   };
 
@@ -1128,7 +1237,7 @@ export function TemplateEditorModal({
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-[#d2d2d7]">
           <h2 className="text-[17px] font-semibold text-[#1d1d1f]">
-            {isCreating ? "New Template" : "Edit Template"}
+            {isCreating ? "New Template" : isEditingPdf ? "Edit Template PDF" : "Edit Template"}
           </h2>
           <button
             onClick={onClose}
@@ -1156,13 +1265,13 @@ export function TemplateEditorModal({
           </button>
 
           {/* Accept button - shown during generation when we have at least one version */}
-          {isCreating && isGenerating && versions.length > 0 && (
+          {(isCreating || isEditingPdf) && isGenerating && versions.length > 0 && (
             <button
               onClick={() => {
-                // Ensure code state has the latest version's template code
+                // Ensure schema state has the latest version's schema
                 const latestVersion = versions[versions.length - 1];
-                if (latestVersion?.templateCode) {
-                  setCode(latestVersion.templateCode);
+                if (latestVersion?.schema) {
+                  setCurrentSchema(latestVersion.schema);
                 }
                 setIsGenerating(false);
                 setGenerationComplete(true);
@@ -1175,8 +1284,19 @@ export function TemplateEditorModal({
             </button>
           )}
 
-          {/* Generate button - before generation starts */}
-          {isCreating && !generationComplete && !isGenerating && selectedPdf && (
+          {/* Back to Fields button - when editing PDF of existing template */}
+          {isEditingPdf && !isGenerating && (
+            <button
+              onClick={() => setIsEditingPdf(false)}
+              className="px-4 py-2 text-[14px] font-medium text-[#1d1d1f] border border-[#d2d2d7] rounded-lg
+                        hover:bg-[#f5f5f7] transition-all duration-200"
+            >
+              Back to Fields
+            </button>
+          )}
+
+          {/* Generate button - before generation starts (only for new templates, not editing) */}
+          {isCreating && !isEditingPdf && !generationComplete && !isGenerating && selectedPdf && (
             <button
               onClick={handleGenerate}
               className="px-4 py-2 text-[14px] font-medium text-white bg-[#1d1d1f] rounded-lg
@@ -1186,8 +1306,8 @@ export function TemplateEditorModal({
             </button>
           )}
 
-          {/* Save button - after generation is complete or when editing */}
-          {(!isCreating || generationComplete) && (
+          {/* Save button - after generation is complete or when in normal editing mode */}
+          {((!isCreating && !isEditingPdf) || generationComplete) && (
             <button
               onClick={handleSave}
               disabled={isSaving || !!jsonError || isGenerating}

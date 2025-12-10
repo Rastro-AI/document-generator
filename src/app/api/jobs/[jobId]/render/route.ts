@@ -1,84 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getJob, getTemplate, markJobRendered, getJobTemplateContent } from "@/lib/fs-utils";
-import { getJobOutputPdfPath, getTemplateRoot } from "@/lib/paths";
-import { renderToBuffer } from "@react-pdf/renderer";
+import { getJob, getTemplate, markJobRendered } from "@/lib/fs-utils";
+import { getJobOutputPdfPath, getTemplateBasePdfPath, getTemplateOriginalPdfPath, getTemplateSchemaPath, getTemplateTsxPath, getTemplateRoot } from "@/lib/paths";
+import { fillPdfWithPyMuPDF, FormSchema } from "@/lib/pdf-filler-pymupdf";
+import { renderTemplateCode } from "@/lib/template-renderer";
 import fs from "fs/promises";
-import * as esbuild from "esbuild";
-import path from "path";
-import React from "react";
-import * as ReactPDF from "@react-pdf/renderer";
 import sharp from "sharp";
-
-// Fallback: Import the original template's render function
-import { render as originalRender } from "../../../../../../templates/sunco-spec-v1/template";
-
-// Dynamic template compiler
-async function compileAndLoadTemplate(
-  templateCode: string,
-  _templateRoot: string
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-): Promise<{ render: (fields: any, assets: any, templateRoot: string) => React.ReactElement }> {
-  // Remove imports and exports, replace with our provided dependencies
-  // Use non-anchored regex to handle multi-line imports like:
-  // import {
-  //   Document,
-  //   Page,
-  // } from "@react-pdf/renderer";
-  let cleanedCode = templateCode
-    // Remove multi-line or single-line import ... from "..." statements
-    .replace(/import\s+[\s\S]*?from\s+['"][^'"]+['"];?/g, "")
-    // Remove bare imports like: import "something";
-    .replace(/import\s+['"][^'"]+['"];?/g, "")
-    // Convert export function to regular function assignment
-    .replace(/export\s+function\s+render\s*\(/g, "__exportedRender__ = function render(")
-    // Remove other exports
-    .replace(/export\s+/g, "");
-
-  // Transpile TSX to JS
-  const result = await esbuild.transform(cleanedCode, {
-    loader: "tsx",
-    target: "es2020",
-    format: "cjs", // Use CommonJS - simpler output without IIFE wrapping
-  });
-
-  const transpiledCode = result.code;
-
-  // Create a function that provides all dependencies and returns the render function
-  const moduleCode = `
-    "use strict";
-    var __exportedRender__;
-    var exports = {};
-    var module = { exports: exports };
-    var React = __React__;
-    var Document = __ReactPDF__.Document;
-    var Page = __ReactPDF__.Page;
-    var View = __ReactPDF__.View;
-    var Text = __ReactPDF__.Text;
-    var Image = __ReactPDF__.Image;
-    var StyleSheet = __ReactPDF__.StyleSheet;
-    var Font = __ReactPDF__.Font;
-    var path = __path__;
-    ${transpiledCode}
-    return __exportedRender__ || (typeof render !== 'undefined' ? render : null);
-  `;
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const moduleWrapper = new Function(
-    "__React__",
-    "__ReactPDF__",
-    "__path__",
-    moduleCode
-  );
-
-  const renderFn = moduleWrapper(React, ReactPDF, path);
-
-  if (!renderFn || typeof renderFn !== "function") {
-    throw new Error("Template does not export a render function");
-  }
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return { render: renderFn as (fields: any, assets: any, templateRoot: string) => React.ReactElement };
-}
 
 export async function POST(
   request: NextRequest,
@@ -102,81 +28,150 @@ export async function POST(
       );
     }
 
-    // For now, we only support the sunco-spec-v1 template
-    if (job.templateId !== "sunco-spec-v1") {
-      return NextResponse.json(
-        { error: "Unsupported template" },
-        { status: 400 }
-      );
-    }
+    const schemaPath = getTemplateSchemaPath(job.templateId);
+    const tsxPath = getTemplateTsxPath(job.templateId);
 
-    // Prepare fields - handle MODELS as array, rest as strings
-    const fields: Record<string, string | string[]> = {};
-    for (const [key, value] of Object.entries(job.fields)) {
-      if (key === "MODELS") {
-        // MODELS should be an array
-        if (Array.isArray(value)) {
-          fields[key] = value;
-        } else if (typeof value === "string" && value) {
-          fields[key] = value.split(",").map((m) => m.trim());
-        } else {
-          fields[key] = [];
-        }
-      } else {
-        fields[key] = value !== null ? String(value) : "";
-      }
-    }
-
-    // Prepare assets - convert image paths to data URLs
-    // React-PDF only supports PNG and JPG, so convert WebP/GIF to PNG
-    const assets: Record<string, string | undefined> = {};
-    for (const [key, value] of Object.entries(job.assets)) {
-      if (value) {
-        try {
-          const imageBuffer = await fs.readFile(value);
-          const ext = value.split(".").pop()?.toLowerCase() || "png";
-
-          // Convert WebP/GIF to PNG (React-PDF doesn't support them)
-          if (ext === "webp" || ext === "gif") {
-            const pngBuffer = await sharp(imageBuffer).png().toBuffer();
-            assets[key] = `data:image/png;base64,${pngBuffer.toString("base64")}`;
-          } else {
-            const mimeType = ext === "jpg" ? "image/jpeg" : `image/${ext}`;
-            assets[key] = `data:${mimeType};base64,${imageBuffer.toString("base64")}`;
-          }
-        } catch (err) {
-          console.error(`Failed to process image ${value}:`, err);
-          assets[key] = undefined;
-        }
-      } else {
-        assets[key] = undefined;
-      }
-    }
-
-    // Get template root for font loading
-    const templateRoot = getTemplateRoot(job.templateId);
-
-    // Try to load job-specific template, fall back to original
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let renderFn: (fields: any, assets: any, templateRoot: string) => React.ReactElement;
-
-    const jobTemplateContent = await getJobTemplateContent(jobId);
-    if (jobTemplateContent) {
+    // Check if this is a schema-based template (has schema.json) or tsx-based template
+    let useSchemaMode = false;
+    try {
+      await fs.access(schemaPath);
+      useSchemaMode = true;
+    } catch {
+      // No schema.json - check for tsx
       try {
-        const compiledTemplate = await compileAndLoadTemplate(jobTemplateContent, templateRoot);
-        renderFn = compiledTemplate.render;
-      } catch (compileError) {
-        console.error("Failed to compile job template, using original:", compileError);
-        renderFn = originalRender;
+        await fs.access(tsxPath);
+      } catch {
+        return NextResponse.json(
+          { error: "Template not found - missing schema.json or template.tsx" },
+          { status: 400 }
+        );
       }
-    } else {
-      renderFn = originalRender;
     }
 
-    // Render the PDF using the template's render function
-    const document = renderFn(fields, assets, templateRoot);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const pdfBuffer = await renderToBuffer(document as any);
+    let pdfBuffer: Buffer;
+
+    if (useSchemaMode) {
+      // Schema-based rendering with PyMuPDF
+      const originalPdfPath = getTemplateOriginalPdfPath(job.templateId);
+      const basePdfPath = getTemplateBasePdfPath(job.templateId);
+
+      // Prefer original.pdf for PyMuPDF redaction (cleaner results)
+      let pdfPath = originalPdfPath;
+      try {
+        await fs.access(originalPdfPath);
+      } catch {
+        try {
+          await fs.access(basePdfPath);
+          pdfPath = basePdfPath;
+        } catch {
+          return NextResponse.json(
+            { error: "Template not found - missing original.pdf or base.pdf" },
+            { status: 400 }
+          );
+        }
+      }
+
+      // Load schema
+      const schemaContent = await fs.readFile(schemaPath, "utf-8");
+      const schema: FormSchema = JSON.parse(schemaContent);
+
+      // Prepare fields - convert all to strings
+      const fields: Record<string, string> = {};
+      for (const [key, value] of Object.entries(job.fields)) {
+        if (value !== null && value !== undefined) {
+          fields[key] = String(value);
+        }
+      }
+
+      // Prepare assets - convert image paths to data URLs
+      const assets: Record<string, string | null> = {};
+      for (const [key, value] of Object.entries(job.assets)) {
+        if (value) {
+          try {
+            const imageBuffer = await fs.readFile(value);
+            const ext = value.split(".").pop()?.toLowerCase() || "png";
+
+            // Convert WebP/GIF to PNG
+            if (ext === "webp" || ext === "gif") {
+              const pngBuffer = await sharp(imageBuffer).png().toBuffer();
+              assets[key] = `data:image/png;base64,${pngBuffer.toString("base64")}`;
+            } else {
+              const mimeType = ext === "jpg" ? "image/jpeg" : `image/${ext}`;
+              assets[key] = `data:${mimeType};base64,${imageBuffer.toString("base64")}`;
+            }
+          } catch (err) {
+            console.error(`Failed to process image ${value}:`, err);
+            assets[key] = null;
+          }
+        } else {
+          assets[key] = null;
+        }
+      }
+
+      // Fill template using PyMuPDF (proper redaction - removes original content cleanly)
+      const result = await fillPdfWithPyMuPDF(pdfPath, schema, {
+        fields,
+        assets,
+      });
+
+      if (!result.success || !result.pdfBuffer) {
+        return NextResponse.json(
+          { error: "Failed to render PDF", details: result.error },
+          { status: 500 }
+        );
+      }
+
+      pdfBuffer = result.pdfBuffer;
+    } else {
+      // TSX-based rendering with @react-pdf/renderer
+      const templateCode = await fs.readFile(tsxPath, "utf-8");
+      const templateRoot = getTemplateRoot(job.templateId);
+
+      // Prepare assets - convert image paths to data URLs for tsx renderer
+      const assets: Record<string, string> = {};
+      for (const [key, value] of Object.entries(job.assets)) {
+        if (value) {
+          try {
+            const imageBuffer = await fs.readFile(value);
+            const ext = value.split(".").pop()?.toLowerCase() || "png";
+
+            // Convert WebP/GIF to PNG
+            if (ext === "webp" || ext === "gif") {
+              const pngBuffer = await sharp(imageBuffer).png().toBuffer();
+              assets[key] = `data:image/png;base64,${pngBuffer.toString("base64")}`;
+            } else {
+              const mimeType = ext === "jpg" ? "image/jpeg" : `image/${ext}`;
+              assets[key] = `data:${mimeType};base64,${imageBuffer.toString("base64")}`;
+            }
+          } catch (err) {
+            console.error(`Failed to process image ${value}:`, err);
+          }
+        }
+      }
+
+      // Prepare fields - convert MODELS from comma-separated string to array if needed
+      const fields: Record<string, unknown> = { ...job.fields };
+      if (typeof fields.MODELS === "string") {
+        fields.MODELS = fields.MODELS.split(",").map((m: string) => m.trim());
+      }
+
+      const result = await renderTemplateCode(templateCode, {
+        fields,
+        assets,
+        templateRoot,
+        outputFormat: "both",
+        skipValidation: true, // Trust existing templates in the templates directory
+      });
+
+      if (!result.success || !result.pdfBuffer) {
+        return NextResponse.json(
+          { error: "Failed to render PDF", details: result.error },
+          { status: 500 }
+        );
+      }
+
+      pdfBuffer = result.pdfBuffer;
+    }
 
     // Save the PDF
     const outputPath = getJobOutputPdfPath(jobId);

@@ -1,7 +1,6 @@
 /**
- * Template Generator Agent
- * Uses OpenAI Agents SDK with code_interpreter and containers
- * Full feature parity with the original Responses API version
+ * Template Generator Agent - PDF Form-Fill Approach
+ * Analyzes PDFs to identify dynamic regions, creates schema.json + base.pdf
  */
 
 import {
@@ -13,24 +12,26 @@ import {
 import { OpenAIProvider, codeInterpreterTool } from "@openai/agents-openai";
 import { z } from "zod";
 import OpenAI from "openai";
-import { renderTemplateCode } from "@/lib/template-renderer";
+import { fillPdfTemplate, FormTemplateSchema } from "@/lib/pdf-filler";
+import { blankPdfRegions, BlankRegion } from "@/lib/pdf-analyzer";
 import path from "path";
 import fsSync from "fs";
+import fs from "fs/promises";
 import os from "os";
 
-// Logger for template generator
+// Logger
 const log = {
   info: (msg: string, data?: unknown) => {
     const timestamp = new Date().toISOString();
-    console.log(`[${timestamp}] [template-generator-agent] ${msg}`, data !== undefined ? data : "");
+    console.log(`[${timestamp}] [template-generator] ${msg}`, data !== undefined ? data : "");
   },
   error: (msg: string, data?: unknown) => {
     const timestamp = new Date().toISOString();
-    console.error(`[${timestamp}] [template-generator-agent] ERROR: ${msg}`, data !== undefined ? data : "");
+    console.error(`[${timestamp}] [template-generator] ERROR: ${msg}`, data !== undefined ? data : "");
   },
   debug: (msg: string, data?: unknown) => {
     const timestamp = new Date().toISOString();
-    console.log(`[${timestamp}] [template-generator-agent] DEBUG: ${msg}`, data !== undefined ? data : "");
+    console.log(`[${timestamp}] [template-generator] DEBUG: ${msg}`, data !== undefined ? data : "");
   },
 };
 
@@ -46,7 +47,7 @@ function ensureProvider() {
   }
 }
 
-// Lazy-load the OpenAI client for container operations
+// Lazy-load the OpenAI client
 let openaiClient: OpenAI | null = null;
 function getOpenAI(): OpenAI {
   if (!openaiClient) {
@@ -57,26 +58,34 @@ function getOpenAI(): OpenAI {
   return openaiClient;
 }
 
+// Types
 export interface GeneratorTrace {
-  type: "reasoning" | "tool_call" | "tool_result" | "status" | "version" | "template_json";
+  type: "reasoning" | "tool_call" | "tool_result" | "status" | "version" | "schema_updated";
   content: string;
   toolName?: string;
   version?: number;
   previewUrl?: string;
   pdfUrl?: string;
-  templateJson?: TemplateJson;
-  templateCode?: string;
+  schema?: FormTemplateSchema;
 }
 
 export type GeneratorEventCallback = (event: GeneratorTrace) => void;
 
+export interface TemplateGeneratorResult {
+  success: boolean;
+  schema?: FormTemplateSchema;
+  basePdfBuffer?: Buffer;
+  originalPdfBuffer?: Buffer;
+  message: string;
+  versions?: Array<{ version: number; previewBase64: string; pdfBase64?: string }>;
+}
+
+// Legacy types for backward compat with frontend
 export interface TemplateJsonField {
   name: string;
   type: string;
   description: string;
   example?: unknown;
-  items?: { type: string; properties?: Record<string, { type: string; description?: string }> };
-  properties?: Record<string, { type: string; description?: string }>;
 }
 
 export interface TemplateJson {
@@ -87,125 +96,178 @@ export interface TemplateJson {
   assetSlots: Array<{ name: string; kind: string; description: string }>;
 }
 
-/**
- * Generate placeholder value for a field based on its type
- * For previews, we want to show meaningful placeholders that work with .map(), etc.
- */
-function generatePlaceholderValue(field: TemplateJsonField): unknown {
-  const placeholder = `{{${field.name}}}`;
+const SYSTEM_PROMPT = `You create reusable PDF templates by replacing dynamic content with placeholders.
 
-  switch (field.type) {
-    case "array":
-      // Generate array with placeholder items
-      if (field.items?.type === "object" && field.items.properties) {
-        // Array of objects - generate 2 sample items with placeholder properties
-        const sampleObject: Record<string, string> = {};
-        for (const [key] of Object.entries(field.items.properties)) {
-          sampleObject[key] = `{{${field.name}[].${key}}}`;
-        }
-        return [sampleObject, sampleObject];
-      } else {
-        // Array of primitives
-        return [`{{${field.name}[0]}}`, `{{${field.name}[1]}}`];
-      }
+YOUR GOAL: Edit the PDF directly to replace variable content with {{PLACEHOLDER}} markers.
 
-    case "object":
-      // Generate object with placeholder properties
-      if (field.properties) {
-        const sampleObject: Record<string, unknown> = {};
-        for (const [key, prop] of Object.entries(field.properties)) {
-          if (prop.type === "array") {
-            sampleObject[key] = [`{{${field.name}.${key}[0]}}`, `{{${field.name}.${key}[1]}}`];
-          } else {
-            sampleObject[key] = `{{${field.name}.${key}}}`;
-          }
-        }
-        return sampleObject;
-      }
-      return { value: placeholder };
+WHAT TO REPLACE:
+- DYNAMIC text (product names, specs, prices) → {{FIELD_NAME}} placeholder text
+- DYNAMIC images (product photos, charts) → remove image, leave placeholder box
 
-    case "number":
-      return placeholder;
+WHAT TO KEEP:
+- STATIC text: Company name, section headers, labels like "Voltage:"
+- STATIC images: Company logo, certification badges
 
-    case "boolean":
-      return true; // Show truthy state for preview
-
-    case "string":
-    default:
-      return placeholder;
-  }
-}
-
-export interface TemplateGeneratorResult {
-  success: boolean;
-  templateJson?: TemplateJson;
-  templateCode?: string;
-  message: string;
-  versions?: Array<{ version: number; previewBase64: string; pdfBase64?: string }>;
-}
-
-const SYSTEM_PROMPT = `You generate @react-pdf/renderer templates for product spec sheets.
-
-These templates will be reused across different products. Branding/layout stays consistent; product data and section content are dynamic fields.
-
-YOUR GOAL: Create a template that renders IDENTICALLY to the input PDF - same margins, colors, fonts, spacing, layout.
-
-FUNCTION SIGNATURE (required):
-\`\`\`tsx
-export function render(
-  fields: Record<string, any>,
-  assets: Record<string, string | null>,
-  templateRoot: string
-): React.ReactElement
-\`\`\`
-
-FIELD TYPES - Use appropriate types for the data:
-- "string": Simple text (TITLE, PRODUCT_NAME)
-- "number": Numeric values (PRICE, QUANTITY)
-- "array": Lists of items - use for repeated content like model numbers, features, specs
-- "object": Grouped data with named properties - use for structured sections
-
-USING FIELDS IN CODE:
-- String: \`{fields.TITLE || "{{TITLE}}"}\`
-- Array: \`{(fields.MODELS as string[] || []).map((m, i) => <Text key={i}>{m}</Text>)}\`
-- Object with array:
-  \`\`\`tsx
-  {(fields.SPECIFICATIONS as {title: string, items: {label: string, value: string}[]})?.items?.map((item, i) => (
-    <View key={i} style={styles.specRow}>
-      <Text>{item.label}</Text>
-      <Text>{item.value}</Text>
-    </View>
-  ))}
-  \`\`\`
-
-ASSETS (images): Show placeholder when not provided:
-\`\`\`tsx
-{assets.LOGO ? (
-  <Image src={assets.LOGO} style={{width: 100, height: 50}} />
-) : (
-  <View style={{width: 100, height: 50, backgroundColor: "#e0e0e0"}} />
-)}
-\`\`\`
-
-TECHNICAL CONSTRAINTS (will crash if violated):
-- Only import from "react" and "@react-pdf/renderer"
-- Only use: Document, Page, View, Text, Image, StyleSheet
-- fontFamily: "Helvetica" (no Font.register - it crashes)
-- Borders require ALL THREE props together: borderWidth + borderColor + borderStyle
-- For partial borders (e.g. bottom only): borderBottomWidth + borderBottomColor + borderBottomStyle
-- NEVER use borderWidth: 0 - just omit border props if no border needed
-- Use paddingTop/Bottom/Left/Right (NOT paddingHorizontal/paddingVertical)
-- Dimensions in points (72pt = 1in)
+COORDINATE SYSTEM:
+- PyMuPDF uses TOP-LEFT origin (y=0 at top of page, y increases downward)
+- Letter size: 612 x 792 points (width x height)
 
 WORKFLOW:
-1. Analyze the PDF - measure margins, colors, spacing, fonts from the original
-2. Call write_template_code AND write_template_json in parallel
-3. BEFORE making any changes, ALWAYS carefully compare the latest rendered screenshot to the original - describe specific differences you see
-4. Refine until they match, then call mark_complete
+1. Use code_interpreter to analyze the PDF with PyMuPDF:
+   \`\`\`python
+   import fitz
+   doc = fitz.open("/mnt/user/original.pdf")
+   page = doc[0]
 
-CRITICAL: Never make changes blindly. Always examine the current rendered output first and describe what's different before deciding what to fix.
+   # Get all text with positions
+   text_dict = page.get_text("dict")
+   for block in text_dict["blocks"]:
+       if block["type"] == 0:  # text block
+           for line in block["lines"]:
+               for span in line["spans"]:
+                   print(f"Text: {span['text']}, Bbox: {span['bbox']}, Font: {span['font']}, Size: {span['size']}")
 
-FIELD NAMING: SCREAMING_SNAKE_CASE (TITLE, PRODUCT_NAME, SPECIFICATIONS)`;
+   # Get all images
+   for img in page.get_images(full=True):
+       xref = img[0]
+       rects = page.get_image_rects(xref)
+       print(f"Image xref={xref}, rects={rects}")
+   \`\`\`
+
+2. Classify content as DYNAMIC or STATIC
+
+3. Replace dynamic content with placeholders:
+   \`\`\`python
+   import fitz
+   doc = fitz.open("/mnt/user/original.pdf")
+   page = doc[0]
+
+   # Replace text - find and redact, then insert placeholder
+   # For each dynamic text span:
+   text_to_replace = "PAR38 LED BULB"  # example
+   placeholder = "{{PRODUCT_TITLE}}"
+
+   for block in page.get_text("dict")["blocks"]:
+       if block["type"] == 0:
+           for line in block["lines"]:
+               for span in line["spans"]:
+                   if text_to_replace in span["text"]:
+                       rect = fitz.Rect(span["bbox"])
+                       # Redact the original text (white fill)
+                       page.add_redact_annot(rect, fill=(1, 1, 1))
+
+   page.apply_redactions()
+
+   # Insert placeholder text at same position
+   # (Re-read positions after redaction if needed)
+   page.insert_text((x, y), placeholder, fontsize=size, color=(0.3, 0.3, 0.3))
+
+   # For images - redact and draw placeholder box
+   img_rect = fitz.Rect(x0, y0, x1, y1)
+   page.add_redact_annot(img_rect, fill=(0.95, 0.95, 0.95))  # Light gray
+   page.apply_redactions()
+   page.draw_rect(img_rect, color=(0.7, 0.7, 0.7), width=1)
+   page.insert_text((x0+5, y1-15), "{{IMAGE_FIELD}}", fontsize=10, color=(0.5, 0.5, 0.5))
+
+   doc.save("/mnt/user/edited.pdf")
+   doc.close()
+   \`\`\`
+
+4. Call save_edited_pdf to use your edited PDF
+
+5. Call write_form_schema with field definitions (for fill-time use)
+
+6. WAIT for preview - compare to original
+
+7. Iterate if needed, then call mark_complete
+
+TIPS:
+- Process ALL dynamic fields in ONE code_interpreter call
+- Use page.apply_redactions() ONCE after all redact annotations
+- Insert placeholder text AFTER applying redactions
+- For multi-line text, may need to redact multiple spans
+- Group related spans into single fields (e.g., model list)
+
+FULL PDF EDITING CAPABILITIES:
+You have full control to edit the PDF however needed:
+
+\`\`\`python
+import fitz
+doc = fitz.open("/mnt/user/original.pdf")
+page = doc[0]
+
+# REMOVE anything with redaction (text, images, lines, shapes):
+page.add_redact_annot(fitz.Rect(x0, y0, x1, y1), fill=(1,1,1))  # white fill
+page.apply_redactions()
+
+# ADD text anywhere:
+page.insert_text((x, y), "New text", fontsize=12, color=(0,0,0))
+
+# ADD shapes:
+page.draw_rect(fitz.Rect(x0, y0, x1, y1), color=(0,0,0), width=1)
+page.draw_line((x0, y0), (x1, y1), color=(0,0,0), width=1)
+page.draw_circle((cx, cy), radius, color=(0,0,0), width=1)
+
+# ADD images:
+img_rect = fitz.Rect(x0, y0, x1, y1)
+page.insert_image(img_rect, filename="image.png")
+
+# CHANGE page background or fill areas:
+shape = page.new_shape()
+shape.draw_rect(fitz.Rect(x0, y0, x1, y1))
+shape.finish(color=(1,1,1), fill=(1,1,1))
+shape.commit()
+
+doc.save("/mnt/user/edited.pdf")
+\`\`\`
+
+REMOVING LINES AND VECTOR GRAPHICS:
+Lines/borders in PDFs are vector paths. The write_blank_regions tool CANNOT remove lines - you MUST use code_interpreter to edit the PDF directly.
+
+WORKFLOW FOR LINE REMOVAL:
+1. Use code_interpreter to find and remove lines:
+   \`\`\`python
+   import fitz
+   doc = fitz.open("/mnt/user/original.pdf")
+   page = doc[0]
+
+   # Find all drawings/paths on the page
+   drawings = page.get_drawings()
+   for d in drawings:
+       print(f"Drawing: rect={d['rect']}, type={d.get('type')}")
+
+   # Remove lines by redacting with oversized rect (add padding)
+   line_rect = fitz.Rect(x0-2, y0-2, x1+2, y1+2)  # Add 2pt padding
+   page.add_redact_annot(line_rect, fill=(1,1,1))  # White fill
+   page.apply_redactions()
+
+   # OR for stubborn lines, draw white over them:
+   shape = page.new_shape()
+   shape.draw_rect(fitz.Rect(x0-2, y0-2, x1+2, y1+2))
+   shape.finish(color=(1,1,1), fill=(1,1,1))
+   shape.commit()
+
+   # IMPORTANT: Save to edited.pdf
+   doc.save("/mnt/user/edited.pdf")
+   doc.close()
+   \`\`\`
+
+2. THEN call save_edited_pdf to use your edited version
+
+Use these capabilities to:
+- Remove unwanted borders, lines, decorative elements
+- Clean up the template layout
+- Add placeholder boxes for images
+- Fix any visual issues
+
+FIELD NAMING: SCREAMING_SNAKE_CASE (PRODUCT_NAME, HERO_IMAGE)
+
+FIELD DESCRIPTIONS (CRITICAL):
+Each field needs a semantic description for another LLM to fill:
+- GOOD: "The main product title displayed as bold heading (e.g., 'PAR38 LED BULB')"
+- GOOD: "Operating voltage spec value (e.g., '120V')"
+- BAD: "Text at position (100, 200)"`;
+
 
 /**
  * Extract reasoning text from a reasoning item
@@ -238,56 +300,58 @@ function extractReasoningText(item: any): string | null {
 
 /**
  * Run the template generator agent
- *
- * Can be called in two modes:
- * 1. Fresh generation: Just pass pdf, screenshot(s), filename, prompt
- * 2. Continuation with feedback: Also pass existingCode, existingJson, feedback
- *
- * @param pdfPageImages - Array of base64 images, one per page (or single string for backwards compat)
  */
 export async function runTemplateGeneratorAgent(
   pdfPageImages: string | string[],
-  pdfBuffer: Buffer,
+  pdfBuffer: Buffer,  // The PDF to work from - for continuations this is the current edited base
   pdfFilename: string,
   userPrompt?: string,
   onEvent?: GeneratorEventCallback,
   reasoning: "none" | "low" | "high" = "low",
   // Continuation parameters
-  existingCode?: string,
-  existingJson?: TemplateJson,
+  existingSchema?: FormTemplateSchema,
   feedback?: string,
   startVersion: number = 0
 ): Promise<TemplateGeneratorResult> {
-  // Normalize to array for multi-page support (backwards compatible with single string)
   const pageImages = Array.isArray(pdfPageImages) ? pdfPageImages : [pdfPageImages];
-  const isContinuation = !!(existingCode && feedback);
+  const isContinuation = !!(existingSchema && feedback);
 
   log.info(`\n${"#".repeat(80)}`);
-  log.info(`### TEMPLATE GENERATOR AGENT ${isContinuation ? "CONTINUING" : "STARTED"} ###`);
+  log.info(`### TEMPLATE GENERATOR ${isContinuation ? "CONTINUING" : "STARTED"} ###`);
   log.info(`${"#".repeat(80)}`);
   log.info(`PDF filename: ${pdfFilename}`);
   log.info(`Reasoning level: ${reasoning}`);
   log.info(`User prompt: ${userPrompt || "(none)"}`);
   log.info(`Continuation mode: ${isContinuation}`);
-  if (isContinuation) {
-    log.info(`Feedback: ${feedback}`);
-    log.info(`Existing code: ${existingCode?.length || 0} chars`);
-  }
   log.info(`PDF pages: ${pageImages.length}`);
-  log.info(`Total screenshot size: ${pageImages.reduce((sum, img) => sum + img.length, 0)} chars`);
   log.info(`PDF buffer size: ${pdfBuffer.length} bytes`);
 
   ensureProvider();
   const openai = getOpenAI();
 
-  // State tracking - initialize from existing state if continuing
+  // State tracking
   const versions: Array<{ version: number; previewBase64: string; pdfBase64?: string }> = [];
-  let currentVersion = startVersion; // Continue from existing version count
-  let currentCode: string | null = existingCode || null;
-  let currentJson: TemplateJson | null = existingJson || null;
-  let isComplete = false;
+  let currentVersion = startVersion;
+  let currentSchema: FormTemplateSchema | null = existingSchema || null;
 
-  // Container management
+  // If continuing with existing schema, auto-derive blank regions from field bboxes
+  let blankRegions: BlankRegion[] = [];
+  if (existingSchema) {
+    for (const page of existingSchema.pages) {
+      for (const field of page.fields) {
+        blankRegions.push({
+          pageNumber: page.pageNumber,
+          bbox: field.bbox,
+          fieldName: field.name,
+          fieldType: field.type as "text" | "image",
+        });
+      }
+    }
+    log.info(`Continuation mode: derived ${blankRegions.length} blank regions from existing schema`);
+  }
+
+  let isComplete = false;
+  let needsPreview = isContinuation; // If continuing, generate preview immediately with existing schema
   let containerId: string | null = null;
 
   try {
@@ -301,11 +365,8 @@ export async function runTemplateGeneratorAgent(
     containerId = container.id;
     log.info("Container created", containerId);
 
-    if (!isContinuation) {
-      onEvent?.({ type: "status", content: "Uploading files to container..." });
-    }
-
     // Upload PDF
+    onEvent?.({ type: "status", content: "Uploading PDF to container..." });
     const pdfPath = path.join(os.tmpdir(), "original.pdf");
     fsSync.writeFileSync(pdfPath, pdfBuffer);
     const pdfStream = fsSync.createReadStream(pdfPath);
@@ -313,7 +374,7 @@ export async function runTemplateGeneratorAgent(
     log.info("Original PDF uploaded to container");
     fsSync.unlinkSync(pdfPath);
 
-    // Upload all page screenshots as PNGs
+    // Upload screenshots
     for (let i = 0; i < pageImages.length; i++) {
       const pageNum = i + 1;
       const screenshotBuffer = Buffer.from(pageImages[i].split(",")[1], "base64");
@@ -321,188 +382,195 @@ export async function runTemplateGeneratorAgent(
       fsSync.writeFileSync(screenshotPath, screenshotBuffer);
       const screenshotStream = fsSync.createReadStream(screenshotPath);
       await openai.containers.files.create(containerId, { file: screenshotStream });
-      log.info(`Screenshot page ${pageNum}/${pageImages.length} uploaded to container`);
+      log.info(`Screenshot page ${pageNum}/${pageImages.length} uploaded`);
       fsSync.unlinkSync(screenshotPath);
     }
-    // Also upload first page as original_screenshot.png for backwards compatibility
-    const firstScreenshotBuffer = Buffer.from(pageImages[0].split(",")[1], "base64");
-    const firstScreenshotPath = path.join(os.tmpdir(), "original_screenshot.png");
-    fsSync.writeFileSync(firstScreenshotPath, firstScreenshotBuffer);
-    const firstScreenshotStream = fsSync.createReadStream(firstScreenshotPath);
-    await openai.containers.files.create(containerId, { file: firstScreenshotStream });
-    log.info("First page also uploaded as original_screenshot.png");
-    fsSync.unlinkSync(firstScreenshotPath);
 
-    if (!isContinuation) {
-      onEvent?.({ type: "status", content: "Analyzing PDF structure..." });
-    }
+    onEvent?.({ type: "status", content: "Analyzing PDF structure..." });
 
-    // Create custom tools with closures for state management
-    const writeTemplateCodeTool = tool({
-      name: "write_template_code",
-      description: "Write or replace the complete template code. Use for initial generation or major rewrites.",
+    // Create tools
+    const writeFormSchemaTool = tool({
+      name: "write_form_schema",
+      description: "Write the form schema defining dynamic field positions. Coordinates use TOP-LEFT origin (y increases downward).",
       parameters: z.object({
-        code: z.string().describe("The complete @react-pdf/renderer template code"),
-      }),
-      execute: async ({ code }) => {
-        onEvent?.({ type: "tool_call", content: "Writing template code", toolName: "write_template_code" });
-        currentCode = code;
-        log.info(`write_template_code: ${code.length} chars`);
-        return "Template code written. Will render after all tool calls complete.";
-      },
-    });
-
-    const readTemplateTool = tool({
-      name: "read_template",
-      description: "Read the current template code AND template JSON (fields/assets). Use this to see the exact current state, find correct search strings for patches, or debug issues.",
-      parameters: z.object({}),
-      execute: async () => {
-        onEvent?.({ type: "tool_call", content: "Reading template", toolName: "read_template" });
-
-        const parts: string[] = [];
-
-        if (currentCode) {
-          parts.push("=== TEMPLATE CODE ===\n" + currentCode);
-        } else {
-          parts.push("=== TEMPLATE CODE ===\n(none yet)");
-        }
-
-        if (currentJson) {
-          parts.push("\n\n=== TEMPLATE JSON ===\n" + JSON.stringify(currentJson, null, 2));
-        } else {
-          parts.push("\n\n=== TEMPLATE JSON ===\n(none yet)");
-        }
-
-        const result = parts.join("");
-        log.info(`read_template: returning code=${currentCode?.length || 0} chars, json=${currentJson ? 'yes' : 'no'}`);
-        return result;
-      },
-    });
-
-    const patchTemplateCodeTool = tool({
-      name: "patch_template_code",
-      description: "Make small edits to existing template code using search/replace. More efficient than rewriting. If a patch fails, use read_template to see the actual current code and fields.",
-      parameters: z.object({
-        operations: z.array(z.object({
-          search: z.string().describe("Exact string to find"),
-          replace: z.string().describe("String to replace it with"),
-        })).describe("Array of search/replace operations"),
-      }),
-      execute: async ({ operations }) => {
-        onEvent?.({ type: "tool_call", content: `Patching template (${operations.length} operations)`, toolName: "patch_template_code" });
-        log.info(`patch_template_code: ${operations.length} operations`);
-
-        if (!currentCode) {
-          return "Error: No template code to patch. Use write_template_code first.";
-        }
-
-        const results: string[] = [];
-        let allPatchesSucceeded = true;
-
-        for (const op of operations) {
-          const escapedSearch = op.search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-          const matchCount = (currentCode.match(new RegExp(escapedSearch, 'g')) || []).length;
-
-          if (matchCount === 0) {
-            // Try to find similar content to help debug
-            const firstLine = op.search.split('\n')[0].trim();
-            const similarFound = currentCode.includes(firstLine.substring(0, 30));
-            const hint = similarFound
-              ? " The first line exists but full match failed - check whitespace/indentation."
-              : " First line not found either - use read_template to see current code.";
-            results.push(`ERROR: No match found for "${op.search.substring(0, 40)}...".${hint}`);
-            log.error(`Patch ERROR: "${op.search.substring(0, 80)}..." NOT FOUND`);
-            allPatchesSucceeded = false;
-          } else if (matchCount > 1) {
-            results.push(`ERROR: Found ${matchCount} matches for "${op.search.substring(0, 30)}...". Include more surrounding context to make it unique.`);
-            log.error(`Patch ERROR: ${matchCount} matches for "${op.search.substring(0, 50)}..."`);
-            allPatchesSucceeded = false;
-          } else {
-            currentCode = currentCode.replace(op.search, op.replace);
-            results.push(`OK: replaced "${op.search.substring(0, 25)}..."`);
-            log.info(`Patch OK: "${op.search.substring(0, 50)}..." -> "${op.replace.substring(0, 50)}..."`);
-          }
-        }
-
-        const resultStr = `Patches: ${results.join("; ")}${allPatchesSucceeded ? " Will render." : ""}`;
-        onEvent?.({ type: "tool_result", content: resultStr, toolName: "patch_template_code" });
-        return resultStr;
-      },
-    });
-
-    const writeTemplateJsonTool = tool({
-      name: "write_template_json",
-      description: "Write or update the template metadata (fields and asset slots).",
-      parameters: z.object({
-        id: z.string().describe("Template ID (lowercase, hyphens)"),
-        name: z.string().describe("Human-readable template name"),
-        canvas: z.object({
-          width: z.number(),
-          height: z.number(),
-        }),
-        fields: z.array(z.object({
-          name: z.string().describe("SCREAMING_SNAKE_CASE field name"),
-          type: z.enum(["string", "number", "boolean", "array", "object"]),
-          description: z.string(),
-          exampleJson: z.string().nullable().describe("JSON-encoded example value. For string: '\"hello\"', for array: '[\"a\",\"b\"]', for object: '{\"key\":\"value\"}'. Use null if no example."),
-          itemsJson: z.string().nullable().describe("For array types only: JSON schema of array items, e.g. '{\"type\":\"string\"}' or '{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\"},\"value\":{\"type\":\"string\"}}}'. Use null if not an array."),
-          propertiesJson: z.string().nullable().describe("For object types only: JSON schema of properties, e.g. '{\"title\":{\"type\":\"string\"},\"items\":{\"type\":\"array\"}}'. Use null if not an object."),
-        })),
-        assetSlots: z.array(z.object({
-          name: z.string().describe("SCREAMING_SNAKE_CASE asset name"),
-          kind: z.enum(["photo", "logo", "icon", "chart"]),
-          description: z.string(),
+        pages: z.array(z.object({
+          pageNumber: z.number(),
+          fields: z.array(z.object({
+            name: z.string().describe("SCREAMING_SNAKE_CASE field name"),
+            type: z.enum(["text", "image"]),
+            description: z.string().describe("Semantic description of what content this field should contain - be specific so another LLM can fill it correctly. E.g. 'The main product name/title displayed prominently' or 'Product hero image showing the item from front angle'"),
+            bbox: z.object({
+              x: z.number().describe("Left edge in points from left"),
+              y: z.number().describe("Top edge in points from TOP of page"),
+              width: z.number(),
+              height: z.number(),
+            }),
+            style: z.object({
+              fontFamily: z.string().nullable().optional(),
+              fontWeight: z.number().nullable().optional(),
+              fontSize: z.number().nullable().optional(),
+              color: z.string().nullable().optional().describe("Hex color like #000000"),
+              alignment: z.enum(["left", "center", "right"]).nullable().optional(),
+            }).nullable().optional().describe("For text fields only"),
+            objectFit: z.enum(["contain", "cover", "fill"]).nullable().optional().describe("For image fields only"),
+          })),
         })),
       }),
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      execute: async ({ id, name, canvas, fields, assetSlots }: any) => {
-        onEvent?.({ type: "tool_call", content: `Writing template JSON (${fields.length} fields, ${assetSlots.length} assets)`, toolName: "write_template_json" });
+      execute: async ({ pages }) => {
+        onEvent?.({ type: "tool_call", content: `Writing form schema (${pages.reduce((sum: number, p: { fields: unknown[] }) => sum + p.fields.length, 0)} fields)`, toolName: "write_form_schema" });
 
-        // Parse JSON strings back to values
-        const parseJson = (str: string | null): unknown => {
-          if (!str) return undefined;
-          try {
-            return JSON.parse(str);
-          } catch {
-            return undefined;
-          }
-        };
+        currentSchema = { version: 1, pages, fonts: [] };
+        needsPreview = true; // Trigger preview generation
+        log.info(`write_form_schema: ${pages.length} pages, ${pages.reduce((sum: number, p: { fields: unknown[] }) => sum + p.fields.length, 0)} fields`);
 
-        currentJson = {
-          id: id || "generated-template",
-          name: name || "Generated Template",
-          canvas: canvas || { width: 612, height: 792 },
-          fields: fields.map((f: { name: string; type: string; description: string; exampleJson?: string | null; itemsJson?: string | null; propertiesJson?: string | null }) => ({
-            name: f.name,
-            type: f.type,
-            description: f.description,
-            example: parseJson(f.exampleJson || null),
-            items: parseJson(f.itemsJson || null),
-            properties: parseJson(f.propertiesJson || null),
-          })) || [],
-          assetSlots: assetSlots || [],
-        };
-
-        log.info(`write_template_json: ${currentJson.fields.length} fields, ${currentJson.assetSlots.length} assets`);
-
-        // Emit template_json event for frontend
         onEvent?.({
-          type: "template_json",
-          content: `Template JSON updated: ${currentJson.fields.length} fields, ${currentJson.assetSlots.length} assets`,
-          templateJson: currentJson,
+          type: "schema_updated",
+          content: `Schema updated: ${pages.reduce((sum: number, p: { fields: unknown[] }) => sum + p.fields.length, 0)} fields`,
+          schema: currentSchema ?? undefined,
         });
 
-        return `Template JSON written with ${currentJson.fields.length} fields and ${currentJson.assetSlots.length} assets.`;
+        return `Schema written with ${pages.reduce((sum: number, p: { fields: unknown[] }) => sum + p.fields.length, 0)} fields. Call write_blank_regions next to specify which areas to blank out.`;
+      },
+    });
+
+    const writeBlankRegionsTool = tool({
+      name: "write_blank_regions",
+      description: "Specify regions to blank out in the base PDF. Include: (1) regions matching dynamic field areas, (2) any unwanted visual elements like borders, lines, or decorative graphics that should be removed. Coordinates use TOP-LEFT origin. Text fields are removed transparently (background preserved). Image fields get gray placeholder with field name.",
+      parameters: z.object({
+        regions: z.array(z.object({
+          pageNumber: z.number(),
+          bbox: z.object({
+            x: z.number(),
+            y: z.number(),
+            width: z.number(),
+            height: z.number(),
+          }),
+          reason: z.string().nullable().describe("Why this region is being blanked (e.g., 'dynamic field', 'unwanted border', 'decorative line to remove'). Can be null."),
+        })),
+      }),
+      execute: async ({ regions }) => {
+        onEvent?.({ type: "tool_call", content: `Marking ${regions.length} regions for blanking`, toolName: "write_blank_regions" });
+
+        // Enrich regions with field type info from schema (for proper placeholder rendering)
+        // Text fields: transparent removal, Image fields: gray placeholder with name
+        const enrichedRegions: BlankRegion[] = regions.map((region: { pageNumber: number; bbox: { x: number; y: number; width: number; height: number }; reason: string | null }) => {
+          // Try to find matching field in schema by bbox overlap
+          let fieldName: string | undefined;
+          let fieldType: "text" | "image" | undefined;
+
+          if (currentSchema) {
+            for (const page of currentSchema.pages) {
+              if (page.pageNumber === region.pageNumber) {
+                for (const field of page.fields) {
+                  // Check if bboxes are similar (within 5pt tolerance)
+                  const tolerance = 5;
+                  if (
+                    Math.abs(field.bbox.x - region.bbox.x) < tolerance &&
+                    Math.abs(field.bbox.y - region.bbox.y) < tolerance &&
+                    Math.abs(field.bbox.width - region.bbox.width) < tolerance &&
+                    Math.abs(field.bbox.height - region.bbox.height) < tolerance
+                  ) {
+                    fieldName = field.name;
+                    fieldType = field.type as "text" | "image";
+                    break;
+                  }
+                }
+              }
+            }
+          }
+
+          return {
+            pageNumber: region.pageNumber,
+            bbox: region.bbox,
+            fieldName,
+            fieldType,
+          };
+        });
+
+        blankRegions = enrichedRegions;
+        needsPreview = true; // Trigger preview generation
+        log.info(`write_blank_regions: ${regions.length} regions`);
+        return `Marked ${regions.length} regions for blanking. Will generate preview.`;
+      },
+    });
+
+    const readFormSchemaTool = tool({
+      name: "read_form_schema",
+      description: "Read the current form schema to see field definitions",
+      parameters: z.object({}),
+      execute: async () => {
+        onEvent?.({ type: "tool_call", content: "Reading form schema", toolName: "read_form_schema" });
+        if (!currentSchema) {
+          return "No schema defined yet. Use write_form_schema to create one.";
+        }
+        return JSON.stringify(currentSchema, null, 2);
+      },
+    });
+
+    // Track if we're using an edited PDF
+    let editedPdfBuffer: Buffer | null = null;
+
+    const saveEditedPdfTool = tool({
+      name: "save_edited_pdf",
+      description: `ONLY call this AFTER you have used code_interpreter to edit the PDF and save it to /mnt/user/edited.pdf.
+
+REQUIRED WORKFLOW:
+1. Use code_interpreter with PyMuPDF to edit the PDF:
+   \`\`\`python
+   import fitz
+   doc = fitz.open("/mnt/user/original.pdf")
+   page = doc[0]
+   # ... make edits (remove lines, text, etc.) ...
+   doc.save("/mnt/user/edited.pdf")
+   doc.close()
+   \`\`\`
+2. THEN call save_edited_pdf to use your edited version.
+
+This tool reads /mnt/user/edited.pdf from the container - if you haven't created that file, it will fail.`,
+      parameters: z.object({
+        description: z.string().describe("Brief description of what edits were made to the PDF"),
+      }),
+      execute: async ({ description }) => {
+        onEvent?.({ type: "tool_call", content: `Saving edited PDF: ${description}`, toolName: "save_edited_pdf" });
+
+        try {
+          // Download the edited PDF from the container
+          const filesResponse = await openai.containers.files.list(containerId!);
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const editedFile = (filesResponse.data as any[]).find((f) => f.name === "edited.pdf");
+
+          if (!editedFile) {
+            return "Error: No edited.pdf found in container. Make sure to save your edited PDF to /mnt/user/edited.pdf";
+          }
+
+          // Download the file content
+          const fileContent = await openai.containers.files.content.retrieve(editedFile.id, { container_id: containerId! });
+          const arrayBuffer = await fileContent.arrayBuffer();
+          editedPdfBuffer = Buffer.from(arrayBuffer);
+
+          needsPreview = true; // Trigger preview with edited PDF
+          log.info(`save_edited_pdf: Loaded edited PDF (${editedPdfBuffer.length} bytes) - ${description}`);
+
+          return `Edited PDF saved (${editedPdfBuffer.length} bytes). Will use this as the base template. Preview will be generated.`;
+        } catch (error) {
+          log.error("Failed to load edited PDF", error);
+          return `Error loading edited PDF: ${error}`;
+        }
       },
     });
 
     const markCompleteTool = tool({
       name: "mark_complete",
-      description: "ONLY call this after at least 3 refinement iterations AND when template closely matches original. Be thorough!",
+      description: "Call ONLY after you have seen and reviewed the preview image. Do NOT call this on your first turn - wait until you've compared the preview with the original.",
       parameters: z.object({
-        message: z.string().describe("Brief summary of what was generated"),
+        message: z.string().describe("Brief summary of what looks correct in the preview"),
       }),
       execute: async ({ message }) => {
+        // Don't allow completion until at least one preview has been generated
+        if (currentVersion === 0) {
+          log.info("mark_complete REJECTED: No preview generated yet");
+          return "Cannot mark complete yet - no preview has been generated. Call write_form_schema and write_blank_regions first, then wait for the preview to be generated before calling mark_complete.";
+        }
         onEvent?.({ type: "tool_call", content: `Marking complete: ${message}`, toolName: "mark_complete" });
         isComplete = true;
         log.info(`mark_complete: ${message}`);
@@ -510,7 +578,7 @@ export async function runTemplateGeneratorAgent(
       },
     });
 
-    // Create agent with code_interpreter + custom tools
+    // Create agent
     const agent = new Agent({
       name: "TemplateGenerator",
       instructions: SYSTEM_PROMPT,
@@ -520,341 +588,302 @@ export async function runTemplateGeneratorAgent(
       },
       tools: [
         codeInterpreterTool({ container: containerId }),
-        writeTemplateCodeTool,
-        readTemplateTool,
-        patchTemplateCodeTool,
-        writeTemplateJsonTool,
+        writeFormSchemaTool,
+        writeBlankRegionsTool,
+        readFormSchemaTool,
+        saveEditedPdfTool,
         markCompleteTool,
       ],
     });
 
-    // Build initial prompt - different for fresh vs continuation
-    const userInstructions = userPrompt ? `\n\nUSER INSTRUCTIONS:\n${userPrompt}\n` : "";
-
-    // Build page file list for prompts
+    // Build initial prompt
     const pageFileList = pageImages.length > 1
-      ? pageImages.map((_, i) => `- /mnt/user/original_screenshot_page${i + 1}.png - Page ${i + 1} screenshot`).join("\n")
-      : "- /mnt/user/original_screenshot.png - Screenshot";
-
-    const pageCountNote = pageImages.length > 1
-      ? `\n\nIMPORTANT: This is a ${pageImages.length}-page PDF. I'm showing you screenshots of all ${pageImages.length} pages. Your template should generate ALL pages to match the original.`
-      : "";
+      ? pageImages.map((_, i) => `- /mnt/user/original_screenshot_page${i + 1}.png`).join("\n")
+      : "- /mnt/user/original_screenshot_page1.png";
 
     let initialPrompt: string;
     if (isContinuation) {
-      // Continuation mode: we already have code/json, user is providing feedback
-      initialPrompt = `You are continuing work on a @react-pdf/renderer template based on user feedback.
+      initialPrompt = `You are refining a form schema based on user feedback.
 
 USER FEEDBACK:
 ${feedback}
 
-IMPORTANT STEPS:
-1. FIRST, call read_template to see the CURRENT template code and JSON
-2. Then make the changes the user requested using patch_template_code (for small fixes) or write_template_code (for major rewrites)
-3. The template will be automatically rendered after your changes
+Current schema:
+${JSON.stringify(existingSchema, null, 2)}
 
-Original filename: ${pdfFilename}${pageCountNote}
-
-Files in container:
-- /mnt/user/original.pdf - The original PDF to match
+Use read_form_schema to see current state, then update with write_form_schema.
+Files: /mnt/user/original.pdf
 ${pageFileList}`;
     } else {
-      // Fresh generation mode
-      initialPrompt = `Analyze this PDF and generate a @react-pdf/renderer template.
-Original filename: ${pdfFilename}${pageCountNote}
-${userInstructions}
+      initialPrompt = `Analyze this PDF and create a form schema identifying dynamic fields.
+
+Original filename: ${pdfFilename}
+${userPrompt ? `\nUSER INSTRUCTIONS:\n${userPrompt}\n` : ""}
 Files in container:
-- /mnt/user/original.pdf - The PDF to analyze (${pageImages.length} page${pageImages.length > 1 ? "s" : ""})
+- /mnt/user/original.pdf
 ${pageFileList}
 
 Steps:
-1. Use code_interpreter to analyze the PDF structure
-2. Call BOTH write_template_code AND write_template_json IN PARALLEL (same response)
-3. I'll render and show you the comparison for refinement`;
+1. Use code_interpreter with PyMuPDF (fitz) to analyze the PDF structure
+2. Identify DYNAMIC text (product data) vs STATIC text (labels, headers)
+3. Identify DYNAMIC images (product photos) vs STATIC images (logos)
+4. Call write_form_schema with field definitions
+5. Call write_blank_regions with areas to white-out
+6. Review the preview and refine if needed`;
     }
 
-    // Track last render for comparison images
-    let lastRenderPngBase64: string | null = null;
-    let lastRenderError: string | null = null; // Track render errors to tell the model
-
-    // Iterative generation loop
-    const MAX_ITERATIONS = 15;
-    log.info("Starting iteration loop", { maxIterations: MAX_ITERATIONS, isContinuation });
+    // Iteration loop
+    const MAX_ITERATIONS = 10;
+    log.info("Starting iteration loop", { maxIterations: MAX_ITERATIONS });
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let conversationHistory: any[] = [];
+    let lastPreviewPng: string | null = null;
 
     for (let iteration = 0; iteration < MAX_ITERATIONS && !isComplete; iteration++) {
-      log.info(`\n${"=".repeat(80)}`);
-      log.info(`=== ITERATION ${iteration + 1}/${MAX_ITERATIONS} ===`);
-      log.info(`${"=".repeat(80)}`);
-
+      log.info(`\n=== ITERATION ${iteration + 1}/${MAX_ITERATIONS} ===`);
       onEvent?.({
         type: "status",
         content: iteration === 0
-          ? (isContinuation ? "Applying feedback..." : "Generating initial template...")
-          : `Refining template (iteration ${iteration + 1})...`,
+          ? (isContinuation ? "Applying feedback..." : "Analyzing PDF...")
+          : `Refining schema (iteration ${iteration + 1})...`,
       });
 
-      // Build input for this iteration
+      // Build input
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       let input: any;
 
       if (iteration === 0) {
-        // Initial input with all PDF page screenshots
-        // The Agents SDK uses `image` property (not `image_url`) for InputImage type
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const initialContent: any[] = [
-          { type: "input_text", text: initialPrompt },
-        ];
-        // Add all page images with labels
+        const initialContent: any[] = [{ type: "input_text", text: initialPrompt }];
         for (let i = 0; i < pageImages.length; i++) {
-          if (pageImages.length > 1) {
-            initialContent.push({ type: "input_text", text: `\n--- Page ${i + 1} of ${pageImages.length} ---` });
-          }
+          initialContent.push({ type: "input_text", text: `\n--- Page ${i + 1} ---` });
           initialContent.push({ type: "input_image", image: pageImages[i] });
         }
-        input = [
-          {
-            role: "user",
-            content: initialContent,
-          },
-        ];
+        input = [{ role: "user", content: initialContent }];
       } else {
-        // Continuation with comparison images or error feedback
-        let comparisonText: string;
+        // Show comparison
+        const comparisonText = `PREVIEW - Version ${currentVersion}
 
-        if (lastRenderError) {
-          // Last render FAILED - tell the model to fix it
-          comparisonText = `ERROR - Version ${currentVersion} FAILED TO RENDER!
+Left: Original PDF
+Right: Your filled template preview
 
-The template code has a compilation/syntax error:
-${lastRenderError}
+Compare the field placements. Are all dynamic regions correctly identified?
+- Text fields should cover product-specific text
+- Image fields should cover product images
+- Blank regions should match field positions
 
-DO NOT call mark_complete - the template is broken!
-You MUST fix this error first using write_template_code (full rewrite recommended for JSX structure errors) or patch_template_code.
+Use write_form_schema to adjust field positions if needed.
+Call mark_complete when satisfied.`;
 
-The right image shows the LAST SUCCESSFUL render (V${currentVersion - 1}), not your broken V${currentVersion}.`;
-        } else {
-          // Last render succeeded - normal comparison
-          comparisonText = `COMPARISON - Version ${currentVersion} rendered successfully.
-
-Left image: Original PDF (/mnt/user/original.pdf, /mnt/user/original_screenshot.png)
-Right image: Your V${currentVersion} (/mnt/user/current_v${currentVersion}.pdf, /mnt/user/current_v${currentVersion}.png)
-
-Compare:
-- Layout and positioning
-- Font sizes and colors
-- Spacing and margins
-- Missing elements
-
-Use patch_template_code for small fixes, write_template_code for major changes.
-Call mark_complete when it matches well.`;
-        }
-
-        // Build content array with comparison images
-        // The Agents SDK uses `image` property (not `image_url`) for InputImage type
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const content: any[] = [
           { type: "input_text", text: comparisonText },
-          { type: "input_image", image: pageImages[0] }, // First page for comparison
+          { type: "input_image", image: pageImages[0] },
         ];
-
-        if (lastRenderPngBase64) {
-          content.push({ type: "input_image", image: lastRenderPngBase64 });
+        if (lastPreviewPng) {
+          content.push({ type: "input_image", image: lastPreviewPng });
         }
-
-        input = [
-          ...conversationHistory,
-          { role: "user", content },
-        ];
+        input = [...conversationHistory, { role: "user", content }];
       }
 
-      log.info(`Running agent iteration ${iteration + 1}`, { inputLength: Array.isArray(input) ? input.length : 1 });
-      if (iteration === 0 && isContinuation) {
-        onEvent?.({ type: "status", content: "Processing feedback..." });
-      } else if (iteration === 0) {
-        onEvent?.({ type: "status", content: "Analyzing PDF and generating template..." });
-      } else {
-        onEvent?.({ type: "status", content: `Refining template (iteration ${iteration + 1})...` });
-      }
-
-      // Run agent - maxTurns is tool calls per run, not total iterations
+      // Run agent
       const result = await run(agent, input, { maxTurns: 15 });
-
-      // Update conversation history
       conversationHistory = result.history || [];
 
-      // Extract traces for UI - log everything for debugging
-      log.info(`Processing ${result.newItems?.length || 0} new items from agent`);
-
+      // Process traces
       for (const item of result.newItems || []) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const anyItem = item as any;
 
-        // Log the item type for debugging
-        log.debug(`Item type: ${anyItem.type}`);
-
-        // Handle reasoning items
         if (anyItem.type === "reasoning_item" && anyItem.rawItem) {
           const reasoningText = extractReasoningText(anyItem.rawItem);
           if (reasoningText) {
-            log.info(`[REASONING] ${reasoningText.substring(0, 200)}${reasoningText.length > 200 ? "..." : ""}`);
+            log.info(`[REASONING] ${reasoningText.substring(0, 200)}...`);
             onEvent?.({ type: "reasoning", content: reasoningText });
           }
         }
 
-        // Handle message items (text output from the model)
         if (anyItem.type === "message_output_item" && anyItem.rawItem) {
           const content = anyItem.rawItem.content;
           if (Array.isArray(content)) {
             for (const part of content) {
               if (part.type === "output_text" && part.text) {
-                log.info(`[MODEL OUTPUT] ${part.text.substring(0, 300)}${part.text.length > 300 ? "..." : ""}`);
+                log.info(`[MODEL] ${part.text.substring(0, 200)}...`);
                 onEvent?.({ type: "reasoning", content: part.text });
               }
             }
           }
         }
 
-        // Handle tool calls
-        if (anyItem.type === "tool_call_item" && anyItem.rawItem) {
-          const toolName = anyItem.rawItem.name || "unknown";
-          const args = anyItem.rawItem.arguments ? JSON.stringify(anyItem.rawItem.arguments).substring(0, 200) : "";
-          log.info(`[TOOL CALL] ${toolName}: ${args}${args.length >= 200 ? "..." : ""}`);
-        }
-
-        // Handle tool outputs
         if (anyItem.type === "tool_call_output_item") {
           const toolName = anyItem.rawItem?.name || "unknown";
           const output = typeof anyItem.output === "string"
-            ? anyItem.output.substring(0, 150) + (anyItem.output.length > 150 ? "..." : "")
+            ? anyItem.output.substring(0, 150)
             : String(anyItem.output).substring(0, 150);
           log.info(`[TOOL RESULT] ${toolName}: ${output}`);
           onEvent?.({ type: "tool_result", content: output, toolName });
         }
       }
 
-      // Render if code was updated
-      if (currentCode && !isComplete) {
+      // Generate preview if edited PDF is available OR schema + regions are defined
+      const canGeneratePreview = needsPreview && (editedPdfBuffer || (currentSchema && blankRegions.length > 0));
+      if (canGeneratePreview) {
+        needsPreview = false; // Reset flag
         currentVersion++;
         log.info(`\n--- RENDERING VERSION ${currentVersion} ---`);
         onEvent?.({ type: "status", content: `Rendering version ${currentVersion}...` });
 
-        // Build fields object for render - generate type-appropriate placeholders
-        const fieldsForRender: Record<string, unknown> = currentJson
-          ? Object.fromEntries((currentJson as TemplateJson).fields.map((f) => [f.name, generatePlaceholderValue(f)]))
-          : {};
-        log.info(`Render fields: ${JSON.stringify(fieldsForRender)}`);
+        try {
+          const tempDir = path.join(os.tmpdir(), `template-preview-${Date.now()}`);
+          await fs.mkdir(tempDir, { recursive: true });
 
-        const renderStartTime = Date.now();
-        const renderResult = await renderTemplateCode(currentCode, {
-          fields: fieldsForRender,
-          assets: {},
-          templateRoot: path.join(process.cwd(), "templates", "default"),
-          outputFormat: "both",
-          dpi: 150,
-        });
-        const renderDuration = Date.now() - renderStartTime;
-        log.info(`Render completed in ${renderDuration}ms`, { success: renderResult.success });
+          let previewPdfBuffer: Buffer;
+          let pngBase64: string;
 
-        if (renderResult.success && renderResult.pngBase64) {
-          log.info(`VERSION ${currentVersion} RENDER SUCCESS`);
-          const pdfBase64 = renderResult.pdfBuffer
-            ? `data:application/pdf;base64,${renderResult.pdfBuffer.toString("base64")}`
+          if (editedPdfBuffer) {
+            // New approach: Agent edited PDF directly with placeholders
+            // Apply any additional blank regions if specified
+            log.info("Using agent-edited PDF (already has placeholders)");
+            previewPdfBuffer = blankRegions.length > 0
+              ? await blankPdfRegions(editedPdfBuffer, blankRegions)
+              : editedPdfBuffer;
+
+            // Convert to PNG using pdftoppm
+            const pdfPath = path.join(tempDir, "preview.pdf");
+            const pngPathBase = path.join(tempDir, "preview");
+            await fs.writeFile(pdfPath, previewPdfBuffer);
+
+            const { exec } = await import("child_process");
+            const { promisify } = await import("util");
+            const execAsync = promisify(exec);
+            await execAsync(`pdftoppm -png -f 1 -l 1 -r 150 "${pdfPath}" "${pngPathBase}"`);
+            const pngBuffer = await fs.readFile(`${pngPathBase}-1.png`);
+            pngBase64 = `data:image/png;base64,${pngBuffer.toString("base64")}`;
+          } else {
+            // Legacy approach: Blank regions + fill with placeholders
+            log.info("Using blank regions + placeholder fill approach");
+            const basePdf = await blankPdfRegions(pdfBuffer, blankRegions);
+            const basePdfPath = path.join(tempDir, "base.pdf");
+            await fs.writeFile(basePdfPath, basePdf);
+
+            // Generate placeholder values
+            const fields: Record<string, string> = {};
+            const assets: Record<string, string | null> = {};
+            const schema = currentSchema!;
+            for (const page of schema.pages) {
+              for (const field of page.fields) {
+                if (field.type === "text") {
+                  fields[field.name] = `{{${field.name}}}`;
+                } else {
+                  assets[field.name] = null;
+                }
+              }
+            }
+
+            const fillResult = await fillPdfTemplate(basePdfPath, schema, {
+              fields,
+              assets,
+              templateRoot: tempDir,
+            });
+
+            if (!fillResult.success || !fillResult.pngBase64) {
+              throw new Error(fillResult.error || "Fill failed");
+            }
+
+            previewPdfBuffer = fillResult.pdfBuffer!;
+            pngBase64 = fillResult.pngBase64;
+          }
+
+          // Cleanup temp dir
+          await fs.rm(tempDir, { recursive: true }).catch(() => {});
+
+          // Process successful render
+          log.info(`VERSION ${currentVersion} SUCCESS`);
+          const pdfBase64 = previewPdfBuffer
+            ? `data:application/pdf;base64,${previewPdfBuffer.toString("base64")}`
             : undefined;
-          versions.push({ version: currentVersion, previewBase64: renderResult.pngBase64, pdfBase64 });
-          lastRenderPngBase64 = renderResult.pngBase64;
-          lastRenderError = null; // Clear any previous error
 
-          // Emit version event for frontend (includes code so Accept can use it)
+          versions.push({ version: currentVersion, previewBase64: pngBase64, pdfBase64 });
+          lastPreviewPng = pngBase64;
+
           onEvent?.({
             type: "version",
             content: `Version ${currentVersion} rendered`,
             version: currentVersion,
-            previewUrl: renderResult.pngBase64,
+            previewUrl: pngBase64,
             pdfUrl: pdfBase64,
-            templateCode: currentCode,
+            schema: currentSchema ?? undefined,
           });
 
-          // Upload current version to container for code_interpreter access
-          if (renderResult.pdfBuffer) {
-            log.info(`Uploading V${currentVersion} files to container...`);
-
-            // Upload PDF
-            const currentPdfPath = path.join(os.tmpdir(), `current_v${currentVersion}.pdf`);
-            fsSync.writeFileSync(currentPdfPath, renderResult.pdfBuffer);
-            const pdfStream = fsSync.createReadStream(currentPdfPath);
+          // Upload preview PDF to container for agent to see
+          if (previewPdfBuffer) {
+            const previewPdfPath = path.join(os.tmpdir(), `preview_v${currentVersion}.pdf`);
+            fsSync.writeFileSync(previewPdfPath, previewPdfBuffer);
+            const previewStream = fsSync.createReadStream(previewPdfPath);
             try {
-              await openai.containers.files.create(containerId!, { file: pdfStream });
-              log.info(`V${currentVersion} PDF uploaded`);
+              await openai.containers.files.create(containerId!, { file: previewStream });
             } catch (e) {
-              log.error(`Failed to upload V${currentVersion} PDF`, e);
+              log.error("Failed to upload preview", e);
             }
-            fsSync.unlinkSync(currentPdfPath);
-
-            // Upload screenshot PNG
-            const pngBase64Data = renderResult.pngBase64.split(",")[1];
-            const pngBuffer = Buffer.from(pngBase64Data, "base64");
-            const currentPngPath = path.join(os.tmpdir(), `current_v${currentVersion}.png`);
-            fsSync.writeFileSync(currentPngPath, pngBuffer);
-            const pngStream = fsSync.createReadStream(currentPngPath);
-            try {
-              await openai.containers.files.create(containerId!, { file: pngStream });
-              log.info(`V${currentVersion} screenshot uploaded`);
-            } catch (e) {
-              log.error(`Failed to upload V${currentVersion} screenshot`, e);
-            }
-            fsSync.unlinkSync(currentPngPath);
+            fsSync.unlinkSync(previewPdfPath);
           }
-        } else {
-          log.error(`VERSION ${currentVersion} RENDER FAILED: ${renderResult.error}`);
-          onEvent?.({ type: "status", content: `Render failed: ${renderResult.error}` });
-          // Store the error so we can tell the model about it in the next iteration
-          lastRenderError = renderResult.error || "Unknown render error";
+        } catch (error) {
+          log.error(`VERSION ${currentVersion} ERROR: ${error}`);
+          onEvent?.({ type: "status", content: `Render error: ${error}` });
         }
       }
 
       log.info(`Iteration ${iteration + 1} complete`, { isComplete, version: currentVersion });
     }
 
-    // Clean up container
-    log.info("Cleaning up container...", containerId);
+    // Cleanup container
+    log.info("Cleaning up container...");
     try {
       await openai.containers.delete(containerId);
-      log.info("Container deleted");
     } catch (e) {
       log.error("Failed to delete container", e);
     }
 
-    if (currentCode && currentJson) {
-      log.info("Template generation SUCCESS", { totalVersions: currentVersion });
+    // Generate final outputs
+    if (currentSchema && (blankRegions.length > 0 || editedPdfBuffer)) {
+      log.info("Generating final base PDF...");
+
+      // Use edited PDF if available, otherwise blank the original
+      let finalBasePdf: Buffer;
+      if (editedPdfBuffer) {
+        log.info("Using edited PDF as final base");
+        finalBasePdf = blankRegions.length > 0
+          ? await blankPdfRegions(editedPdfBuffer, blankRegions)
+          : editedPdfBuffer;
+      } else {
+        finalBasePdf = await blankPdfRegions(pdfBuffer, blankRegions);
+      }
+
       return {
         success: true,
-        templateJson: currentJson,
-        templateCode: currentCode,
-        message: `Template generated with ${currentVersion} version(s)`,
+        schema: currentSchema,
+        basePdfBuffer: finalBasePdf,
+        originalPdfBuffer: pdfBuffer,
+        message: `Template generated with ${currentSchema.pages.reduce((sum: number, p) => sum + p.fields.length, 0)} fields`,
         versions,
       };
     }
 
-    log.error("Template generation FAILED - no valid output produced");
     return {
       success: false,
-      message: "Failed to generate template - no valid output produced",
+      message: "Failed to generate template - no schema produced",
       versions,
     };
   } catch (error) {
     log.error("Template generation EXCEPTION", error);
     if (containerId) {
       try {
-        await openai.containers.delete(containerId);
-        log.info("Container cleaned up after error");
+        await getOpenAI().containers.delete(containerId);
       } catch (e) {
-        log.error("Failed to delete container after error", e);
+        log.error("Failed to cleanup container", e);
       }
     }
-
     return {
       success: false,
       message: `Generation failed: ${error}`,
@@ -863,5 +892,5 @@ Call mark_complete when it matches well.`;
   }
 }
 
-// Re-export the original function name for compatibility
+// Compatibility alias
 export { runTemplateGeneratorAgent as runTemplateGenerator };
