@@ -6,9 +6,11 @@ import {
   TEMPLATES_DIR,
   getTemplateJsonPath,
   getTemplateTsxPath,
+  getTemplateSvgPath,
   getJobDir,
   getJobJsonPath,
   getJobTemplateTsxPath,
+  getJobTemplateSvgPath,
   getJobAssetsDir,
   ensureBaseDirs,
 } from "./paths";
@@ -162,6 +164,47 @@ export async function updateJobTemplateContent(
 ): Promise<void> {
   const templatePath = getJobTemplateTsxPath(jobId);
   await fs.writeFile(templatePath, content);
+}
+
+// Get SVG template content from template folder
+export async function getTemplateSvgContent(templateId: string): Promise<string | null> {
+  const svgPath = getTemplateSvgPath(templateId);
+  if (!(await pathExists(svgPath))) {
+    return null;
+  }
+  return await fs.readFile(svgPath, "utf-8");
+}
+
+// Get job SVG template content (from job folder)
+export async function getJobSvgContent(jobId: string): Promise<string | null> {
+  const svgPath = getJobTemplateSvgPath(jobId);
+  if (!(await pathExists(svgPath))) {
+    return null;
+  }
+  return await fs.readFile(svgPath, "utf-8");
+}
+
+// Update job SVG template content
+export async function updateJobSvgContent(
+  jobId: string,
+  content: string
+): Promise<void> {
+  const svgPath = getJobTemplateSvgPath(jobId);
+  await fs.writeFile(svgPath, content);
+}
+
+// Copy template.svg from template folder to job folder
+export async function copySvgTemplateToJob(
+  templateId: string,
+  jobId: string
+): Promise<void> {
+  const sourcePath = getTemplateSvgPath(templateId);
+  const destPath = getJobTemplateSvgPath(jobId);
+
+  if (await pathExists(sourcePath)) {
+    const content = await fs.readFile(sourcePath, "utf-8");
+    await fs.writeFile(destPath, content);
+  }
 }
 
 // Add history entry to job

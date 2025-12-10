@@ -44,6 +44,8 @@ export interface Template {
   fonts: TemplateFont[];
   fields: TemplateField[];
   assetSlots: TemplateAssetSlot[];
+  // Template format: "tsx" (React-PDF) or "svg" (raw SVG with placeholders)
+  format?: "tsx" | "svg";
 }
 
 export interface TemplateListItem {

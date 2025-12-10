@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import fs from "fs/promises";
 import { getTemplate, pathExists } from "@/lib/fs-utils";
-import { getTemplateJsonPath, getTemplateDir, getTemplateCodePath, getTemplateThumbnailPath } from "@/lib/paths";
+import { getTemplateJsonPath, getTemplateDir, getTemplateSvgPath, getTemplateThumbnailPath } from "@/lib/paths";
 import { Template, TemplateField } from "@/lib/types";
-import { renderTemplateCode } from "@/lib/template-renderer";
+import { renderSVGTemplate, svgToPng } from "@/lib/svg-template-renderer";
 
 /**
  * Generate placeholder value for a field based on its type
@@ -86,15 +86,18 @@ export async function PUT(
       await fs.mkdir(templateDir, { recursive: true });
     }
 
+    // Ensure format is set to svg
+    body.format = "svg";
+
     // Write the template.json
     const jsonPath = getTemplateJsonPath(id);
     await fs.writeFile(jsonPath, JSON.stringify(body, null, 2), "utf-8");
 
-    // Generate thumbnail if template code exists
-    const codePath = getTemplateCodePath(id);
-    if (await pathExists(codePath)) {
+    // Generate thumbnail if SVG template exists
+    const svgPath = getTemplateSvgPath(id);
+    if (await pathExists(svgPath)) {
       try {
-        const code = await fs.readFile(codePath, "utf-8");
+        const svgContent = await fs.readFile(svgPath, "utf-8");
 
         // Build sample fields from template - generate type-appropriate placeholders
         const sampleFields: Record<string, unknown> = {};
@@ -102,19 +105,13 @@ export async function PUT(
           sampleFields[field.name] = generatePlaceholderValue(field);
         }
 
-        const result = await renderTemplateCode(code, {
-          fields: sampleFields,
-          assets: {},
-          templateRoot: templateDir,
-          outputFormat: "png",
-          dpi: 150,
-        });
+        // Render SVG with placeholders
+        const renderedSvg = renderSVGTemplate(svgContent, sampleFields, {});
 
-        if (result.success && result.pngBase64) {
-          const thumbnailPath = getTemplateThumbnailPath(id);
-          const pngData = result.pngBase64.split(",")[1];
-          await fs.writeFile(thumbnailPath, Buffer.from(pngData, "base64"));
-        }
+        // Convert to PNG for thumbnail
+        const pngBuffer = await svgToPng(renderedSvg);
+        const thumbnailPath = getTemplateThumbnailPath(id);
+        await fs.writeFile(thumbnailPath, pngBuffer);
       } catch (thumbnailError) {
         console.error("Failed to generate thumbnail:", thumbnailError);
         // Don't fail the save if thumbnail generation fails

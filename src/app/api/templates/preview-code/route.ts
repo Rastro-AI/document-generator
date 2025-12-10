@@ -1,12 +1,11 @@
 import { NextRequest } from "next/server";
-import { renderTemplateCode } from "@/lib/template-renderer";
+import { renderSVGTemplate, svgToPng } from "@/lib/svg-template-renderer";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
 /**
- * Render template code to PNG image for preview
- * Uses shared template renderer utility
+ * Render SVG template code to PNG image for preview
  */
 export async function POST(request: NextRequest) {
   try {
@@ -19,32 +18,28 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // Use shared renderer
-    const result = await renderTemplateCode(code, {
-      fields: fields || {},
-      assets: {},
-      outputFormat: "png",
-      dpi: 150,
-    });
-
-    if (!result.success) {
+    // Check if it looks like SVG
+    if (!code.trim().startsWith("<svg") && !code.trim().startsWith("<?xml")) {
       return new Response(
-        JSON.stringify({ error: result.error }),
+        JSON.stringify({ error: "Invalid SVG template - must start with <svg" }),
         { status: 400, headers: { "Content-Type": "application/json" } }
       );
     }
 
-    // Convert base64 to buffer and return as PNG
-    const base64Data = result.pngBase64!.replace(/^data:image\/png;base64,/, "");
-    const pngBuffer = Buffer.from(base64Data, "base64");
+    // Render SVG with field values
+    const renderedSvg = renderSVGTemplate(code, fields || {}, {});
 
-    return new Response(pngBuffer, {
+    // Convert to PNG
+    const pngBuffer = await svgToPng(renderedSvg);
+
+    return new Response(new Uint8Array(pngBuffer), {
       headers: {
         "Content-Type": "image/png",
         "Cache-Control": "no-cache",
       },
     });
   } catch (error) {
+    console.error("Preview-code error:", error);
     return new Response(
       JSON.stringify({ error: "Preview failed", details: String(error) }),
       { status: 500, headers: { "Content-Type": "application/json" } }

@@ -1,0 +1,29 @@
+{
+  "id": "svg-spec-sheet",
+  "name": "SVG Spec Sheet",
+  "version": 1,
+  "format": "svg",
+  "canvas": {
+    "width": 816,
+    "height": 1056
+  },
+  "fonts": [],
+  "fields": [
+    { "name": "PRODUCT_NAME", "type": "string", "description": "Main product title", "example": "LED Downlight" },
+    { "name": "PRODUCT_DESCRIPTION", "type": "string", "description": "Product marketing description", "example": "Energy-efficient LED downlight for residential and commercial applications." },
+    { "name": "MODEL_NUMBER", "type": "string", "description": "Product model number", "example": "DL-5000K-13W" },
+    { "name": "WATTAGE", "type": "string", "description": "Power consumption", "example": "13W" },
+    { "name": "LUMENS", "type": "string", "description": "Light output", "example": "1050 lm" },
+    { "name": "COLOR_TEMP", "type": "string", "description": "Color temperature", "example": "5000K" },
+    { "name": "CRI", "type": "string", "description": "Color Rendering Index", "example": "90+" },
+    { "name": "BEAM_ANGLE", "type": "string", "description": "Beam spread angle", "example": "120" },
+    { "name": "VOLTAGE", "type": "string", "description": "Input voltage", "example": "120V AC" },
+    { "name": "LIFETIME", "type": "string", "description": "Rated lifetime", "example": "50,000 hrs" },
+    { "name": "WARRANTY", "type": "string", "description": "Warranty period", "example": "5 Years" },
+    { "name": "DIMMABLE", "type": "string", "description": "Dimming capability", "example": "Yes (10-100%)" }
+  ],
+  "assetSlots": [
+    { "name": "PRODUCT_IMAGE", "kind": "photo", "description": "Main product photo" },
+    { "name": "COMPANY_LOGO", "kind": "logo", "description": "Company logo" }
+  ]
+}

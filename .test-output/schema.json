@@ -1,0 +1,425 @@
+{
+  "version": 1,
+  "pages": [
+    {
+      "pageNumber": 1,
+      "fields": [
+        {
+          "name": "PRODUCT_TITLE",
+          "type": "text",
+          "bbox": {
+            "x": 72,
+            "y": 176,
+            "width": 260,
+            "height": 30
+          },
+          "style": {
+            "fontFamily": null,
+            "fontWeight": 700,
+            "fontSize": 26,
+            "color": "#000000",
+            "alignment": "left"
+          },
+          "objectFit": null
+        },
+        {
+          "name": "PRODUCT_SUBTITLE",
+          "type": "text",
+          "bbox": {
+            "x": 72,
+            "y": 214,
+            "width": 360,
+            "height": 70
+          },
+          "style": {
+            "fontFamily": null,
+            "fontWeight": 400,
+            "fontSize": 11,
+            "color": "#555555",
+            "alignment": "left"
+          },
+          "objectFit": null
+        },
+        {
+          "name": "MODELS_LIST",
+          "type": "text",
+          "bbox": {
+            "x": 72,
+            "y": 288,
+            "width": 260,
+            "height": 70
+          },
+          "style": {
+            "fontFamily": null,
+            "fontWeight": 400,
+            "fontSize": 9,
+            "color": "#000000",
+            "alignment": "left"
+          },
+          "objectFit": null
+        },
+        {
+          "name": "LIGHT_DISTRIBUTION_IMAGE",
+          "type": "image",
+          "bbox": {
+            "x": 72,
+            "y": 356,
+            "width": 260,
+            "height": 248
+          },
+          "style": null,
+          "objectFit": "contain"
+        },
+        {
+          "name": "DISTRIBUTION_TABLE_IMAGE",
+          "type": "image",
+          "bbox": {
+            "x": 72,
+            "y": 612,
+            "width": 260,
+            "height": 120
+          },
+          "style": null,
+          "objectFit": "contain"
+        },
+        {
+          "name": "SPEC_VOLTAGE",
+          "type": "text",
+          "bbox": {
+            "x": 452,
+            "y": 316,
+            "width": 110,
+            "height": 14
+          },
+          "style": {
+            "fontFamily": null,
+            "fontWeight": 700,
+            "fontSize": 10,
+            "color": "#000000",
+            "alignment": "right"
+          },
+          "objectFit": null
+        },
+        {
+          "name": "SPEC_WATTAGE",
+          "type": "text",
+          "bbox": {
+            "x": 452,
+            "y": 334,
+            "width": 110,
+            "height": 14
+          },
+          "style": {
+            "fontFamily": null,
+            "fontWeight": 700,
+            "fontSize": 10,
+            "color": "#000000",
+            "alignment": "right"
+          },
+          "objectFit": null
+        },
+        {
+          "name": "SPEC_CURRENT",
+          "type": "text",
+          "bbox": {
+            "x": 452,
+            "y": 352,
+            "width": 110,
+            "height": 14
+          },
+          "style": {
+            "fontFamily": null,
+            "fontWeight": 700,
+            "fontSize": 10,
+            "color": "#000000",
+            "alignment": "right"
+          },
+          "objectFit": null
+        },
+        {
+          "name": "SPEC_POWER_FACTOR",
+          "type": "text",
+          "bbox": {
+            "x": 452,
+            "y": 370,
+            "width": 110,
+            "height": 14
+          },
+          "style": {
+            "fontFamily": null,
+            "fontWeight": 700,
+            "fontSize": 10,
+            "color": "#000000",
+            "alignment": "right"
+          },
+          "objectFit": null
+        },
+        {
+          "name": "LIGHTING_LUMENS",
+          "type": "text",
+          "bbox": {
+            "x": 452,
+            "y": 404,
+            "width": 110,
+            "height": 14
+          },
+          "style": {
+            "fontFamily": null,
+            "fontWeight": 700,
+            "fontSize": 10,
+            "color": "#000000",
+            "alignment": "right"
+          },
+          "objectFit": null
+        },
+        {
+          "name": "LIGHTING_EQUIVALENCY",
+          "type": "text",
+          "bbox": {
+            "x": 452,
+            "y": 422,
+            "width": 110,
+            "height": 14
+          },
+          "style": {
+            "fontFamily": null,
+            "fontWeight": 700,
+            "fontSize": 10,
+            "color": "#000000",
+            "alignment": "right"
+          },
+          "objectFit": null
+        },
+        {
+          "name": "LIGHTING_FREQUENCY",
+          "type": "text",
+          "bbox": {
+            "x": 452,
+            "y": 440,
+            "width": 110,
+            "height": 14
+          },
+          "style": {
+            "fontFamily": null,
+            "fontWeight": 700,
+            "fontSize": 10,
+            "color": "#000000",
+            "alignment": "right"
+          },
+          "objectFit": null
+        },
+        {
+          "name": "LIGHTING_CRI",
+          "type": "text",
+          "bbox": {
+            "x": 452,
+            "y": 458,
+            "width": 110,
+            "height": 14
+          },
+          "style": {
+            "fontFamily": null,
+            "fontWeight": 700,
+            "fontSize": 10,
+            "color": "#000000",
+            "alignment": "right"
+          },
+          "objectFit": null
+        },
+        {
+          "name": "LIGHTING_BEAM_ANGLE",
+          "type": "text",
+          "bbox": {
+            "x": 452,
+            "y": 476,
+            "width": 110,
+            "height": 14
+          },
+          "style": {
+            "fontFamily": null,
+            "fontWeight": 700,
+            "fontSize": 10,
+            "color": "#000000",
+            "alignment": "right"
+          },
+          "objectFit": null
+        },
+        {
+          "name": "LIGHTING_DIMMABLE",
+          "type": "text",
+          "bbox": {
+            "x": 452,
+            "y": 494,
+            "width": 110,
+            "height": 14
+          },
+          "style": {
+            "fontFamily": null,
+            "fontWeight": 700,
+            "fontSize": 10,
+            "color": "#000000",
+            "alignment": "right"
+          },
+          "objectFit": null
+        },
+        {
+          "name": "LIGHTING_EFFICACY",
+          "type": "text",
+          "bbox": {
+            "x": 452,
+            "y": 512,
+            "width": 110,
+            "height": 14
+          },
+          "style": {
+            "fontFamily": null,
+            "fontWeight": 700,
+            "fontSize": 10,
+            "color": "#000000",
+            "alignment": "right"
+          },
+          "objectFit": null
+        },
+        {
+          "name": "LIGHTING_COLOR_TEMPERATURE",
+          "type": "text",
+          "bbox": {
+            "x": 420,
+            "y": 530,
+            "width": 142,
+            "height": 32
+          },
+          "style": {
+            "fontFamily": null,
+            "fontWeight": 700,
+            "fontSize": 9,
+            "color": "#000000",
+            "alignment": "right"
+          },
+          "objectFit": null
+        },
+        {
+          "name": "ENV_OPERATING_TEMPERATURE",
+          "type": "text",
+          "bbox": {
+            "x": 452,
+            "y": 568,
+            "width": 110,
+            "height": 14
+          },
+          "style": {
+            "fontFamily": null,
+            "fontWeight": 700,
+            "fontSize": 10,
+            "color": "#000000",
+            "alignment": "right"
+          },
+          "objectFit": null
+        },
+        {
+          "name": "ENV_MOISTURE_RATING",
+          "type": "text",
+          "bbox": {
+            "x": 452,
+            "y": 586,
+            "width": 110,
+            "height": 14
+          },
+          "style": {
+            "fontFamily": null,
+            "fontWeight": 700,
+            "fontSize": 10,
+            "color": "#000000",
+            "alignment": "right"
+          },
+          "objectFit": null
+        },
+        {
+          "name": "CONSTRUCTION_HOUSING_MATERIAL",
+          "type": "text",
+          "bbox": {
+            "x": 452,
+            "y": 620,
+            "width": 110,
+            "height": 14
+          },
+          "style": {
+            "fontFamily": null,
+            "fontWeight": 700,
+            "fontSize": 10,
+            "color": "#000000",
+            "alignment": "right"
+          },
+          "objectFit": null
+        },
+        {
+          "name": "CONSTRUCTION_WEIGHT",
+          "type": "text",
+          "bbox": {
+            "x": 452,
+            "y": 638,
+            "width": 110,
+            "height": 14
+          },
+          "style": {
+            "fontFamily": null,
+            "fontWeight": 700,
+            "fontSize": 10,
+            "color": "#000000",
+            "alignment": "right"
+          },
+          "objectFit": null
+        },
+        {
+          "name": "LIFETIME_AVERAGE_LIFETIME",
+          "type": "text",
+          "bbox": {
+            "x": 452,
+            "y": 672,
+            "width": 110,
+            "height": 14
+          },
+          "style": {
+            "fontFamily": null,
+            "fontWeight": 700,
+            "fontSize": 10,
+            "color": "#000000",
+            "alignment": "right"
+          },
+          "objectFit": null
+        },
+        {
+          "name": "LIFETIME_WARRANTY",
+          "type": "text",
+          "bbox": {
+            "x": 452,
+            "y": 690,
+            "width": 110,
+            "height": 14
+          },
+          "style": {
+            "fontFamily": null,
+            "fontWeight": 700,
+            "fontSize": 10,
+            "color": "#000000",
+            "alignment": "right"
+          },
+          "objectFit": null
+        },
+        {
+          "name": "HERO_PRODUCT_IMAGE",
+          "type": "image",
+          "bbox": {
+            "x": 375,
+            "y": 120,
+            "width": 200,
+            "height": 188
+          },
+          "style": null,
+          "objectFit": "contain"
+        }
+      ]
+    }
+  ],
+  "fonts": []
+}
