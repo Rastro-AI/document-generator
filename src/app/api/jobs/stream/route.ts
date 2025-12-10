@@ -3,13 +3,11 @@ import { v4 as uuidv4 } from "uuid";
 import { createJob, getTemplate, saveUploadedFile, saveAssetFile, copyTemplateToJob } from "@/lib/fs-utils";
 import { extractFieldsAndAssetsFromFiles } from "@/lib/llm";
 import { Job, UploadedFile } from "@/lib/types";
-import { getJobInputPath, getJobAssetPath } from "@/lib/paths";
+import { getJobInputPath, getJobAssetPath, ASSET_BANK_DIR, ensureBaseDirs } from "@/lib/paths";
 import { promises as fs } from "fs";
 import path from "path";
 
 export const runtime = "nodejs";
-
-const ASSETS_DIR = path.join(process.cwd(), "data", "assets");
 
 function isImageFile(filename: string): boolean {
   const imageExtensions = [".png", ".jpg", ".jpeg", ".gif", ".webp"];
@@ -74,11 +72,12 @@ export async function POST(request: NextRequest) {
 
       // Always include all asset bank files in the job context
       // This ensures certification logos and other reusable assets are available
+      ensureBaseDirs();
       let allAssetBankFiles: string[] = [];
       try {
-        allAssetBankFiles = await fs.readdir(ASSETS_DIR);
+        allAssetBankFiles = await fs.readdir(ASSET_BANK_DIR);
       } catch {
-        // Assets directory may not exist
+        // Assets directory may not exist or be empty
       }
 
       // Merge explicitly selected assets with all asset bank files
@@ -89,7 +88,7 @@ export async function POST(request: NextRequest) {
         const now = new Date().toISOString();
         for (const assetId of allAssetIds) {
           try {
-            const assetPath = path.join(ASSETS_DIR, assetId);
+            const assetPath = path.join(ASSET_BANK_DIR, assetId);
             const buffer = await fs.readFile(assetPath);
 
             if (isImageFile(assetId)) {

@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { promises as fs } from "fs";
 import path from "path";
-
-const ASSETS_DIR = path.join(process.cwd(), "data", "assets");
+import { ASSET_BANK_DIR, ensureBaseDirs } from "@/lib/paths";
 
 // GET /api/assets/[assetId] - Get asset file
 export async function GET(
@@ -10,11 +9,12 @@ export async function GET(
   { params }: { params: Promise<{ assetId: string }> }
 ) {
   try {
+    ensureBaseDirs();
     const { assetId } = await params;
-    const filePath = path.join(ASSETS_DIR, assetId);
+    const filePath = path.join(ASSET_BANK_DIR, assetId);
 
     // Security check - prevent path traversal
-    if (!filePath.startsWith(ASSETS_DIR)) {
+    if (!filePath.startsWith(ASSET_BANK_DIR)) {
       return NextResponse.json({ error: "Invalid asset ID" }, { status: 400 });
     }
 
@@ -53,11 +53,12 @@ export async function DELETE(
   { params }: { params: Promise<{ assetId: string }> }
 ) {
   try {
+    ensureBaseDirs();
     const { assetId } = await params;
-    const filePath = path.join(ASSETS_DIR, assetId);
+    const filePath = path.join(ASSET_BANK_DIR, assetId);
 
     // Security check - prevent path traversal
-    if (!filePath.startsWith(ASSETS_DIR)) {
+    if (!filePath.startsWith(ASSET_BANK_DIR)) {
       return NextResponse.json({ error: "Invalid asset ID" }, { status: 400 });
     }
 

@@ -1,10 +1,44 @@
 import path from "path";
+import fs from "fs";
 
-// Base directories
+// Detect if running on Vercel (read-only filesystem except /tmp)
+const isVercel = !!process.env.VERCEL;
+
+// Base directories - use /tmp on Vercel for writable data
 export const ROOT_DIR = process.cwd();
+
+// Templates are read-only (bundled with the app), so they stay in ROOT_DIR
 export const TEMPLATES_DIR = path.join(ROOT_DIR, "templates");
-export const JOBS_DIR = path.join(ROOT_DIR, "jobs");
-export const ASSETS_DIR = path.join(ROOT_DIR, "assets");
+
+// Jobs and assets need to be writable, so use /tmp on Vercel
+export const DATA_DIR = isVercel ? "/tmp" : ROOT_DIR;
+export const JOBS_DIR = path.join(DATA_DIR, "jobs");
+export const ASSETS_DIR = path.join(DATA_DIR, "assets");
+
+// Asset bank (shared assets for reuse across jobs) - also writable
+// Note: On Vercel, uploaded assets will be ephemeral (lost on cold start)
+export const ASSET_BANK_DIR = path.join(DATA_DIR, "data", "assets");
+
+// Ensure a directory exists (creates it if needed)
+export function ensureDir(dirPath: string): void {
+  if (!fs.existsSync(dirPath)) {
+    fs.mkdirSync(dirPath, { recursive: true });
+  }
+}
+
+// Ensure base directories exist on first access
+let dirsInitialized = false;
+export function ensureBaseDirs(): void {
+  if (dirsInitialized) return;
+  ensureDir(JOBS_DIR);
+  ensureDir(ASSETS_DIR);
+  ensureDir(ASSET_BANK_DIR);
+  // Templates dir should exist in the repo, but ensure it on Vercel for generated templates
+  if (isVercel) {
+    ensureDir(path.join(DATA_DIR, "templates"));
+  }
+  dirsInitialized = true;
+}
 
 // Template paths
 export function getTemplateDir(templateId: string): string {

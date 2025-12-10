@@ -10,6 +10,7 @@ import {
   getJobJsonPath,
   getJobTemplateTsxPath,
   getJobAssetsDir,
+  ensureBaseDirs,
 } from "./paths";
 
 // Check if a path exists
@@ -53,6 +54,7 @@ export async function getTemplate(templateId: string): Promise<Template | null> 
 
 // Create a new job directory and save job.json
 export async function createJob(job: Job): Promise<void> {
+  ensureBaseDirs(); // Ensure /tmp/jobs exists on Vercel
   const jobDir = getJobDir(job.id);
   await fs.mkdir(jobDir, { recursive: true });
   await fs.writeFile(getJobJsonPath(job.id), JSON.stringify(job, null, 2));
