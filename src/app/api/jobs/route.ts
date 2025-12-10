@@ -3,11 +3,9 @@ import { v4 as uuidv4 } from "uuid";
 import { createJob, getTemplate, saveUploadedFile, saveAssetFile, copyTemplateToJob } from "@/lib/fs-utils";
 import { extractFieldsAndAssetsFromFiles } from "@/lib/llm";
 import { Job, UploadedFile } from "@/lib/types";
-import { getJobInputPath, getJobAssetPath } from "@/lib/paths";
+import { getJobInputPath, getJobAssetPath, ASSET_BANK_DIR, ensureBaseDirs } from "@/lib/paths";
 import { promises as fs } from "fs";
 import path from "path";
-
-const ASSETS_DIR = path.join(process.cwd(), "data", "assets");
 
 // Check if a file is an image
 function isImageFile(filename: string): boolean {
@@ -65,10 +63,11 @@ export async function POST(request: NextRequest) {
 
     // Copy asset bank files to job folder
     if (assetIds.length > 0) {
+      ensureBaseDirs();
       const now = new Date().toISOString();
       for (const assetId of assetIds) {
         try {
-          const assetPath = path.join(ASSETS_DIR, assetId);
+          const assetPath = path.join(ASSET_BANK_DIR, assetId);
           const buffer = await fs.readFile(assetPath);
 
           if (isImageFile(assetId)) {

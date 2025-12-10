@@ -1,17 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { promises as fs } from "fs";
 import path from "path";
-
-const ASSETS_DIR = path.join(process.cwd(), "data", "assets");
-
-// Ensure assets directory exists
-async function ensureAssetsDir() {
-  try {
-    await fs.mkdir(ASSETS_DIR, { recursive: true });
-  } catch (error) {
-    // Directory may already exist
-  }
-}
+import { ASSET_BANK_DIR, ensureBaseDirs } from "@/lib/paths";
 
 export interface Asset {
   id: string;
@@ -24,15 +14,15 @@ export interface Asset {
 // GET /api/assets - List all assets
 export async function GET() {
   try {
-    await ensureAssetsDir();
+    ensureBaseDirs();
 
-    const files = await fs.readdir(ASSETS_DIR);
+    const files = await fs.readdir(ASSET_BANK_DIR);
     const assets: Asset[] = [];
 
     for (const filename of files) {
       if (filename === ".gitkeep") continue;
 
-      const filePath = path.join(ASSETS_DIR, filename);
+      const filePath = path.join(ASSET_BANK_DIR, filename);
       const stats = await fs.stat(filePath);
 
       const ext = path.extname(filename).toLowerCase();
@@ -60,7 +50,7 @@ export async function GET() {
 // POST /api/assets - Upload new asset
 export async function POST(request: NextRequest) {
   try {
-    await ensureAssetsDir();
+    ensureBaseDirs();
 
     const formData = await request.formData();
     const files = formData.getAll("files") as File[];
@@ -78,7 +68,7 @@ export async function POST(request: NextRequest) {
       const timestamp = Date.now();
       const uniqueFilename = `${baseName}-${timestamp}${ext}`;
 
-      const filePath = path.join(ASSETS_DIR, uniqueFilename);
+      const filePath = path.join(ASSET_BANK_DIR, uniqueFilename);
       const buffer = Buffer.from(await file.arrayBuffer());
 
       await fs.writeFile(filePath, buffer);
