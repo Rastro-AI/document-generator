@@ -7,15 +7,22 @@ import {
   getTemplateJsonPath,
   getTemplateTsxPath,
   getTemplateSvgPath,
-  getJobDir,
-  getJobJsonPath,
-  getJobTemplateTsxPath,
-  getJobTemplateSvgPath,
-  getJobAssetsDir,
-  ensureBaseDirs,
 } from "./paths";
+import {
+  uploadFile,
+  downloadFile,
+  deleteFile,
+  listFiles,
+  fileExists,
+  BUCKETS,
+  isSupabaseConfigured,
+} from "./supabase";
 
-// Check if a path exists
+// ============================================================================
+// Template Operations (Local Filesystem - bundled with app)
+// ============================================================================
+
+// Check if a local path exists
 export async function pathExists(filePath: string): Promise<boolean> {
   try {
     await fs.access(filePath);
@@ -25,7 +32,7 @@ export async function pathExists(filePath: string): Promise<boolean> {
   }
 }
 
-// List all templates
+// List all templates (from local filesystem)
 export async function listTemplates(): Promise<{ id: string; name: string }[]> {
   const entries = await fs.readdir(TEMPLATES_DIR, { withFileTypes: true });
   const templates: { id: string; name: string }[] = [];
@@ -44,7 +51,7 @@ export async function listTemplates(): Promise<{ id: string; name: string }[]> {
   return templates;
 }
 
-// Get a template by ID
+// Get a template by ID (from local filesystem)
 export async function getTemplate(templateId: string): Promise<Template | null> {
   const jsonPath = getTemplateJsonPath(templateId);
   if (!(await pathExists(jsonPath))) {
@@ -54,22 +61,67 @@ export async function getTemplate(templateId: string): Promise<Template | null> 
   return JSON.parse(content) as Template;
 }
 
-// Create a new job directory and save job.json
+// Get SVG template content from template folder
+export async function getTemplateSvgContent(templateId: string): Promise<string | null> {
+  const svgPath = getTemplateSvgPath(templateId);
+  if (!(await pathExists(svgPath))) {
+    return null;
+  }
+  return await fs.readFile(svgPath, "utf-8");
+}
+
+// ============================================================================
+// Job Operations (Supabase Storage)
+// ============================================================================
+
+// Helper to get job JSON path in storage
+function getJobStoragePath(jobId: string): string {
+  return `${jobId}/job.json`;
+}
+
+// Helper to get job file path in storage
+function getJobFilePath(jobId: string, filename: string): string {
+  return `${jobId}/${filename}`;
+}
+
+// Helper to get job asset path in storage
+function getJobAssetPath(jobId: string, filename: string): string {
+  return `${jobId}/assets/${filename}`;
+}
+
+// Create a new job
 export async function createJob(job: Job): Promise<void> {
-  ensureBaseDirs(); // Ensure /tmp/jobs exists on Vercel
-  const jobDir = getJobDir(job.id);
-  await fs.mkdir(jobDir, { recursive: true });
-  await fs.writeFile(getJobJsonPath(job.id), JSON.stringify(job, null, 2));
+  if (!isSupabaseConfigured()) {
+    throw new Error("Supabase not configured - cannot create job");
+  }
+
+  const jobJson = JSON.stringify(job, null, 2);
+  await uploadFile(BUCKETS.JOBS, getJobStoragePath(job.id), jobJson, {
+    contentType: "application/json",
+  });
 }
 
 // Get a job by ID
 export async function getJob(jobId: string): Promise<Job | null> {
-  const jsonPath = getJobJsonPath(jobId);
-  if (!(await pathExists(jsonPath))) {
+  if (!isSupabaseConfigured()) {
     return null;
   }
-  const content = await fs.readFile(jsonPath, "utf-8");
-  return JSON.parse(content) as Job;
+
+  try {
+    const buffer = await downloadFile(BUCKETS.JOBS, getJobStoragePath(jobId));
+    return JSON.parse(buffer.toString("utf-8")) as Job;
+  } catch {
+    return null;
+  }
+}
+
+// Update job (internal helper)
+async function updateJob(job: Job): Promise<void> {
+  const jobJson = JSON.stringify(job, null, 2);
+  await uploadFile(BUCKETS.JOBS, getJobStoragePath(job.id), jobJson, {
+    contentType: "application/json",
+    upsert: true,
+  });
 }
 
 // Update job fields
@@ -81,7 +133,7 @@ export async function updateJobFields(
   if (!job) return null;
 
   job.fields = fields;
-  await fs.writeFile(getJobJsonPath(jobId), JSON.stringify(job, null, 2));
+  await updateJob(job);
   return job;
 }
 
@@ -94,7 +146,7 @@ export async function updateJobAssets(
   if (!job) return null;
 
   job.assets = assets;
-  await fs.writeFile(getJobJsonPath(jobId), JSON.stringify(job, null, 2));
+  await updateJob(job);
   return job;
 }
 
@@ -104,57 +156,91 @@ export async function markJobRendered(jobId: string): Promise<Job | null> {
   if (!job) return null;
 
   job.renderedAt = new Date().toISOString();
-  await fs.writeFile(getJobJsonPath(jobId), JSON.stringify(job, null, 2));
+  await updateJob(job);
   return job;
 }
 
-// Save uploaded file to job directory
+// Save uploaded file to job storage
 export async function saveUploadedFile(
   jobId: string,
   filename: string,
   buffer: Buffer
 ): Promise<string> {
-  const jobDir = getJobDir(jobId);
-  await fs.mkdir(jobDir, { recursive: true });
-  const filePath = path.join(jobDir, filename);
-  await fs.writeFile(filePath, buffer);
-  return filePath;
+  const storagePath = getJobFilePath(jobId, filename);
+  await uploadFile(BUCKETS.JOBS, storagePath, buffer, {
+    upsert: true,
+  });
+  return storagePath;
 }
 
-// Save asset file to job assets directory
+// Save asset file to job assets storage
 export async function saveAssetFile(
   jobId: string,
   filename: string,
   buffer: Buffer
 ): Promise<string> {
-  const assetsDir = getJobAssetsDir(jobId);
-  await fs.mkdir(assetsDir, { recursive: true });
-  const filePath = path.join(assetsDir, filename);
-  await fs.writeFile(filePath, buffer);
-  return filePath;
+  const storagePath = getJobAssetPath(jobId, filename);
+  await uploadFile(BUCKETS.JOBS, storagePath, buffer, {
+    upsert: true,
+  });
+  return storagePath;
 }
 
-// Copy template.tsx from template folder to job folder
+// Get uploaded file from job storage
+export async function getUploadedFile(
+  jobId: string,
+  filename: string
+): Promise<Buffer | null> {
+  try {
+    return await downloadFile(BUCKETS.JOBS, getJobFilePath(jobId, filename));
+  } catch {
+    return null;
+  }
+}
+
+// Get asset file from job storage
+export async function getAssetFile(
+  jobId: string,
+  filename: string
+): Promise<Buffer | null> {
+  try {
+    return await downloadFile(BUCKETS.JOBS, getJobAssetPath(jobId, filename));
+  } catch {
+    return null;
+  }
+}
+
+// Delete uploaded file from job storage
+export async function deleteUploadedFile(
+  jobId: string,
+  filename: string
+): Promise<void> {
+  await deleteFile(BUCKETS.JOBS, getJobFilePath(jobId, filename));
+}
+
+// Copy template.tsx from template folder to job storage
 export async function copyTemplateToJob(
   templateId: string,
   jobId: string
 ): Promise<void> {
   const sourcePath = getTemplateTsxPath(templateId);
-  const destPath = getJobTemplateTsxPath(jobId);
 
   if (await pathExists(sourcePath)) {
     const content = await fs.readFile(sourcePath, "utf-8");
-    await fs.writeFile(destPath, content);
+    await uploadFile(BUCKETS.JOBS, getJobFilePath(jobId, "template.tsx"), content, {
+      contentType: "text/plain",
+    });
   }
 }
 
-// Get job template content (from job folder)
+// Get job template content (from job storage)
 export async function getJobTemplateContent(jobId: string): Promise<string | null> {
-  const templatePath = getJobTemplateTsxPath(jobId);
-  if (!(await pathExists(templatePath))) {
+  try {
+    const buffer = await downloadFile(BUCKETS.JOBS, getJobFilePath(jobId, "template.tsx"));
+    return buffer.toString("utf-8");
+  } catch {
     return null;
   }
-  return await fs.readFile(templatePath, "utf-8");
 }
 
 // Update job template content
@@ -162,26 +248,20 @@ export async function updateJobTemplateContent(
   jobId: string,
   content: string
 ): Promise<void> {
-  const templatePath = getJobTemplateTsxPath(jobId);
-  await fs.writeFile(templatePath, content);
+  await uploadFile(BUCKETS.JOBS, getJobFilePath(jobId, "template.tsx"), content, {
+    contentType: "text/plain",
+    upsert: true,
+  });
 }
 
-// Get SVG template content from template folder
-export async function getTemplateSvgContent(templateId: string): Promise<string | null> {
-  const svgPath = getTemplateSvgPath(templateId);
-  if (!(await pathExists(svgPath))) {
-    return null;
-  }
-  return await fs.readFile(svgPath, "utf-8");
-}
-
-// Get job SVG template content (from job folder)
+// Get job SVG template content (from job storage)
 export async function getJobSvgContent(jobId: string): Promise<string | null> {
-  const svgPath = getJobTemplateSvgPath(jobId);
-  if (!(await pathExists(svgPath))) {
+  try {
+    const buffer = await downloadFile(BUCKETS.JOBS, getJobFilePath(jobId, "template.svg"));
+    return buffer.toString("utf-8");
+  } catch {
     return null;
   }
-  return await fs.readFile(svgPath, "utf-8");
 }
 
 // Update job SVG template content
@@ -189,21 +269,24 @@ export async function updateJobSvgContent(
   jobId: string,
   content: string
 ): Promise<void> {
-  const svgPath = getJobTemplateSvgPath(jobId);
-  await fs.writeFile(svgPath, content);
+  await uploadFile(BUCKETS.JOBS, getJobFilePath(jobId, "template.svg"), content, {
+    contentType: "image/svg+xml",
+    upsert: true,
+  });
 }
 
-// Copy template.svg from template folder to job folder
+// Copy template.svg from template folder to job storage
 export async function copySvgTemplateToJob(
   templateId: string,
   jobId: string
 ): Promise<void> {
   const sourcePath = getTemplateSvgPath(templateId);
-  const destPath = getJobTemplateSvgPath(jobId);
 
   if (await pathExists(sourcePath)) {
     const content = await fs.readFile(sourcePath, "utf-8");
-    await fs.writeFile(destPath, content);
+    await uploadFile(BUCKETS.JOBS, getJobFilePath(jobId, "template.svg"), content, {
+      contentType: "image/svg+xml",
+    });
   }
 }
 
@@ -226,7 +309,7 @@ export async function addJobHistoryEntry(
   job.history = job.history || [];
   job.history.push(entry);
 
-  await fs.writeFile(getJobJsonPath(jobId), JSON.stringify(job, null, 2));
+  await updateJob(job);
   return entry;
 }
 
@@ -248,7 +331,7 @@ export async function restoreJobFromHistory(
   job.fields = { ...entry.fields };
   job.assets = { ...entry.assets };
 
-  await fs.writeFile(getJobJsonPath(jobId), JSON.stringify(job, null, 2));
+  await updateJob(job);
   return job;
 }
 
@@ -263,7 +346,7 @@ export async function addUploadedFileToJob(
   job.uploadedFiles = job.uploadedFiles || [];
   job.uploadedFiles.push(file);
 
-  await fs.writeFile(getJobJsonPath(jobId), JSON.stringify(job, null, 2));
+  await updateJob(job);
   return job;
 }
 
@@ -279,7 +362,7 @@ export async function removeUploadedFileFromJob(
     (f) => f.filename !== filename
   );
 
-  await fs.writeFile(getJobJsonPath(jobId), JSON.stringify(job, null, 2));
+  await updateJob(job);
   return job;
 }
 
@@ -294,7 +377,7 @@ export async function updateAgentHistory(
 
   job.agentHistory = history;
 
-  await fs.writeFile(getJobJsonPath(jobId), JSON.stringify(job, null, 2));
+  await updateJob(job);
   return job;
 }
 
@@ -305,4 +388,98 @@ export async function getAgentHistory(
 ): Promise<any[]> {
   const job = await getJob(jobId);
   return job?.agentHistory || [];
+}
+
+// Save output PDF to job storage
+export async function saveJobOutputPdf(
+  jobId: string,
+  pdfBuffer: Buffer
+): Promise<string> {
+  const storagePath = getJobFilePath(jobId, "output.pdf");
+  await uploadFile(BUCKETS.JOBS, storagePath, pdfBuffer, {
+    contentType: "application/pdf",
+    upsert: true,
+  });
+  return storagePath;
+}
+
+// Get output PDF from job storage
+export async function getJobOutputPdf(jobId: string): Promise<Buffer | null> {
+  try {
+    return await downloadFile(BUCKETS.JOBS, getJobFilePath(jobId, "output.pdf"));
+  } catch {
+    return null;
+  }
+}
+
+// Save output SVG to job storage
+export async function saveJobOutputSvg(
+  jobId: string,
+  svgContent: string
+): Promise<string> {
+  const storagePath = getJobFilePath(jobId, "output.svg");
+  await uploadFile(BUCKETS.JOBS, storagePath, svgContent, {
+    contentType: "image/svg+xml",
+    upsert: true,
+  });
+  return storagePath;
+}
+
+// Get output SVG from job storage
+export async function getJobOutputSvg(jobId: string): Promise<string | null> {
+  try {
+    const buffer = await downloadFile(BUCKETS.JOBS, getJobFilePath(jobId, "output.svg"));
+    return buffer.toString("utf-8");
+  } catch {
+    return null;
+  }
+}
+
+// ============================================================================
+// Asset Bank Operations (Supabase Storage)
+// ============================================================================
+
+// List all assets in asset bank
+export async function listAssetBankFiles(): Promise<string[]> {
+  if (!isSupabaseConfigured()) {
+    return [];
+  }
+
+  try {
+    return await listFiles(BUCKETS.ASSETS);
+  } catch {
+    return [];
+  }
+}
+
+// Get asset from asset bank
+export async function getAssetBankFile(filename: string): Promise<Buffer | null> {
+  try {
+    return await downloadFile(BUCKETS.ASSETS, filename);
+  } catch {
+    return null;
+  }
+}
+
+// Upload asset to asset bank
+export async function uploadAssetBankFile(
+  filename: string,
+  buffer: Buffer,
+  contentType?: string
+): Promise<string> {
+  await uploadFile(BUCKETS.ASSETS, filename, buffer, {
+    contentType,
+    upsert: true,
+  });
+  return filename;
+}
+
+// Delete asset from asset bank
+export async function deleteAssetBankFile(filename: string): Promise<void> {
+  await deleteFile(BUCKETS.ASSETS, filename);
+}
+
+// Check if asset exists in asset bank
+export async function assetBankFileExists(filename: string): Promise<boolean> {
+  return await fileExists(BUCKETS.ASSETS, filename);
 }

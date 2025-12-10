@@ -1,8 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getJob, getTemplate, markJobRendered, getTemplateSvgContent, getJobSvgContent } from "@/lib/fs-utils";
-import { getJobOutputPdfPath, getJobOutputSvgPath } from "@/lib/paths";
+import {
+  getJob,
+  getTemplate,
+  markJobRendered,
+  getTemplateSvgContent,
+  getJobSvgContent,
+  saveJobOutputPdf,
+  saveJobOutputSvg,
+  getAssetBankFile,
+} from "@/lib/fs-utils";
 import { renderSVGTemplate, prepareAssets, svgToPdf } from "@/lib/svg-template-renderer";
-import fs from "fs/promises";
 
 export async function POST(
   request: NextRequest,
@@ -40,23 +47,31 @@ export async function POST(
       );
     }
 
-    // Prepare assets - convert image paths to data URLs
+    // Prepare assets - convert image paths/references to data URLs
     const assets: Record<string, string | null> = {};
     for (const [key, value] of Object.entries(job.assets)) {
       if (value) {
         try {
-          const imageBuffer = await fs.readFile(value);
-          const ext = value.split(".").pop()?.toLowerCase() || "png";
-          const mimeTypes: Record<string, string> = {
-            png: "image/png",
-            jpg: "image/jpeg",
-            jpeg: "image/jpeg",
-            gif: "image/gif",
-            webp: "image/webp",
-            svg: "image/svg+xml",
-          };
-          const mimeType = mimeTypes[ext] || "application/octet-stream";
-          assets[key] = `data:${mimeType};base64,${imageBuffer.toString("base64")}`;
+          // Value could be a storage path or asset bank reference
+          // Try to load from asset bank
+          const assetFilename = value.includes("/") ? value.split("/").pop()! : value;
+          const imageBuffer = await getAssetBankFile(assetFilename);
+
+          if (imageBuffer) {
+            const ext = assetFilename.split(".").pop()?.toLowerCase() || "png";
+            const mimeTypes: Record<string, string> = {
+              png: "image/png",
+              jpg: "image/jpeg",
+              jpeg: "image/jpeg",
+              gif: "image/gif",
+              webp: "image/webp",
+              svg: "image/svg+xml",
+            };
+            const mimeType = mimeTypes[ext] || "application/octet-stream";
+            assets[key] = `data:${mimeType};base64,${imageBuffer.toString("base64")}`;
+          } else {
+            assets[key] = null;
+          }
         } catch (err) {
           console.error(`Failed to process image ${value}:`, err);
           assets[key] = null;
@@ -75,11 +90,9 @@ export async function POST(
     // Convert SVG to PDF
     const pdfBuffer = await svgToPdf(renderedSvg);
 
-    // Save both SVG and PDF outputs
-    const svgOutputPath = getJobOutputSvgPath(jobId);
-    const pdfOutputPath = getJobOutputPdfPath(jobId);
-    await fs.writeFile(svgOutputPath, renderedSvg);
-    await fs.writeFile(pdfOutputPath, pdfBuffer);
+    // Save both SVG and PDF outputs to Supabase storage
+    await saveJobOutputSvg(jobId, renderedSvg);
+    await saveJobOutputPdf(jobId, pdfBuffer);
 
     // Mark as rendered
     await markJobRendered(jobId);

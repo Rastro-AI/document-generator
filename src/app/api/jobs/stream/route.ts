@@ -1,16 +1,22 @@
 import { NextRequest } from "next/server";
 import { v4 as uuidv4 } from "uuid";
-import { createJob, getTemplate, saveUploadedFile, saveAssetFile, copyTemplateToJob } from "@/lib/fs-utils";
+import {
+  createJob,
+  getTemplate,
+  saveUploadedFile,
+  saveAssetFile,
+  copyTemplateToJob,
+  copySvgTemplateToJob,
+  listAssetBankFiles,
+  getAssetBankFile,
+} from "@/lib/fs-utils";
 import { extractFieldsAndAssetsFromFiles } from "@/lib/llm";
 import { Job, UploadedFile } from "@/lib/types";
-import { getJobInputPath, getJobAssetPath, ASSET_BANK_DIR, ensureBaseDirs } from "@/lib/paths";
-import { promises as fs } from "fs";
-import path from "path";
 
 export const runtime = "nodejs";
 
 function isImageFile(filename: string): boolean {
-  const imageExtensions = [".png", ".jpg", ".jpeg", ".gif", ".webp"];
+  const imageExtensions = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"];
   const ext = filename.toLowerCase().slice(filename.lastIndexOf("."));
   return imageExtensions.includes(ext);
 }
@@ -70,14 +76,12 @@ export async function POST(request: NextRequest) {
       let initialMessage = "I've created a new document. You can edit the field values on the left, or ask me to make changes.";
       const uploadedFiles: UploadedFile[] = [];
 
-      // Always include all asset bank files in the job context
-      // This ensures certification logos and other reusable assets are available
-      ensureBaseDirs();
+      // Get all asset bank files from Supabase storage
       let allAssetBankFiles: string[] = [];
       try {
-        allAssetBankFiles = await fs.readdir(ASSET_BANK_DIR);
+        allAssetBankFiles = await listAssetBankFiles();
       } catch {
-        // Assets directory may not exist or be empty
+        // Assets may not exist or storage not configured
       }
 
       // Merge explicitly selected assets with all asset bank files
@@ -88,14 +92,17 @@ export async function POST(request: NextRequest) {
         const now = new Date().toISOString();
         for (const assetId of allAssetIds) {
           try {
-            const assetPath = path.join(ASSET_BANK_DIR, assetId);
-            const buffer = await fs.readFile(assetPath);
+            const buffer = await getAssetBankFile(assetId);
+            if (!buffer) continue;
+
+            // Storage path for the job
+            const storagePath = `${jobId}/assets/${assetId}`;
 
             if (isImageFile(assetId)) {
               await saveAssetFile(jobId, assetId, buffer);
               uploadedFiles.push({
                 filename: assetId,
-                path: getJobAssetPath(jobId, assetId),
+                path: storagePath,
                 type: "image",
                 uploadedAt: now,
               });
@@ -103,7 +110,7 @@ export async function POST(request: NextRequest) {
               await saveUploadedFile(jobId, assetId, buffer);
               uploadedFiles.push({
                 filename: assetId,
-                path: getJobInputPath(jobId, assetId),
+                path: `${jobId}/${assetId}`,
                 type: "document",
                 uploadedAt: now,
               });
@@ -134,24 +141,25 @@ export async function POST(request: NextRequest) {
         for (const file of files) {
           const buffer = Buffer.from(await file.arrayBuffer());
           const filename = file.name || "input";
+          const storagePath = isImageFile(filename)
+            ? `${jobId}/assets/${filename}`
+            : `${jobId}/${filename}`;
 
           if (isImageFile(filename)) {
             await saveAssetFile(jobId, filename, buffer);
-            const assetPath = getJobAssetPath(jobId, filename);
-            imageFiles.push({ path: assetPath, filename });
+            imageFiles.push({ path: storagePath, filename });
             uploadedFiles.push({
               filename,
-              path: assetPath,
+              path: storagePath,
               type: "image",
               uploadedAt: now,
             });
           } else {
             await saveUploadedFile(jobId, filename, buffer);
-            const filePath = getJobInputPath(jobId, filename);
-            documentFiles.push({ path: filePath, filename });
+            documentFiles.push({ path: storagePath, filename });
             uploadedFiles.push({
               filename,
-              path: filePath,
+              path: storagePath,
               type: "document",
               uploadedAt: now,
             });
@@ -229,7 +237,10 @@ export async function POST(request: NextRequest) {
       };
 
       await createJob(job);
+
+      // Copy template files (TSX and/or SVG) to job storage
       await copyTemplateToJob(templateId, jobId);
+      await copySvgTemplateToJob(templateId, jobId);
 
       sendEvent("result", { jobId, job });
       sendEvent("done", {});

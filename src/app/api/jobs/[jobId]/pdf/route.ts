@@ -1,7 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getJobOutputPdfPath } from "@/lib/paths";
-import { pathExists } from "@/lib/fs-utils";
-import fs from "fs/promises";
+import { getJobOutputPdf } from "@/lib/fs-utils";
 
 export async function GET(
   request: NextRequest,
@@ -9,18 +7,16 @@ export async function GET(
 ) {
   try {
     const { jobId } = await params;
-    const pdfPath = getJobOutputPdfPath(jobId);
+    const pdfBuffer = await getJobOutputPdf(jobId);
 
-    if (!(await pathExists(pdfPath))) {
+    if (!pdfBuffer) {
       return NextResponse.json(
         { error: "PDF not found. Please render first." },
         { status: 404 }
       );
     }
 
-    const pdfBuffer = await fs.readFile(pdfPath);
-
-    return new NextResponse(pdfBuffer, {
+    return new NextResponse(pdfBuffer as Buffer<ArrayBuffer>, {
       headers: {
         "Content-Type": "application/pdf",
         "Content-Disposition": `inline; filename="output.pdf"`,
