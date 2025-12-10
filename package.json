@@ -16,7 +16,7 @@
     "esbuild": "^0.27.0",
     "lucide-react": "^0.555.0",
     "multer": "^2.0.2",
-    "next": "16.0.6",
+    "next": "^16.0.8",
     "openai": "^6.9.1",
     "pdf-parse": "^2.4.5",
     "pdf-to-img": "^5.0.0",
@@ -34,7 +34,7 @@
     "@types/react-dom": "^19",
     "@types/uuid": "^10.0.0",
     "eslint": "^9",
-    "eslint-config-next": "16.0.6",
+    "eslint-config-next": "^16.0.8",
     "tailwindcss": "^4",
     "typescript": "^5"
   }
