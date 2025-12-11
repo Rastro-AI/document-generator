@@ -499,16 +499,34 @@ export function JobEditor({ jobId, templateId, onBack, initialPrompt, initialFil
                   {isReady ? (
                     <>
                       <PdfPreview key={pdfKey} jobId={jobId} renderedAt={previewRenderedAt || job.renderedAt} isRendering={renderJob.isPending} />
-                      {/* Expand button */}
-                      <button
-                        onClick={() => setPdfExpanded(true)}
-                        className="absolute top-6 right-6 w-8 h-8 flex items-center justify-center rounded-lg bg-white/80 hover:bg-white shadow-sm transition-colors"
-                        title="Expand preview"
-                      >
-                        <svg className="w-4 h-4 text-[#1d1d1f]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
-                        </svg>
-                      </button>
+                      {/* Preview action buttons */}
+                      <div className="absolute top-6 right-6 flex gap-2">
+                        {/* Refresh button */}
+                        <button
+                          onClick={() => {
+                            renderJob.mutateAsync({ jobId }).then((res) => {
+                              if (res?.renderedAt) setPreviewRenderedAt(res.renderedAt);
+                            });
+                          }}
+                          disabled={renderJob.isPending}
+                          className="w-8 h-8 flex items-center justify-center rounded-lg bg-white/80 hover:bg-white shadow-sm transition-colors disabled:opacity-50"
+                          title="Refresh preview"
+                        >
+                          <svg className={`w-4 h-4 text-[#1d1d1f] ${renderJob.isPending ? 'animate-spin' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                          </svg>
+                        </button>
+                        {/* Expand button */}
+                        <button
+                          onClick={() => setPdfExpanded(true)}
+                          className="w-8 h-8 flex items-center justify-center rounded-lg bg-white/80 hover:bg-white shadow-sm transition-colors"
+                          title="Expand preview"
+                        >
+                          <svg className="w-4 h-4 text-[#1d1d1f]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+                          </svg>
+                        </button>
+                      </div>
                     </>
                   ) : (
                     <div className="h-full flex flex-col items-center justify-center">
