@@ -31,8 +31,10 @@ import {
   getAssetFile,
   getAssetBankFile,
   getUploadedFile,
+  saveAssetFile,
 } from "@/lib/fs-utils";
 import { renderSVGTemplate, prepareAssets, svgToPng } from "@/lib/svg-template-renderer";
+import { getPublicUrl, BUCKETS } from "@/lib/supabase";
 
 // Local types for apply_patch operations
 type CreateFileOperation = { type: "create_file"; path: string; diff: string };
@@ -321,10 +323,16 @@ function createRenderPreviewTool(
         const renderedSvg = renderSVGTemplate(currentSvgContent, fields, preparedAssets);
         const pngBuffer = await svgToPng(renderedSvg, 800);
 
+        // Upload preview to storage and use URL (avoids bloating history with base64)
+        const previewFilename = `preview-${Date.now()}.png`;
+        await saveAssetFile(jobId, previewFilename, pngBuffer);
+        const storagePath = `${jobId}/assets/${previewFilename}`;
+        const previewUrl = getPublicUrl(BUCKETS.JOBS, storagePath);
+
         return [
           {
             type: "image_url",
-            image_url: { url: `data:image/png;base64,${pngBuffer.toString("base64")}`, detail: "high" },
+            image_url: { url: previewUrl, detail: "high" },
           },
           {
             type: "text",
@@ -476,8 +484,8 @@ ${currentSvgContent}
 
 Request: ${userMessage}`;
 
-    // Build input with optional initial screenshot
-    let initialScreenshotBase64: string | null = null;
+    // Build input with optional initial screenshot (uploaded to storage, referenced by URL)
+    let initialScreenshotUrl: string | null = null;
     if (previousHistory.length === 0) {
       try {
         const initialAssets: Record<string, string | null> = {};
@@ -496,7 +504,13 @@ Request: ${userMessage}`;
         const preparedAssets = await prepareAssets(initialAssets);
         const renderedSvg = renderSVGTemplate(currentSvgContent, liveFields, preparedAssets);
         const pngBuffer = await svgToPng(renderedSvg, 1200);
-        initialScreenshotBase64 = pngBuffer.toString("base64");
+
+        // Upload screenshot to storage and get public URL (avoids bloating history with base64)
+        const screenshotFilename = `screenshot-${Date.now()}.png`;
+        await saveAssetFile(jobId, screenshotFilename, pngBuffer);
+        const storagePath = `${jobId}/assets/${screenshotFilename}`;
+        initialScreenshotUrl = getPublicUrl(BUCKETS.JOBS, storagePath);
+        console.log(`[Agent] Uploaded screenshot to ${storagePath}, URL: ${initialScreenshotUrl}`);
       } catch (err) {
         console.error("Failed to render initial screenshot:", err);
       }
@@ -504,12 +518,12 @@ Request: ${userMessage}`;
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let inputMessage: any;
-    if (initialScreenshotBase64 && previousHistory.length === 0) {
+    if (initialScreenshotUrl && previousHistory.length === 0) {
       inputMessage = {
         role: "user",
         content: [
           { type: "input_text", text: "Current rendered document:" },
-          { type: "input_image", image: `data:image/png;base64,${initialScreenshotBase64}`, detail: "high" },
+          { type: "input_image", image: initialScreenshotUrl, detail: "high" },
           { type: "input_text", text: contextText },
         ],
       };
@@ -558,8 +572,8 @@ Request: ${userMessage}`;
       svgTokens: estimateTokens(currentSvgContent),
       fieldsTokens: estimateTokens(liveFields),
       assetsTokens: estimateTokens(liveAssets),
-      hasScreenshot: !!initialScreenshotBase64,
-      screenshotSize: initialScreenshotBase64 ? initialScreenshotBase64.length : 0,
+      hasScreenshot: !!initialScreenshotUrl,
+      screenshotUrl: initialScreenshotUrl || "none",
       userMessageLength: userMessage.length,
       totalInputTokens: estimateTokens(input),
       // Break down history by message type
@@ -577,7 +591,7 @@ Request: ${userMessage}`;
     console.log(`  SVG template: ${contextAnalysis.svgLength} chars, ~${contextAnalysis.svgTokens} tokens`);
     console.log(`  Fields: ~${contextAnalysis.fieldsTokens} tokens`);
     console.log(`  Assets: ~${contextAnalysis.assetsTokens} tokens`);
-    console.log(`  Screenshot: ${contextAnalysis.hasScreenshot ? `${contextAnalysis.screenshotSize} chars base64` : "none"}`);
+    console.log(`  Screenshot: ${contextAnalysis.screenshotUrl}`);
     console.log(`  User message: ${contextAnalysis.userMessageLength} chars`);
     console.log(`  TOTAL INPUT: ~${contextAnalysis.totalInputTokens} tokens (estimate)`);
 
