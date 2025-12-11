@@ -6,15 +6,6 @@ import path from "path";
 import fs from "fs/promises";
 import os from "os";
 
-// Build chromium pack URL from current deployment (works on preview and production)
-function getChromiumPackUrl(): string {
-  const vercelUrl = process.env.VERCEL_URL;
-  if (vercelUrl) {
-    return `https://${vercelUrl}/chromium-pack.tar`;
-  }
-  return "http://localhost:3000/chromium-pack.tar";
-}
-
 // Logger for SSE route
 const log = {
   info: (msg: string, data?: unknown) => {
@@ -26,6 +17,18 @@ const log = {
     console.error(`[${timestamp}] [generate-route] ERROR: ${msg}`, data !== undefined ? data : "");
   },
 };
+
+// Build chromium pack URL - use production URL to avoid auth on preview deployments
+function getChromiumPackUrl(): string {
+  const prodUrl = process.env.VERCEL_PROJECT_PRODUCTION_URL;
+  if (prodUrl) {
+    const url = `https://${prodUrl}/chromium-pack.tar`;
+    log.info(`Using production URL for chromium: ${url}`);
+    return url;
+  }
+  log.info(`No VERCEL_PROJECT_PRODUCTION_URL, using localhost`);
+  return "http://localhost:3000/chromium-pack.tar";
+}
 
 export const runtime = "nodejs";
 export const maxDuration = 300; // 5 minutes for complex generation

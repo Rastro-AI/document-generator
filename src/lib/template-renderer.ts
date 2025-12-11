@@ -13,12 +13,15 @@ import chromium from "@sparticuz/chromium-min";
 
 const execAsync = promisify(exec);
 
-// Build chromium pack URL from current deployment (works on preview and production)
+// Build chromium pack URL - use production URL to avoid auth on preview deployments
 function getChromiumPackUrl(): string {
-  const vercelUrl = process.env.VERCEL_URL;
-  if (vercelUrl) {
-    return `https://${vercelUrl}/chromium-pack.tar`;
+  const prodUrl = process.env.VERCEL_PROJECT_PRODUCTION_URL;
+  if (prodUrl) {
+    const url = `https://${prodUrl}/chromium-pack.tar`;
+    console.log(`[chromium] Using production URL: ${url}`);
+    return url;
   }
+  console.log(`[chromium] No VERCEL_PROJECT_PRODUCTION_URL, using localhost`);
   return "http://localhost:3000/chromium-pack.tar";
 }
 
