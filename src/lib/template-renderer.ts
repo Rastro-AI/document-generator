@@ -8,9 +8,24 @@ import path from "path";
 import os from "os";
 import { exec } from "child_process";
 import { promisify } from "util";
-import puppeteer from "puppeteer";
+import puppeteer from "puppeteer-core";
+import chromium from "@sparticuz/chromium";
 
 const execAsync = promisify(exec);
+
+// Helper to launch Puppeteer with correct Chrome for environment
+async function launchBrowser() {
+  const isVercel = process.env.VERCEL === "1" || process.env.AWS_LAMBDA_FUNCTION_NAME;
+  return puppeteer.launch({
+    args: isVercel ? chromium.args : ["--no-sandbox", "--disable-setuid-sandbox"],
+    executablePath: isVercel
+      ? await chromium.executablePath()
+      : process.platform === "darwin"
+        ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+        : "/usr/bin/google-chrome",
+    headless: true,
+  });
+}
 
 // Logger for template renderer
 const log = {
@@ -270,11 +285,8 @@ export async function pdfToPng(pdfBuffer: Buffer, _dpi: number = 200): Promise<s
   try {
     await fs.writeFile(pdfPath, pdfBuffer);
 
-    // Launch Puppeteer to render PDF
-    browser = await puppeteer.launch({
-      headless: true,
-      args: ["--no-sandbox", "--disable-setuid-sandbox"],
-    });
+    // Launch Puppeteer with correct Chrome for environment
+    browser = await launchBrowser();
 
     const page = await browser.newPage();
     await page.goto(`file://${pdfPath}`, { waitUntil: "networkidle0" });

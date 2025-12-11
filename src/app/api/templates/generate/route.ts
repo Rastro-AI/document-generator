@@ -3,7 +3,8 @@ import { runTemplateGeneratorAgent, GeneratorTrace } from "@/lib/agents/template
 import fs from "fs/promises";
 import path from "path";
 import os from "os";
-import puppeteer from "puppeteer";
+import puppeteer from "puppeteer-core";
+import chromium from "@sparticuz/chromium";
 
 // Logger for SSE route
 const log = {
@@ -33,10 +34,16 @@ async function pdfToImages(pdfBuffer: Buffer): Promise<string[]> {
   try {
     await fs.writeFile(pdfPath, pdfBuffer);
 
-    // Launch Puppeteer
+    // Launch Puppeteer with correct Chrome for environment (Vercel vs local)
+    const isVercel = process.env.VERCEL === "1" || process.env.AWS_LAMBDA_FUNCTION_NAME;
     browser = await puppeteer.launch({
+      args: isVercel ? chromium.args : ["--no-sandbox", "--disable-setuid-sandbox"],
+      executablePath: isVercel
+        ? await chromium.executablePath()
+        : process.platform === "darwin"
+          ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+          : "/usr/bin/google-chrome",
       headless: true,
-      args: ["--no-sandbox", "--disable-setuid-sandbox"],
     });
 
     const page = await browser.newPage();
@@ -44,10 +51,6 @@ async function pdfToImages(pdfBuffer: Buffer): Promise<string[]> {
     // Load PDF using file:// protocol
     const pdfUrl = `file://${pdfPath}`;
     await page.goto(pdfUrl, { waitUntil: "networkidle0" });
-
-    // Use pdf.js to render pages - Puppeteer's PDF viewer is Chrome's built-in
-    // For now, just screenshot the first page as displayed
-    // This is a simplified approach - for multi-page, we'd need pdf.js
 
     await page.setViewport({ width: 816, height: 1056, deviceScaleFactor: 2 }); // Letter size at 96dpi * 2
 
