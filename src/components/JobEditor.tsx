@@ -319,15 +319,15 @@ export function JobEditor({ jobId, templateId, onBack, initialPrompt, initialFil
         {/* Right: Preview/Assets/Data with tabs (50%) */}
         <div className="w-1/2 flex flex-col bg-[#f5f5f7] p-4 pl-2">
           <div className="flex-1 min-h-0 bg-white rounded-xl overflow-hidden border border-[#d2d2d7] flex flex-col">
-            {/* Tabs - centered with icons */}
+            {/* Tabs - centered with icons, black active state */}
             <div className="flex-shrink-0 px-4 pt-3 pb-2 flex items-center justify-center">
               <div className="flex gap-1 p-1 bg-[#f5f5f7] rounded-lg">
                 <button
                   onClick={() => setRightPanelTab("preview")}
                   className={`px-3 py-1.5 text-[13px] font-medium rounded-md transition-colors flex items-center gap-1.5 ${
                     rightPanelTab === "preview"
-                      ? "bg-white text-[#1d1d1f] shadow-sm"
-                      : "text-[#86868b] hover:text-[#1d1d1f]"
+                      ? "bg-[#1d1d1f] text-white shadow-sm"
+                      : "text-[#86868b] hover:text-[#1d1d1f] hover:bg-white/50"
                   }`}
                 >
                   <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
@@ -340,8 +340,8 @@ export function JobEditor({ jobId, templateId, onBack, initialPrompt, initialFil
                   onClick={() => setRightPanelTab("assets")}
                   className={`px-3 py-1.5 text-[13px] font-medium rounded-md transition-colors flex items-center gap-1.5 ${
                     rightPanelTab === "assets"
-                      ? "bg-white text-[#1d1d1f] shadow-sm"
-                      : "text-[#86868b] hover:text-[#1d1d1f]"
+                      ? "bg-[#1d1d1f] text-white shadow-sm"
+                      : "text-[#86868b] hover:text-[#1d1d1f] hover:bg-white/50"
                   }`}
                 >
                   <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
@@ -353,8 +353,8 @@ export function JobEditor({ jobId, templateId, onBack, initialPrompt, initialFil
                   onClick={() => setRightPanelTab("data")}
                   className={`px-3 py-1.5 text-[13px] font-medium rounded-md transition-colors flex items-center gap-1.5 ${
                     rightPanelTab === "data"
-                      ? "bg-white text-[#1d1d1f] shadow-sm"
-                      : "text-[#86868b] hover:text-[#1d1d1f]"
+                      ? "bg-[#1d1d1f] text-white shadow-sm"
+                      : "text-[#86868b] hover:text-[#1d1d1f] hover:bg-white/50"
                   }`}
                 >
                   <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
