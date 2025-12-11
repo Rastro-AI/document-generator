@@ -370,14 +370,6 @@ export function JobEditor({ jobId, templateId, onBack, initialPrompt, initialFil
                 </svg>
                 History
               </button>
-              <button
-                onClick={() => alert("Deploy coming soon")}
-                className="px-3 py-1.5 text-[13px] font-medium text-[#1d1d1f] bg-white border border-[#d2d2d7] rounded-lg
-                          hover:bg-[#f5f5f7] active:scale-[0.98]
-                          transition-all duration-200"
-              >
-                Deploy
-              </button>
             </>
           )}
         </div>
