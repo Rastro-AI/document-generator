@@ -259,20 +259,23 @@ NOTE: Our system automatically converts foreignObject to native SVG text when ex
 - apply_patch: Edit SVG via unified diff (target: template.svg) - use for incremental changes
 - read_svg: Read current SVG content
 - write_template_json: Define template fields and asset slots
-- mark_complete: Finish generation (only after 3+ iterations)
+- mark_complete: Finish generation (ONLY after verifying the rendered preview)
 
 ## WORKFLOW
 1. Analyze the PDF with code_interpreter - extract colors, positions, text
 2. write_svg to create the template with placeholders already in place
-3. WAIT for render comparison
-4. Review the rendered output, use apply_patch to fix issues
-5. REPEAT steps 3-4 until template looks good (expect 3-5 iterations)
-6. write_template_json to define fields
-7. mark_complete
+3. STOP and WAIT - the system will render your SVG and show you a comparison
+4. LOOK at the rendered output carefully, compare with the original
+5. If issues exist, use apply_patch to fix them, then WAIT for next render
+6. REPEAT until the template matches well
+7. write_template_json to define fields
+8. mark_complete ONLY after you have SEEN and VERIFIED the latest render
 
-CRITICAL:
-- Do NOT call mark_complete until you've done at least 3 iterations
-- Compare carefully with the original on each iteration`;
+CRITICAL RULES:
+- After ANY SVG change, STOP and WAIT for the render comparison before continuing
+- NEVER call mark_complete in the same turn as write_svg or apply_patch
+- You MUST see the rendered preview image before marking complete
+- If you haven't seen a preview of your latest changes, DO NOT mark complete`;
 
 /**
  * Run the SVG template generator agent
