@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { v4 as uuidv4 } from "uuid";
 import {
   createJob,
+  getJob,
   getTemplate,
   saveUploadedFile,
   saveAssetFile,
@@ -9,6 +10,7 @@ import {
   copySvgTemplateToJob,
   listAssetBankFiles,
   getAssetBankFile,
+  updateJobFields,
 } from "@/lib/fs-utils";
 import { extractFieldsAndAssetsFromFiles } from "@/lib/llm";
 import { Job, UploadedFile } from "@/lib/types";
@@ -167,26 +169,20 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      // Extract fields and assign assets using LLM
-      let extractedCount = 0;
-      const hasFiles = documentFiles.length > 0 || imageFiles.length > 0;
-      const hasPromptOnly = !hasFiles && prompt && prompt.trim().length > 0;
-
-      if (hasFiles) {
+      // Step 1: Extract fields from documents if any (uses code_interpreter)
+      const hasDocuments = documentFiles.length > 0;
+      if (hasDocuments) {
+        sendEvent("trace", { type: "status", content: "Extracting data from documents..." });
         const extractionResult = await extractFieldsAndAssetsFromFiles(
           template,
           documentFiles,
           imageFiles,
           prompt || undefined,
-          // Event callback for real-time updates
-          (event) => {
-            sendEvent("trace", event);
-          },
+          (event) => sendEvent("trace", event),
           reasoning
         );
 
         // Merge extracted fields
-        extractedCount = Object.entries(extractionResult.fields).filter(([, v]) => v !== null).length;
         for (const [key, value] of Object.entries(extractionResult.fields)) {
           if (value !== null) {
             fields[key] = value;
@@ -199,97 +195,77 @@ export async function POST(request: NextRequest) {
             assets[key] = value;
           }
         }
-
-        // Generate a descriptive initial message
-        const totalFiles = documentFiles.length + imageFiles.length;
-        const assignedAssetsCount = Object.values(assets).filter((v) => v !== null).length;
-
-        // Emit a concise extraction summary trace for debugging
-        sendEvent("trace", {
-          type: "status",
-          content: `Extraction summary: fields=${extractedCount}, assetsAssigned=${assignedAssetsCount}/${template.assetSlots.length}, imagesUploaded=${imageFiles.length}, documentsUploaded=${documentFiles.length}`,
-        });
-
-        if (extractedCount > 0 || assignedAssetsCount > 0) {
-          const parts = [] as string[];
-          if (extractedCount > 0) parts.push(`extracted ${extractedCount} fields`);
-          if (assignedAssetsCount > 0) parts.push(`assigned ${assignedAssetsCount} image${assignedAssetsCount > 1 ? "s" : ""} to slots`);
-          initialMessage = `I've ${parts.join(" and ")} from your ${totalFiles} file${totalFiles > 1 ? "s" : ""}. The spec sheet is ready for preview.`;
-        } else {
-          initialMessage = `I've processed ${totalFiles} file${totalFiles > 1 ? "s" : ""} but couldn't confidently extract data. You can edit values or provide more guidance.`;
-          if (imageFiles.length > 0 && template.assetSlots.length > 0) {
-            sendEvent("trace", {
-              type: "status",
-              content: `No assets were mapped to slots. Uploaded images: ${imageFiles.map((f) => f.filename).join(", ")}. Slots: ${template.assetSlots.map((s) => s.name).join(", ")}.`,
-            });
-          }
-        }
-      } else if (hasPromptOnly) {
-        // Prompt-only case: use the template agent to fill fields
-        sendEvent("trace", { type: "status", content: "Processing your request..." });
-
-        // Import and use the template agent
-        const { runTemplateAgent } = await import("@/lib/agents/template-agent");
-
-        const agentResult = await runTemplateAgent(
-          jobId,
-          templateId,
-          prompt!,
-          fields, // Start with empty/null fields
-          template.fields,
-          [], // No previous history
-          (trace) => sendEvent("trace", trace),
-          reasoning
-        );
-
-        // Merge field updates from the agent
-        if (agentResult.fieldUpdates && Object.keys(agentResult.fieldUpdates).length > 0) {
-          for (const [key, value] of Object.entries(agentResult.fieldUpdates)) {
-            if (key in fields) {
-              fields[key] = value;
-            }
-          }
-          extractedCount = Object.keys(agentResult.fieldUpdates).length;
-        }
-
-        if (extractedCount > 0) {
-          initialMessage = agentResult.message || `I've populated ${extractedCount} fields based on your request. The document is ready for preview.`;
-        } else {
-          initialMessage = agentResult.message || "I've created a new document. You can edit the field values on the left, or ask me to make changes.";
-        }
       }
 
-      sendEvent("trace", { type: "status", content: "Finalizing job..." });
-
-      // Create initial history entry
+      // Step 2: Create the job first so the agent can access it
+      sendEvent("trace", { type: "status", content: "Setting up document..." });
       const historyId = uuidv4();
       const now = new Date().toISOString();
 
-      // Create the job
       const job: Job = {
         id: jobId,
         templateId,
         fields,
         assets,
         createdAt: now,
-        initialMessage,
+        initialMessage: "Processing...",
         uploadedFiles,
         history: [{
           id: historyId,
           fields: { ...fields },
           assets: { ...assets },
           timestamp: now,
-          description: "Initial extraction",
+          description: "Initial state",
         }],
       };
 
       await createJob(job);
 
-      // Copy template files (TSX and/or SVG) to job storage
+      // Copy template files to job storage
       await copyTemplateToJob(templateId, jobId);
       await copySvgTemplateToJob(templateId, jobId);
 
-      sendEvent("result", { jobId, job });
+      // Step 3: Run the template agent to verify/fix the output visually
+      const { runTemplateAgent } = await import("@/lib/agents/template-agent");
+
+      const agentPrompt = prompt
+        ? prompt
+        : hasDocuments
+          ? "I've extracted data from the uploaded documents. Please review the rendered output, assign appropriate images to asset slots, and fix any visual issues (text overflow, alignment, etc.)."
+          : "Please fill in the template fields and assign appropriate images to asset slots. Review the rendered output and fix any visual issues.";
+
+      sendEvent("trace", { type: "status", content: "Reviewing and optimizing layout..." });
+
+      const agentResult = await runTemplateAgent(
+        jobId,
+        templateId,
+        agentPrompt,
+        fields,
+        template.fields,
+        [], // No previous history
+        (trace) => sendEvent("trace", trace),
+        reasoning
+      );
+
+      // Update fields from agent if it made changes
+      if (agentResult.fieldUpdates && Object.keys(agentResult.fieldUpdates).length > 0) {
+        for (const [key, value] of Object.entries(agentResult.fieldUpdates)) {
+          if (key in fields) {
+            fields[key] = value;
+          }
+        }
+      }
+
+      // Set the initial message from agent
+      initialMessage = agentResult.message || "Document is ready for review.";
+
+      // Update job with final state (fields may have been updated by agent)
+      await updateJobFields(jobId, { ...fields, initialMessage } as Record<string, string | number | null>);
+
+      // Re-fetch the updated job
+      const finalJob = await getJob(jobId);
+
+      sendEvent("result", { jobId, job: finalJob });
       sendEvent("done", {});
     } catch (error) {
       console.error("Error creating job:", error);
