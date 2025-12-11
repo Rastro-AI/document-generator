@@ -734,35 +734,105 @@ If issues remain → use apply_patch to fix them.`;
       }
 
       log.info(`Running agent iteration ${iteration + 1}`);
-      const result = await runner.run(agent, input, { maxTurns: 15 });
-      conversationHistory = result.history || [];
 
-      // Process reasoning and message output traces
-      // (tool_call and tool_result are now handled via Runner hooks for real-time updates)
-      for (const item of result.newItems || []) {
+      // Use streaming to get real-time events for built-in tools like code_interpreter
+      const stream = await runner.run(agent, input, { maxTurns: 15, stream: true });
+
+      // Track tool calls in progress for matching with results
+      const pendingToolCalls = new Map<string, string>();
+
+      // Process streaming events in real-time
+      for await (const event of stream) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const anyItem = item as any;
+        const anyEvent = event as any;
 
-        if (anyItem.type === "reasoning_item" && anyItem.rawItem) {
-          const reasoningText = extractReasoningText(anyItem.rawItem);
-          if (reasoningText) {
-            log.info(`[REASONING] ${reasoningText.substring(0, 200)}...`);
-            onEvent?.({ type: "reasoning", content: reasoningText });
+        if (anyEvent.type === "raw_model_stream_event" && anyEvent.data) {
+          const data = anyEvent.data;
+
+          // Handle code_interpreter and other built-in tool events
+          if (data.type === "response.code_interpreter_call.in_progress") {
+            log.info(`[CODE_INTERPRETER] Running...`);
+            onEvent?.({ type: "tool_call", content: "Running code_interpreter...", toolName: "code_interpreter" });
+          }
+
+          if (data.type === "response.code_interpreter_call.completed") {
+            log.info(`[CODE_INTERPRETER] Completed`);
+            onEvent?.({ type: "tool_result", content: "Code execution completed", toolName: "code_interpreter" });
+          }
+
+          // Handle function tool calls
+          if (data.type === "response.function_call_arguments.delta") {
+            // Tool call in progress - we'll emit when done
+          }
+
+          if (data.type === "response.function_call_arguments.done") {
+            const callId = data.item_id || data.call_id;
+            const toolName = data.name || "unknown";
+            if (callId) {
+              pendingToolCalls.set(callId, toolName);
+            }
+            log.info(`[TOOL CALL] ${toolName}`);
+            onEvent?.({ type: "tool_call", content: `Calling ${toolName}...`, toolName });
+          }
+
+          // Handle output text streaming
+          if (data.type === "response.output_text.delta" && data.delta) {
+            // Could stream text incrementally here if needed
+          }
+
+          if (data.type === "response.output_text.done" && data.text) {
+            log.info(`[MODEL OUTPUT] ${data.text.substring(0, 200)}...`);
+            onEvent?.({ type: "reasoning", content: data.text });
           }
         }
 
-        if (anyItem.type === "message_output_item" && anyItem.rawItem) {
-          const content = anyItem.rawItem.content;
-          if (Array.isArray(content)) {
-            for (const part of content) {
-              if (part.type === "output_text" && part.text) {
-                log.info(`[MODEL OUTPUT] ${part.text.substring(0, 300)}...`);
-                onEvent?.({ type: "reasoning", content: part.text });
+        // Handle run_item_stream_event for tool results and other items
+        if (anyEvent.type === "run_item_stream_event" && anyEvent.item) {
+          const item = anyEvent.item;
+
+          if (item.type === "tool_call_item") {
+            const toolName = item.name || item.rawItem?.name || "unknown";
+            log.info(`[TOOL START] ${toolName}`);
+            onEvent?.({ type: "tool_call", content: `Calling ${toolName}...`, toolName });
+          }
+
+          if (item.type === "tool_call_output_item") {
+            const toolName = item.name || item.rawItem?.name || "tool";
+            const output = typeof item.output === "string" ? item.output : JSON.stringify(item.output);
+            const truncated = output.length > 200 ? output.substring(0, 200) + "..." : output;
+            log.info(`[TOOL END] ${toolName}: ${truncated.substring(0, 100)}`);
+            onEvent?.({ type: "tool_result", content: truncated, toolName });
+          }
+
+          if (item.type === "reasoning_item" && item.rawItem) {
+            const reasoningText = extractReasoningText(item.rawItem);
+            if (reasoningText) {
+              log.info(`[REASONING] ${reasoningText.substring(0, 200)}...`);
+              onEvent?.({ type: "reasoning", content: reasoningText });
+            }
+          }
+
+          if (item.type === "message_output_item" && item.rawItem) {
+            const content = item.rawItem.content;
+            if (Array.isArray(content)) {
+              for (const part of content) {
+                if (part.type === "output_text" && part.text) {
+                  log.info(`[MODEL OUTPUT] ${part.text.substring(0, 300)}...`);
+                  onEvent?.({ type: "reasoning", content: part.text });
+                }
               }
             }
           }
         }
       }
+
+      // Wait for stream to complete and get final result
+      await stream.completed;
+      // Get result from stream after completion
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const streamAny = stream as any;
+      const result = streamAny.result || streamAny._result || { history: conversationHistory };
+      conversationHistory = result.history || conversationHistory;
 
       // Render if SVG exists (always render, even if mark_complete was called, to get final output)
       if (currentSvg) {
