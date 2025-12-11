@@ -4,10 +4,7 @@ import fs from "fs/promises";
 import path from "path";
 import os from "os";
 import puppeteer from "puppeteer-core";
-import chromium from "@sparticuz/chromium-min";
-
-// Chromium binary URL for serverless environments
-const CHROMIUM_URL = "https://github.com/nicholasgriffintn/chrome-aws-lambda-binaries/releases/download/v143.0.0/chromium-v143.0.0-pack.tar";
+import chromium from "@sparticuz/chromium";
 
 // Logger for SSE route
 const log = {
@@ -42,7 +39,7 @@ async function pdfToImages(pdfBuffer: Buffer): Promise<string[]> {
     browser = await puppeteer.launch({
       args: isServerless ? chromium.args : ["--no-sandbox", "--disable-setuid-sandbox"],
       executablePath: isServerless
-        ? await chromium.executablePath(CHROMIUM_URL)
+        ? await chromium.executablePath()
         : process.platform === "darwin"
           ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
           : "/usr/bin/google-chrome",

@@ -9,12 +9,9 @@ import os from "os";
 import { exec } from "child_process";
 import { promisify } from "util";
 import puppeteer from "puppeteer-core";
-import chromium from "@sparticuz/chromium-min";
+import chromium from "@sparticuz/chromium";
 
 const execAsync = promisify(exec);
-
-// Chromium binary URL for serverless environments
-const CHROMIUM_URL = "https://github.com/nicholasgriffintn/chrome-aws-lambda-binaries/releases/download/v143.0.0/chromium-v143.0.0-pack.tar";
 
 // Helper to launch Puppeteer with correct Chrome for environment
 async function launchBrowser() {
@@ -22,7 +19,7 @@ async function launchBrowser() {
   return puppeteer.launch({
     args: isServerless ? chromium.args : ["--no-sandbox", "--disable-setuid-sandbox"],
     executablePath: isServerless
-      ? await chromium.executablePath(CHROMIUM_URL)
+      ? await chromium.executablePath()
       : process.platform === "darwin"
         ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
         : "/usr/bin/google-chrome",
