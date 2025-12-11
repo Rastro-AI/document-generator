@@ -29,6 +29,7 @@ export function JobEditor({ jobId, templateId, onBack, initialPrompt, initialFil
   // Initial creation streaming state
   const [isCreating, setIsCreating] = useState(!!initialFiles || !!initialAssetIds || !!initialPrompt);
   const [creationStatus, setCreationStatus] = useState<string>("Starting...");
+  const [creationTraces, setCreationTraces] = useState<Array<{ type: "reasoning" | "tool_call" | "tool_result" | "status"; content: string; toolName?: string }>>([]);
   const hasStartedCreation = useRef(false);
 
   const [localFields, setLocalFields] = useState<
@@ -93,6 +94,8 @@ export function JobEditor({ jobId, templateId, onBack, initialPrompt, initialFil
         if (trace.type === "status") {
           setCreationStatus(trace.content);
         }
+        // Collect all traces for display in chat
+        setCreationTraces(prev => [...prev, trace as { type: "reasoning" | "tool_call" | "tool_result" | "status"; content: string; toolName?: string }]);
       },
       // onResult
       () => {
@@ -396,6 +399,7 @@ export function JobEditor({ jobId, templateId, onBack, initialPrompt, initialFil
               initialUserFiles={initialFiles?.map(f => ({ name: f.name, type: f.type }))}
               isCreating={isCreating}
               creationStatus={creationStatus}
+              creationTraces={creationTraces}
               initialReasoningMode={initialReasoningMode}
               onFieldsUpdated={handleFieldsUpdated}
               onTemplateUpdated={handleTemplateUpdated}
@@ -408,7 +412,7 @@ export function JobEditor({ jobId, templateId, onBack, initialPrompt, initialFil
         <div className="w-1/2 flex flex-col bg-[#f5f5f7] p-4 pl-2">
           <div className="flex-1 min-h-0 bg-white rounded-xl overflow-hidden border border-[#d2d2d7] flex flex-col">
             {/* Tabs */}
-            <div className="flex-shrink-0 border-b border-[#e8e8ed] px-4 pt-3">
+            <div className="flex-shrink-0 px-4 pt-3 pb-2">
               <div className="flex gap-1 p-1 bg-[#f5f5f7] rounded-lg w-fit">
                 <button
                   onClick={() => setRightPanelTab("preview")}

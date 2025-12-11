@@ -29,6 +29,7 @@ interface ChatPanelProps {
   initialUserFiles?: { name: string; type: string }[];
   isCreating?: boolean;
   creationStatus?: string;
+  creationTraces?: AgentTrace[];
   initialReasoningMode?: ReasoningMode;
   onFieldsUpdated: (fields: Record<string, string | number | null>) => void;
   onTemplateUpdated: () => void;
@@ -95,7 +96,7 @@ function TracesDisplay({ traces }: { traces: AgentTrace[] }) {
 
 type ReasoningMode = "none" | "low";
 
-export function ChatPanel({ jobId, initialMessage, uploadedFiles, initialUserPrompt, initialUserFiles, isCreating, creationStatus, initialReasoningMode, onFieldsUpdated, onTemplateUpdated, onFilesChanged }: ChatPanelProps) {
+export function ChatPanel({ jobId, initialMessage, uploadedFiles, initialUserPrompt, initialUserFiles, isCreating, creationStatus, creationTraces, initialReasoningMode, onFieldsUpdated, onTemplateUpdated, onFilesChanged }: ChatPanelProps) {
   const [reasoningMode, setReasoningMode] = useState<ReasoningMode>(initialReasoningMode || "none");
   const [messages, setMessages] = useState<ChatMessage[]>(() => {
     const msgs: ChatMessage[] = [];
@@ -152,7 +153,7 @@ export function ChatPanel({ jobId, initialMessage, uploadedFiles, initialUserPro
     scrollToBottom();
   }, [messages]);
 
-  // Add assistant message when it arrives from server
+  // Add assistant message when it arrives from server (with traces if available)
   useEffect(() => {
     if (initialMessage && !messages.some(m => m.id === "initial")) {
       setMessages(prev => [...prev, {
@@ -160,9 +161,10 @@ export function ChatPanel({ jobId, initialMessage, uploadedFiles, initialUserPro
         role: "assistant",
         content: initialMessage,
         timestamp: new Date(),
+        traces: creationTraces && creationTraces.length > 0 ? creationTraces : undefined,
       }]);
     }
-  }, [initialMessage]);
+  }, [initialMessage, creationTraces]);
 
   // Handle click outside to unfocus
   useEffect(() => {
@@ -494,30 +496,33 @@ export function ChatPanel({ jobId, initialMessage, uploadedFiles, initialUserPro
                 </span>
               </div>
               {/* Live traces - expandable view of what's happening */}
-              {liveTraces.length > 0 && (
-                <div className="mt-2 pt-2 border-t border-[#e8e8ed]">
-                  <details className="text-[11px] text-[#86868b]">
-                    <summary className="cursor-pointer hover:text-[#1d1d1f] transition-colors">
-                      View details ({liveTraces.length} step{liveTraces.length !== 1 ? "s" : ""})
-                    </summary>
-                    <div className="mt-1 pl-2 border-l-2 border-[#e8e8ed] space-y-1 max-h-[150px] overflow-y-auto">
-                      {liveTraces.map((trace, idx) => (
-                        <div key={idx} className="text-[10px]">
-                          {trace.type === "status" && (
-                            <span className="text-[#86868b]">{trace.content}</span>
-                          )}
-                          {trace.type === "tool_call" && (
-                            <span className="text-[#0066CC] font-mono">{trace.toolName}()</span>
-                          )}
-                          {trace.type === "tool_result" && (
-                            <span className="text-[#00aa00]">✓ {trace.toolName}</span>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  </details>
-                </div>
-              )}
+              {(() => {
+                const tracesToShow = isCreating && creationTraces && creationTraces.length > 0 ? creationTraces : liveTraces;
+                return tracesToShow.length > 0 && (
+                  <div className="mt-2 pt-2 border-t border-[#e8e8ed]">
+                    <details className="text-[11px] text-[#86868b]" open>
+                      <summary className="cursor-pointer hover:text-[#1d1d1f] transition-colors">
+                        View details ({tracesToShow.length} step{tracesToShow.length !== 1 ? "s" : ""})
+                      </summary>
+                      <div className="mt-1 pl-2 border-l-2 border-[#e8e8ed] space-y-1 max-h-[150px] overflow-y-auto">
+                        {tracesToShow.map((trace, idx) => (
+                          <div key={idx} className="text-[10px]">
+                            {trace.type === "status" && (
+                              <span className="text-[#86868b]">{trace.content}</span>
+                            )}
+                            {trace.type === "tool_call" && (
+                              <span className="text-[#0066CC] font-mono">{trace.toolName}()</span>
+                            )}
+                            {trace.type === "tool_result" && (
+                              <span className="text-[#00aa00]">✓ {trace.toolName}</span>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </details>
+                  </div>
+                );
+              })()}
             </div>
           </div>
         )}
