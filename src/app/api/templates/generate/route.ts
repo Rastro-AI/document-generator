@@ -2,9 +2,6 @@ import { NextRequest } from "next/server";
 import { runTemplateGeneratorAgent, GeneratorTrace } from "@/lib/agents/template-generator";
 import puppeteer from "puppeteer-core";
 import chromium from "@sparticuz/chromium-min";
-import path from "path";
-import fs from "fs/promises";
-import os from "os";
 
 // Logger for SSE route
 const log = {
@@ -34,8 +31,8 @@ export const runtime = "nodejs";
 export const maxDuration = 300; // 5 minutes for complex generation
 
 /**
- * Convert PDF buffer to PNG image base64 using Puppeteer
- * Only converts the first page - multi-page PDFs are not supported
+ * Convert PDF buffer to PNG image using Puppeteer + PDF.js
+ * Renders PDF in an HTML page using Mozilla's PDF.js library
  */
 async function pdfToImages(pdfBuffer: Buffer): Promise<string[]> {
   const isServerless = process.env.VERCEL === "1" || process.env.AWS_LAMBDA_FUNCTION_NAME;
@@ -43,7 +40,6 @@ async function pdfToImages(pdfBuffer: Buffer): Promise<string[]> {
 
   let browser;
   try {
-    // Launch browser
     log.info(`Launching Puppeteer...`);
     const launchStart = Date.now();
 
@@ -52,7 +48,6 @@ async function pdfToImages(pdfBuffer: Buffer): Promise<string[]> {
       log.info(`Serverless mode: fetching chromium pack from ${chromiumPackUrl}`);
       const execPath = await chromium.executablePath(chromiumPackUrl);
       log.info(`Chromium executable path: ${execPath}`);
-      log.info(`Chromium args: ${JSON.stringify(chromium.args)}`);
 
       browser = await puppeteer.launch({
         args: chromium.args,
@@ -77,49 +72,111 @@ async function pdfToImages(pdfBuffer: Buffer): Promise<string[]> {
     const page = await browser.newPage();
     log.info(`New page created`);
 
-    // Listen for console messages and errors
-    page.on("console", (msg) => log.info(`Browser console [${msg.type()}]: ${msg.text()}`));
-    page.on("pageerror", (err) => log.error(`Browser page error: ${String(err)}`));
-    page.on("requestfailed", (req) => {
-      log.error(`Request failed: ${req.url()}`, {
-        failure: req.failure()?.errorText,
-        resourceType: req.resourceType(),
+    // Set viewport for US Letter at 2x scale
+    await page.setViewport({ width: 1632, height: 2112, deviceScaleFactor: 1 });
+    log.info(`Viewport set to 1632x2112`);
+
+    // Convert PDF to base64 for embedding
+    const pdfBase64 = pdfBuffer.toString("base64");
+    log.info(`PDF converted to base64`, { base64Length: pdfBase64.length });
+
+    // Create HTML page that uses PDF.js to render the PDF
+    const html = `
+<!DOCTYPE html>
+<html>
+<head>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; }
+    body { background: white; }
+    canvas { display: block; }
+  </style>
+</head>
+<body>
+  <canvas id="pdf-canvas"></canvas>
+  <script>
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+    const pdfData = atob('${pdfBase64}');
+    const pdfArray = new Uint8Array(pdfData.length);
+    for (let i = 0; i < pdfData.length; i++) {
+      pdfArray[i] = pdfData.charCodeAt(i);
+    }
+
+    pdfjsLib.getDocument({ data: pdfArray }).promise.then(function(pdf) {
+      console.log('PDF loaded, pages:', pdf.numPages);
+      return pdf.getPage(1);
+    }).then(function(page) {
+      const scale = 2;
+      const viewport = page.getViewport({ scale });
+
+      const canvas = document.getElementById('pdf-canvas');
+      const context = canvas.getContext('2d');
+      canvas.height = viewport.height;
+      canvas.width = viewport.width;
+
+      console.log('Rendering page at', viewport.width, 'x', viewport.height);
+
+      return page.render({
+        canvasContext: context,
+        viewport: viewport
+      }).promise;
+    }).then(function() {
+      console.log('PDF_RENDER_COMPLETE');
+    }).catch(function(error) {
+      console.error('PDF render error:', error);
+    });
+  </script>
+</body>
+</html>`;
+
+    log.info(`Setting HTML content with PDF.js...`);
+    await page.setContent(html, { waitUntil: "networkidle0", timeout: 60000 });
+
+    // Wait for PDF.js to finish rendering
+    log.info(`Waiting for PDF render to complete...`);
+    await page.waitForFunction(
+      () => {
+        const canvas = document.getElementById("pdf-canvas") as HTMLCanvasElement;
+        return canvas && canvas.width > 0 && canvas.height > 0;
+      },
+      { timeout: 30000 }
+    );
+
+    // Also wait for our completion log message
+    await page.evaluate(() => {
+      return new Promise<void>((resolve) => {
+        const checkLogs = setInterval(() => {
+          // Give PDF.js a moment to finish
+          setTimeout(() => {
+            clearInterval(checkLogs);
+            resolve();
+          }, 500);
+        }, 100);
       });
     });
 
-    await page.setViewport({ width: 816, height: 1056, deviceScaleFactor: 2 });
-    log.info(`Viewport set`);
+    log.info(`PDF rendered, taking screenshot...`);
 
-    // Write PDF to /tmp and load via file:// protocol
-    const tempDir = os.tmpdir();
-    const tempPdfPath = path.join(tempDir, `pdf_${Date.now()}_${Math.random().toString(36).slice(2)}.pdf`);
-    await fs.writeFile(tempPdfPath, pdfBuffer);
-    log.info(`PDF written to ${tempPdfPath}`);
+    // Get canvas dimensions and resize viewport if needed
+    const canvasDims = await page.evaluate(() => {
+      const canvas = document.getElementById("pdf-canvas") as HTMLCanvasElement;
+      return { width: canvas.width, height: canvas.height };
+    });
+    log.info(`Canvas dimensions: ${canvasDims.width}x${canvasDims.height}`);
 
-    const pdfUrl = `file://${tempPdfPath}`;
-    log.info(`Navigating to ${pdfUrl}...`);
-    const navStart = Date.now();
-
-    const response = await page.goto(pdfUrl, {
-      waitUntil: "networkidle0",
-      timeout: 60000,
+    await page.setViewport({
+      width: canvasDims.width,
+      height: canvasDims.height,
+      deviceScaleFactor: 1
     });
 
-    log.info(`Navigation complete in ${Date.now() - navStart}ms`, {
-      status: response?.status(),
-      ok: response?.ok(),
-      url: response?.url()?.substring(0, 100),
-    });
-
-    // Take screenshot
-    log.info(`Taking screenshot...`);
-    const screenshot = await page.screenshot({ type: "png", fullPage: false });
+    const screenshot = await page.screenshot({ type: "png", fullPage: true });
     log.info(`Screenshot taken, size: ${screenshot.length} bytes`);
 
     const images = [`data:image/png;base64,${Buffer.from(screenshot).toString("base64")}`];
 
     await browser.close();
-    await fs.unlink(tempPdfPath).catch(() => {}); // Clean up temp file
     log.info(`Browser closed, returning ${images.length} image(s)`);
 
     return images;
