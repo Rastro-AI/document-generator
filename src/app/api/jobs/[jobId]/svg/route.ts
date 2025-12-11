@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getJobOutputSvg } from "@/lib/fs-utils";
+import { exportFigmaCompatibleSvg } from "@/lib/svg-template-renderer";
 
 export async function GET(
   request: NextRequest,
@@ -7,7 +8,7 @@ export async function GET(
 ) {
   try {
     const { jobId } = await params;
-    const svgContent = await getJobOutputSvg(jobId);
+    let svgContent = await getJobOutputSvg(jobId);
 
     if (!svgContent) {
       return NextResponse.json(
@@ -15,6 +16,9 @@ export async function GET(
         { status: 404 }
       );
     }
+
+    // Convert to pure SVG (foreignObject → native text, CSS classes → inline styles)
+    svgContent = exportFigmaCompatibleSvg(svgContent);
 
     return new NextResponse(svgContent, {
       headers: {
