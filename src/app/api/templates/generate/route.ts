@@ -3,6 +3,8 @@ import { runTemplateGeneratorAgent, GeneratorTrace } from "@/lib/agents/template
 import puppeteer from "puppeteer-core";
 import chromium from "@sparticuz/chromium-min";
 import path from "path";
+import fs from "fs/promises";
+import os from "os";
 
 // Path to bundled chromium brotli files (included in repo for Vercel deployment)
 const CHROMIUM_PACK_PATH = path.join(process.cwd(), "bin", "chromium-pack");
@@ -78,15 +80,17 @@ async function pdfToImages(pdfBuffer: Buffer): Promise<string[]> {
     await page.setViewport({ width: 816, height: 1056, deviceScaleFactor: 2 });
     log.info(`Viewport set`);
 
-    // Use data URL to load PDF
-    const pdfBase64 = pdfBuffer.toString("base64");
-    const pdfDataUrl = `data:application/pdf;base64,${pdfBase64}`;
-    log.info(`PDF data URL created, length: ${pdfDataUrl.length} chars`);
+    // Write PDF to /tmp and load via file:// protocol
+    const tempDir = os.tmpdir();
+    const tempPdfPath = path.join(tempDir, `pdf_${Date.now()}_${Math.random().toString(36).slice(2)}.pdf`);
+    await fs.writeFile(tempPdfPath, pdfBuffer);
+    log.info(`PDF written to ${tempPdfPath}`);
 
-    log.info(`Navigating to PDF data URL...`);
+    const pdfUrl = `file://${tempPdfPath}`;
+    log.info(`Navigating to ${pdfUrl}...`);
     const navStart = Date.now();
 
-    const response = await page.goto(pdfDataUrl, {
+    const response = await page.goto(pdfUrl, {
       waitUntil: "networkidle0",
       timeout: 60000,
     });
@@ -105,6 +109,7 @@ async function pdfToImages(pdfBuffer: Buffer): Promise<string[]> {
     const images = [`data:image/png;base64,${Buffer.from(screenshot).toString("base64")}`];
 
     await browser.close();
+    await fs.unlink(tempPdfPath).catch(() => {}); // Clean up temp file
     log.info(`Browser closed, returning ${images.length} image(s)`);
 
     return images;
