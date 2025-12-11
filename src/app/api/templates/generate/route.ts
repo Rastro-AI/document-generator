@@ -6,8 +6,14 @@ import path from "path";
 import fs from "fs/promises";
 import os from "os";
 
-// Chromium pack URL - served from production domain to avoid auth on preview deployments
-const CHROMIUM_PACK_URL = "https://document-generator-lac.vercel.app/chromium-pack.tar";
+// Build chromium pack URL from current deployment (works on preview and production)
+function getChromiumPackUrl(): string {
+  const vercelUrl = process.env.VERCEL_URL;
+  if (vercelUrl) {
+    return `https://${vercelUrl}/chromium-pack.tar`;
+  }
+  return "http://localhost:3000/chromium-pack.tar";
+}
 
 // Logger for SSE route
 const log = {
@@ -39,8 +45,9 @@ async function pdfToImages(pdfBuffer: Buffer): Promise<string[]> {
     const launchStart = Date.now();
 
     if (isServerless) {
-      log.info(`Serverless mode: fetching chromium pack from ${CHROMIUM_PACK_URL}`);
-      const execPath = await chromium.executablePath(CHROMIUM_PACK_URL);
+      const chromiumPackUrl = getChromiumPackUrl();
+      log.info(`Serverless mode: fetching chromium pack from ${chromiumPackUrl}`);
+      const execPath = await chromium.executablePath(chromiumPackUrl);
       log.info(`Chromium executable path: ${execPath}`);
       log.info(`Chromium args: ${JSON.stringify(chromium.args)}`);
 

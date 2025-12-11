@@ -19,8 +19,14 @@ import { PDFDocument } from "pdf-lib";
 import puppeteer from "puppeteer-core";
 import chromium from "@sparticuz/chromium-min";
 
-// Chromium pack URL - served from production domain to avoid auth on preview deployments
-const CHROMIUM_PACK_URL = "https://document-generator-lac.vercel.app/chromium-pack.tar";
+// Build chromium pack URL from current deployment (works on preview and production)
+function getChromiumPackUrl(): string {
+  const vercelUrl = process.env.VERCEL_URL;
+  if (vercelUrl) {
+    return `https://${vercelUrl}/chromium-pack.tar`;
+  }
+  return "http://localhost:3000/chromium-pack.tar";
+}
 
 const execAsync = promisify(exec);
 
@@ -350,7 +356,7 @@ export async function svgToPdf(svgContent: string): Promise<Buffer> {
     if (isServerless) {
       browser = await puppeteer.launch({
         args: chromium.args,
-        executablePath: await chromium.executablePath(CHROMIUM_PACK_URL),
+        executablePath: await chromium.executablePath(getChromiumPackUrl()),
         headless: true,
       });
     } else {

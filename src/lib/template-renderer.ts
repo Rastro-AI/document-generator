@@ -13,8 +13,14 @@ import chromium from "@sparticuz/chromium-min";
 
 const execAsync = promisify(exec);
 
-// Chromium pack URL - served from production domain to avoid auth on preview deployments
-const CHROMIUM_PACK_URL = "https://document-generator-lac.vercel.app/chromium-pack.tar";
+// Build chromium pack URL from current deployment (works on preview and production)
+function getChromiumPackUrl(): string {
+  const vercelUrl = process.env.VERCEL_URL;
+  if (vercelUrl) {
+    return `https://${vercelUrl}/chromium-pack.tar`;
+  }
+  return "http://localhost:3000/chromium-pack.tar";
+}
 
 // Helper to launch Puppeteer with correct Chrome for environment
 async function launchBrowser() {
@@ -23,7 +29,7 @@ async function launchBrowser() {
   if (isServerless) {
     return puppeteer.launch({
       args: chromium.args,
-      executablePath: await chromium.executablePath(CHROMIUM_PACK_URL),
+      executablePath: await chromium.executablePath(getChromiumPackUrl()),
       headless: true,
     });
   }
