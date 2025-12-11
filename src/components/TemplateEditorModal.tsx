@@ -1466,9 +1466,16 @@ export function TemplateEditorModal({
       <div className="relative w-full max-w-5xl max-h-[90vh] bg-white rounded-2xl shadow-xl flex flex-col overflow-hidden">
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-[#d2d2d7]">
-          <h2 className="text-[17px] font-semibold text-[#1d1d1f]">
-            {isCreating ? "New Template" : "Edit Template"}
-          </h2>
+          <div>
+            <h2 className="text-[17px] font-semibold text-[#1d1d1f]">
+              {isCreating ? "New Template" : "Edit Template"}
+            </h2>
+            {isCreating && (
+              <p className="text-[12px] text-[#86868b] mt-0.5">
+                If you passed something to copy, the agent first recreates it before adding template fields
+              </p>
+            )}
+          </div>
           <button
             onClick={onClose}
             className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-[#f5f5f7] transition-colors"
