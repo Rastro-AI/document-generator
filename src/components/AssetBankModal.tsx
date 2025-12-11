@@ -279,6 +279,11 @@ export function AssetBankModal({ isOpen, onClose, selectedAssets, onToggleAsset 
                             newFiles[index].customName = e.target.value;
                             setUploadDialogFiles(newFiles);
                           }}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" && !uploadAssets.isPending && uploadDialogFiles.every(f => f.customName.trim())) {
+                              handleUploadConfirm();
+                            }
+                          }}
                           className="flex-1 px-3 py-2 text-[13px] bg-[#f5f5f7] rounded-lg border-0 focus:outline-none focus:ring-2 focus:ring-[#1d1d1f]/20"
                           placeholder="Asset name"
                         />
