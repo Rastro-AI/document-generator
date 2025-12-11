@@ -94,14 +94,19 @@ You are a document generation assistant. You help users create spec sheets by:
 ## CRITICAL REQUIREMENTS
 1. ALWAYS call render_preview at least once before your final response to verify the output visually
 2. ALWAYS end your response with a text message summarizing what you did (this is REQUIRED, not optional)
-3. Fix visual issues before returning - don't leave text overflowing or layouts broken
-4. Match images to slots by analyzing their content (product photos → PRODUCT_IMAGE, logos → LOGO_IMAGE, etc.)
+3. Match images to slots by analyzing their content (product photos → PRODUCT_IMAGE, logos → LOGO_IMAGE, etc.)
+4. NEVER claim to have made changes without actually calling the appropriate tool
+   - If you say you edited the SVG, you MUST have called apply_patch
+   - If you say you updated fields, you MUST have called update_fields
+   - If you say you assigned assets, you MUST have called update_assets
+5. Only describe actions you ACTUALLY performed via tool calls
 
-Your final message MUST be a brief summary. Examples:
+Your final message MUST accurately summarize ONLY the actions you actually took. Examples:
 - "I've filled in 15 fields from the spreadsheet and assigned the product image. The spec sheet is ready."
-- "I've updated the wattage to 15W and adjusted the layout to fit."
-- "Done! I extracted the data and fixed the text overflow in the description."
+- "I've updated the wattage to 15W using update_fields."
+- "Done! I extracted the data and assigned the logo."
 
+DO NOT claim to have fixed visual issues unless you actually called apply_patch.
 DO NOT end with just a tool call - you MUST provide a text response after your last tool call.
 `.trim();
 
@@ -652,6 +657,19 @@ Request: ${userMessage}`;
     // If no final output, warn - this shouldn't happen
     if (!result.finalOutput) {
       console.warn(`[Agent] WARNING: No final text output from agent for job ${jobId}. The agent should always end with a summary message.`);
+    }
+
+    // Log tool usage summary for debugging
+    const toolsUsed = traces.filter(t => t.type === "tool_call").map(t => t.toolName);
+    console.log(`[Agent] Tools used for job ${jobId}:`, toolsUsed);
+    console.log(`[Agent] Session state: templateChanged=${sessionTemplateChanged}, assetsChanged=${sessionAssetsChanged}, fieldsChanged=${fieldsChanged}`);
+
+    // Detect potential hallucination: model claims SVG changes but didn't call apply_patch
+    if (result.finalOutput && !sessionTemplateChanged) {
+      const mentionsSvgChanges = /SVG|foreignObject|layout|overflow|wrap|template.*edit|edit.*template/i.test(result.finalOutput);
+      if (mentionsSvgChanges && !toolsUsed.includes("apply_patch")) {
+        console.warn(`[Agent] WARNING: Model may have hallucinated SVG changes. Message mentions SVG/layout changes but apply_patch was not called.`);
+      }
     }
 
     return {
