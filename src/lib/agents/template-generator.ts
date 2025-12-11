@@ -6,7 +6,7 @@
 
 import {
   Agent,
-  run,
+  Runner,
   tool,
   setDefaultModelProvider,
   applyPatchTool,
@@ -553,6 +553,27 @@ START NOW: Design the SVG from the prompt, then write_svg.`}`;
     // Track last render for comparison
     let lastRenderPngBase64: string | null = null;
 
+    // Create a Runner with lifecycle hooks for real-time tool call updates
+    const runner = new Runner();
+
+    // Hook: Tool execution started - emit event immediately
+    runner.on("agent_tool_start", (_context, _agent, tool, _details) => {
+      const toolName = tool.name || "unknown";
+      log.info(`[TOOL START] ${toolName}`);
+      onEvent?.({ type: "tool_call", content: `Calling ${toolName}...`, toolName });
+    });
+
+    // Hook: Tool execution ended - emit result
+    runner.on("agent_tool_end", (_context, _agent, tool, result, _details) => {
+      const toolName = tool.name || "unknown";
+      // Truncate long results for display
+      const truncatedResult = typeof result === "string" && result.length > 200
+        ? result.substring(0, 200) + "..."
+        : String(result);
+      log.info(`[TOOL END] ${toolName}: ${truncatedResult.substring(0, 100)}`);
+      onEvent?.({ type: "tool_result", content: truncatedResult, toolName });
+    });
+
     // Iteration loop - allow plenty of iterations for quality output
     const MAX_ITERATIONS = 15;
     log.info("Starting iteration loop", { maxIterations: MAX_ITERATIONS });
@@ -649,10 +670,11 @@ If it doesn't match → use patch_svg to fix the differences first.`;
       }
 
       log.info(`Running agent iteration ${iteration + 1}`);
-      const result = await run(agent, input, { maxTurns: 15 });
+      const result = await runner.run(agent, input, { maxTurns: 15 });
       conversationHistory = result.history || [];
 
-      // Process traces
+      // Process reasoning and message output traces
+      // (tool_call and tool_result are now handled via Runner hooks for real-time updates)
       for (const item of result.newItems || []) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const anyItem = item as any;
@@ -675,20 +697,6 @@ If it doesn't match → use patch_svg to fix the differences first.`;
               }
             }
           }
-        }
-
-        if (anyItem.type === "tool_call_item" && anyItem.rawItem) {
-          const toolName = anyItem.rawItem.name || "unknown";
-          log.info(`[TOOL CALL] ${toolName}`);
-        }
-
-        if (anyItem.type === "tool_call_output_item") {
-          const toolName = anyItem.rawItem?.name || "unknown";
-          const output = typeof anyItem.output === "string"
-            ? anyItem.output.substring(0, 150) + (anyItem.output.length > 150 ? "..." : "")
-            : String(anyItem.output).substring(0, 150);
-          log.info(`[TOOL RESULT] ${toolName}: ${output}`);
-          onEvent?.({ type: "tool_result", content: output, toolName });
         }
       }
 

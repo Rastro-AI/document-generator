@@ -1189,28 +1189,42 @@ export function TemplateEditorModal({
                                   <span className="text-[#86868b]">{trace.content}</span>
                                 </div>
                               )}
-                              {/* Tool call - collapsible header */}
-                              {trace.type === "tool_call" && (
-                                <button
-                                  onClick={() => toggleTraceExpanded(idx)}
-                                  className="flex items-center gap-1.5 text-[#0066CC] hover:bg-[#f5f5f7] px-1.5 py-0.5 rounded transition-colors w-full text-left"
-                                >
-                                  <svg
-                                    className={`w-2.5 h-2.5 flex-shrink-0 transition-transform ${expandedTraces.has(idx) ? "rotate-90" : ""}`}
-                                    fill="currentColor"
-                                    viewBox="0 0 20 20"
+                              {/* Tool call - show with spinner while in progress, checkmark when complete */}
+                              {trace.type === "tool_call" && (() => {
+                                // Check if next trace is the result for this tool call
+                                const nextTrace = generationTraces.filter((t) => t.type !== "version")[idx + 1];
+                                const hasResult = nextTrace?.type === "tool_result" && nextTrace?.toolName === trace.toolName;
+                                const isInProgress = !hasResult && !generationComplete;
+
+                                return (
+                                  <button
+                                    onClick={() => toggleTraceExpanded(idx)}
+                                    className="flex items-center gap-1.5 text-[#0066CC] hover:bg-[#f5f5f7] px-1.5 py-0.5 rounded transition-colors w-full text-left"
                                   >
-                                    <path fillRule="evenodd" d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z" clipRule="evenodd" />
-                                  </svg>
-                                  <svg className="w-3 h-3 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                                  </svg>
-                                  <span className="font-mono">{trace.toolName || trace.content}</span>
-                                </button>
-                              )}
-                              {/* Tool result - only show if parent tool_call is expanded */}
-                              {trace.type === "tool_result" && expandedTraces.has(idx - 1) && (
-                                <div className="flex items-start gap-2 pl-5 py-1 text-[#6e6e73] bg-[#fafafa] rounded ml-4 border-l border-[#e8e8ed]">
+                                    <svg
+                                      className={`w-2.5 h-2.5 flex-shrink-0 transition-transform ${expandedTraces.has(idx) ? "rotate-90" : ""}`}
+                                      fill="currentColor"
+                                      viewBox="0 0 20 20"
+                                    >
+                                      <path fillRule="evenodd" d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z" clipRule="evenodd" />
+                                    </svg>
+                                    {isInProgress ? (
+                                      <svg className="animate-spin w-3 h-3 flex-shrink-0" viewBox="0 0 24 24">
+                                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                                      </svg>
+                                    ) : (
+                                      <svg className="w-3 h-3 flex-shrink-0 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                                      </svg>
+                                    )}
+                                    <span className="font-mono">{trace.toolName || trace.content}</span>
+                                  </button>
+                                );
+                              })()}
+                              {/* Tool result - show inline with tool name */}
+                              {trace.type === "tool_result" && (
+                                <div className="flex items-start gap-2 pl-5 py-1 text-[#6e6e73] bg-[#f5f5f7] rounded ml-4 border-l-2 border-green-400">
                                   <span className="font-mono text-[10px] whitespace-pre-wrap">{trace.content}</span>
                                 </div>
                               )}

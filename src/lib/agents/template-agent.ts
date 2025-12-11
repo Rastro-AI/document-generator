@@ -6,7 +6,7 @@
 
 import {
   Agent,
-  run,
+  Runner,
   tool,
   setDefaultModelProvider,
   applyPatchTool,
@@ -506,6 +506,28 @@ export async function runTemplateAgent(
     },
     tools: [updateFieldsTool, updateAssetsTool, applyPatchTool({ editor: svgEditor }), renderPreviewTool],
   });
+
+  // Create a Runner with lifecycle hooks for real-time tool call updates
+  const runner = new Runner();
+  const traces: AgentTrace[] = [];
+
+  // Hook: Tool execution started - emit event immediately
+  runner.on("agent_tool_start", (_context, _agent, toolDef, _details) => {
+    const toolName = toolDef.name || "unknown";
+    console.log(`[TOOL START] ${toolName}`);
+    traces.push({ type: "tool_call", content: `Calling ${toolName}...`, toolName });
+    onEvent?.({ type: "tool_call", content: `Calling ${toolName}...`, toolName });
+  });
+
+  // Hook: Tool execution ended - emit result
+  runner.on("agent_tool_end", (_context, _agent, toolDef, result, _details) => {
+    const toolName = toolDef.name || "unknown";
+    // Result is always a string in the SDK
+    const output = result.length > 200 ? result.substring(0, 200) + "..." : result;
+    console.log(`[TOOL END] ${toolName}: ${output.substring(0, 100)}`);
+    traces.push({ type: "tool_result", content: output, toolName });
+    onEvent?.({ type: "tool_result", content: output, toolName });
+  });
   timing.end();
 
   try {
@@ -566,12 +588,12 @@ Request: ${userMessage}`;
     timing.end();
 
     timing.start("agent_run");
-    const result = await run(agent, input, { maxTurns: 5 });
+    const result = await runner.run(agent, input, { maxTurns: 5 });
     timing.end();
 
     timing.start("extract_traces");
-    const traces: AgentTrace[] = [];
-
+    // Tool calls and results are now handled via Runner hooks for real-time updates
+    // We just need to extract reasoning and field updates here
     for (const item of result.newItems || []) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const anyItem = item as any;
@@ -583,35 +605,10 @@ Request: ${userMessage}`;
         }
       }
 
-      if (anyItem.type === "tool_call_item" && anyItem.rawItem) {
-        const rawItem = anyItem.rawItem;
-        const toolName = rawItem.name || "unknown";
-        traces.push({
-          type: "tool_call",
-          content: `Calling ${toolName}`,
-          toolName
-        });
-      }
-
+      // Extract field updates from tool results
       if (anyItem.type === "tool_call_output_item") {
         const rawItem = anyItem.rawItem;
         const toolName = rawItem?.name || "unknown";
-        let output: string;
-        if (typeof anyItem.output === "string") {
-          output = anyItem.output.substring(0, 100) + (anyItem.output.length > 100 ? "..." : "");
-        } else if (Array.isArray(anyItem.output)) {
-          // Handle render_preview which returns array of content blocks
-          output = `[${anyItem.output.length} content blocks - preview rendered]`;
-        } else {
-          output = JSON.stringify(anyItem.output).substring(0, 100);
-        }
-        traces.push({
-          type: "tool_result",
-          content: output,
-          toolName
-        });
-
-        // Extract field updates
         if (toolName === "update_fields") {
           try {
             const parsed = JSON.parse(anyItem.output);
@@ -756,6 +753,27 @@ export async function runCodeTweakAgent(
     tools: [applyPatchTool({ editor: codeTweakEditor })],
   });
 
+  // Create a Runner with lifecycle hooks for real-time tool call updates
+  const runner = new Runner();
+  const traces: AgentTrace[] = [];
+
+  // Hook: Tool execution started
+  runner.on("agent_tool_start", (_context, _agent, toolDef, _details) => {
+    const toolName = toolDef.name || "unknown";
+    traces.push({ type: "tool_call", content: `Calling ${toolName}...`, toolName });
+    onEvent?.({ type: "tool_call", content: `Calling ${toolName}...`, toolName });
+  });
+
+  // Hook: Tool execution ended
+  runner.on("agent_tool_end", (_context, _agent, toolDef, result, _details) => {
+    const toolName = toolDef.name || "unknown";
+    const output = typeof result === "string" && result.length > 100
+      ? result.substring(0, 100) + "..."
+      : String(result).substring(0, 100);
+    traces.push({ type: "tool_result", content: output, toolName });
+    onEvent?.({ type: "tool_result", content: output, toolName });
+  });
+
   try {
     const contextMessage = `CURRENT SVG TEMPLATE:
 \`\`\`svg
@@ -769,10 +787,9 @@ Request: ${prompt}`;
       ? [...previousHistory, { role: "user", content: contextMessage }]
       : contextMessage;
 
-    const result = await run(agent, input, { maxTurns: 5 });
+    const result = await runner.run(agent, input, { maxTurns: 5 });
 
-    // Collect traces
-    const traces: AgentTrace[] = [];
+    // Extract reasoning from result (tool calls handled via hooks)
     for (const item of result.newItems || []) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const anyItem = item as any;
@@ -782,19 +799,6 @@ Request: ${prompt}`;
         if (reasoningText) {
           traces.push({ type: "reasoning", content: reasoningText });
         }
-      }
-
-      if (anyItem.type === "tool_call_item" && anyItem.rawItem) {
-        const toolName = anyItem.rawItem.name || "unknown";
-        traces.push({ type: "tool_call", content: `Calling ${toolName}`, toolName });
-      }
-
-      if (anyItem.type === "tool_call_output_item") {
-        const toolName = anyItem.rawItem?.name || "unknown";
-        const output = typeof anyItem.output === "string"
-          ? anyItem.output.substring(0, 100)
-          : String(anyItem.output).substring(0, 100);
-        traces.push({ type: "tool_result", content: output, toolName });
       }
     }
 
