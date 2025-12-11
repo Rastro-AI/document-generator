@@ -17,11 +17,7 @@ import os from "os";
 import { Resvg } from "@resvg/resvg-js";
 import { PDFDocument } from "pdf-lib";
 import puppeteer from "puppeteer-core";
-import chromium from "@sparticuz/chromium-min";
-
-// Chromium pack URL for serverless (downloads once per cold start, cached in /tmp)
-// https://github.com/Sparticuz/chromium/releases
-const CHROMIUM_PACK_URL = "https://github.com/Sparticuz/chromium/releases/download/v143.0.0/chromium-v143.0.0-pack.x64.tar";
+import chromium from "@sparticuz/chromium";
 
 const execAsync = promisify(exec);
 
@@ -344,14 +340,14 @@ export async function svgToPdf(svgContent: string): Promise<Buffer> {
   try {
     log.info("Converting SVG to PDF with Puppeteer");
 
-    // Use @sparticuz/chromium-min for serverless, local Chrome for dev
+    // Use @sparticuz/chromium for serverless, local Chrome for dev
     const isServerless = process.env.VERCEL === "1" || process.env.AWS_LAMBDA_FUNCTION_NAME;
 
     let browser;
     if (isServerless) {
       browser = await puppeteer.launch({
         args: chromium.args,
-        executablePath: await chromium.executablePath(CHROMIUM_PACK_URL),
+        executablePath: await chromium.executablePath(),
         headless: true,
       });
     } else {

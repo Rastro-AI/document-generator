@@ -1,11 +1,7 @@
 import { NextRequest } from "next/server";
 import { runTemplateGeneratorAgent, GeneratorTrace } from "@/lib/agents/template-generator";
 import puppeteer from "puppeteer-core";
-import chromium from "@sparticuz/chromium-min";
-
-// Chromium pack URL for serverless (downloads once per cold start, cached in /tmp)
-// https://github.com/Sparticuz/chromium/releases
-const CHROMIUM_PACK_URL = "https://github.com/Sparticuz/chromium/releases/download/v143.0.0/chromium-v143.0.0-pack.x64.tar";
+import chromium from "@sparticuz/chromium";
 
 // Logger for SSE route
 const log = {
@@ -37,8 +33,8 @@ async function pdfToImages(pdfBuffer: Buffer): Promise<string[]> {
     const launchStart = Date.now();
 
     if (isServerless) {
-      log.info(`Serverless mode: fetching chromium executable path from ${CHROMIUM_PACK_URL}`);
-      const execPath = await chromium.executablePath(CHROMIUM_PACK_URL);
+      log.info(`Serverless mode: getting bundled chromium executable path`);
+      const execPath = await chromium.executablePath();
       log.info(`Chromium executable path: ${execPath}`);
       log.info(`Chromium args: ${JSON.stringify(chromium.args)}`);
 
