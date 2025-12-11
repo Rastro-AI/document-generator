@@ -1,8 +1,5 @@
 import { NextRequest } from "next/server";
 import { runTemplateGeneratorAgent, GeneratorTrace } from "@/lib/agents/template-generator";
-import fs from "fs/promises";
-import path from "path";
-import os from "os";
 import puppeteer from "puppeteer-core";
 import chromium from "@sparticuz/chromium-min";
 
@@ -28,16 +25,11 @@ export const maxDuration = 300; // 5 minutes for complex generation
 /**
  * Convert PDF buffer to PNG image base64 using Puppeteer
  * Only converts the first page - multi-page PDFs are not supported
+ * Uses data URL to avoid file:// protocol issues on serverless
  */
 async function pdfToImages(pdfBuffer: Buffer): Promise<string[]> {
-  const tempDir = os.tmpdir();
-  const tempId = `pdf_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-  const pdfPath = path.join(tempDir, `${tempId}.pdf`);
-
   let browser;
   try {
-    await fs.writeFile(pdfPath, pdfBuffer);
-
     // Launch Puppeteer with correct Chrome for environment (Vercel vs local)
     const isServerless = process.env.VERCEL === "1" || process.env.AWS_LAMBDA_FUNCTION_NAME;
 
@@ -58,12 +50,13 @@ async function pdfToImages(pdfBuffer: Buffer): Promise<string[]> {
     }
 
     const page = await browser.newPage();
-
-    // Load PDF using file:// protocol
-    const pdfUrl = `file://${pdfPath}`;
-    await page.goto(pdfUrl, { waitUntil: "networkidle0" });
-
     await page.setViewport({ width: 816, height: 1056, deviceScaleFactor: 2 }); // Letter size at 96dpi * 2
+
+    // Use data URL to load PDF (avoids file:// protocol issues on serverless)
+    const pdfBase64 = pdfBuffer.toString("base64");
+    const pdfDataUrl = `data:application/pdf;base64,${pdfBase64}`;
+
+    await page.goto(pdfDataUrl, { waitUntil: "networkidle0", timeout: 30000 });
 
     const images: string[] = [];
 
@@ -74,12 +67,10 @@ async function pdfToImages(pdfBuffer: Buffer): Promise<string[]> {
     log.info(`PDF converted to ${images.length} image(s) using Puppeteer`);
 
     await browser.close();
-    await fs.unlink(pdfPath).catch(() => {});
 
     return images;
   } catch (error) {
     if (browser) await browser.close().catch(() => {});
-    await fs.unlink(pdfPath).catch(() => {});
     throw new Error(`PDF conversion failed: ${error}`);
   }
 }

@@ -287,32 +287,30 @@ export async function renderTemplateCode(
 
 /**
  * Convert PDF buffer to PNG base64 using Puppeteer
+ * Uses data URL to avoid file:// protocol issues on serverless
  */
 export async function pdfToPng(pdfBuffer: Buffer, _dpi: number = 200): Promise<string> {
-  const tempDir = os.tmpdir();
-  const tempId = `pdf_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-  const pdfPath = path.join(tempDir, `${tempId}.pdf`);
-
   let browser;
   try {
-    await fs.writeFile(pdfPath, pdfBuffer);
-
     // Launch Puppeteer with correct Chrome for environment
     browser = await launchBrowser();
 
     const page = await browser.newPage();
-    await page.goto(`file://${pdfPath}`, { waitUntil: "networkidle0" });
     await page.setViewport({ width: 816, height: 1056, deviceScaleFactor: 2 });
+
+    // Use data URL to load PDF (avoids file:// protocol issues on serverless)
+    const pdfBase64 = pdfBuffer.toString("base64");
+    const pdfDataUrl = `data:application/pdf;base64,${pdfBase64}`;
+
+    await page.goto(pdfDataUrl, { waitUntil: "networkidle0", timeout: 30000 });
 
     const screenshot = await page.screenshot({ type: "png", fullPage: false });
 
     await browser.close();
-    await fs.unlink(pdfPath).catch(() => {});
 
     return `data:image/png;base64,${Buffer.from(screenshot).toString("base64")}`;
   } catch (error) {
     if (browser) await browser.close().catch(() => {});
-    await fs.unlink(pdfPath).catch(() => {});
     throw new Error(`PDF conversion failed: ${error}`);
   }
 }
