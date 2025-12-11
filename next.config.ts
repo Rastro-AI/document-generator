@@ -6,6 +6,9 @@ const nextConfig: NextConfig = {
     "@resvg/resvg-js",
     "@sparticuz/chromium-min",
     "puppeteer-core",
+    "pdf-to-png-converter",
+    "@napi-rs/canvas",
+    "canvas",
   ],
 };
 
