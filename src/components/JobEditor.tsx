@@ -27,8 +27,8 @@ export function JobEditor({ jobId, templateId, onBack, initialPrompt, initialFil
     job?.templateId || templateId || null
   );
 
-  // Initial creation streaming state
-  const [isCreating, setIsCreating] = useState(!!initialFiles || !!initialAssetIds || !!initialPrompt);
+  // Initial creation streaming state - always true if we have a templateId (streaming will happen)
+  const [isCreating, setIsCreating] = useState(!!templateId);
   const [creationStatus, setCreationStatus] = useState<string>("Starting...");
   const [creationTraces, setCreationTraces] = useState<Array<{ type: "reasoning" | "tool_call" | "tool_result" | "status"; content: string; toolName?: string }>>([]);
   const hasStartedCreation = useRef(false);
