@@ -154,17 +154,30 @@ export function ChatPanel({ jobId, initialMessage, uploadedFiles, initialUserPro
     scrollToBottom();
   }, [messages]);
 
-  // Add assistant message when it arrives from server (with traces if available)
+  // Add or update assistant message when it arrives from server (with traces if available)
   useEffect(() => {
-    if (initialMessage && !messages.some(m => m.id === "initial")) {
-      setMessages(prev => [...prev, {
+    if (!initialMessage) return;
+
+    setMessages(prev => {
+      const existingIndex = prev.findIndex(m => m.id === "initial");
+      const newMessage: ChatMessage = {
         id: "initial",
         role: "assistant",
         content: initialMessage,
         timestamp: new Date(),
         traces: creationTraces && creationTraces.length > 0 ? creationTraces : undefined,
-      }]);
-    }
+      };
+
+      if (existingIndex >= 0) {
+        // Update existing message (handles "Processing..." -> real message transition)
+        const updated = [...prev];
+        updated[existingIndex] = newMessage;
+        return updated;
+      } else {
+        // Add new message
+        return [...prev, newMessage];
+      }
+    });
   }, [initialMessage, creationTraces]);
 
   // Handle click outside to unfocus
