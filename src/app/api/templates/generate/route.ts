@@ -25,53 +25,98 @@ export const maxDuration = 300; // 5 minutes for complex generation
 /**
  * Convert PDF buffer to PNG image base64 using Puppeteer
  * Only converts the first page - multi-page PDFs are not supported
- * Uses data URL to avoid file:// protocol issues on serverless
  */
 async function pdfToImages(pdfBuffer: Buffer): Promise<string[]> {
+  const isServerless = process.env.VERCEL === "1" || process.env.AWS_LAMBDA_FUNCTION_NAME;
+  log.info(`pdfToImages starting`, { isServerless, pdfSize: pdfBuffer.length });
+
   let browser;
   try {
-    // Launch Puppeteer with correct Chrome for environment (Vercel vs local)
-    const isServerless = process.env.VERCEL === "1" || process.env.AWS_LAMBDA_FUNCTION_NAME;
+    // Launch browser
+    log.info(`Launching Puppeteer...`);
+    const launchStart = Date.now();
 
     if (isServerless) {
+      log.info(`Serverless mode: fetching chromium executable path from ${CHROMIUM_PACK_URL}`);
+      const execPath = await chromium.executablePath(CHROMIUM_PACK_URL);
+      log.info(`Chromium executable path: ${execPath}`);
+      log.info(`Chromium args: ${JSON.stringify(chromium.args)}`);
+
       browser = await puppeteer.launch({
         args: chromium.args,
-        executablePath: await chromium.executablePath(CHROMIUM_PACK_URL),
+        executablePath: execPath,
         headless: true,
       });
     } else {
+      const localChrome = process.platform === "darwin"
+        ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+        : "/usr/bin/google-chrome";
+      log.info(`Local mode: using Chrome at ${localChrome}`);
+
       browser = await puppeteer.launch({
         args: ["--no-sandbox", "--disable-setuid-sandbox"],
-        executablePath: process.platform === "darwin"
-          ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-          : "/usr/bin/google-chrome",
+        executablePath: localChrome,
         headless: true,
       });
     }
 
-    const page = await browser.newPage();
-    await page.setViewport({ width: 816, height: 1056, deviceScaleFactor: 2 }); // Letter size at 96dpi * 2
+    log.info(`Browser launched in ${Date.now() - launchStart}ms`);
 
-    // Use data URL to load PDF (avoids file:// protocol issues on serverless)
+    const page = await browser.newPage();
+    log.info(`New page created`);
+
+    // Listen for console messages and errors
+    page.on("console", (msg) => log.info(`Browser console [${msg.type()}]: ${msg.text()}`));
+    page.on("pageerror", (err) => log.error(`Browser page error: ${String(err)}`));
+    page.on("requestfailed", (req) => {
+      log.error(`Request failed: ${req.url()}`, {
+        failure: req.failure()?.errorText,
+        resourceType: req.resourceType(),
+      });
+    });
+
+    await page.setViewport({ width: 816, height: 1056, deviceScaleFactor: 2 });
+    log.info(`Viewport set`);
+
+    // Use data URL to load PDF
     const pdfBase64 = pdfBuffer.toString("base64");
     const pdfDataUrl = `data:application/pdf;base64,${pdfBase64}`;
+    log.info(`PDF data URL created, length: ${pdfDataUrl.length} chars`);
 
-    await page.goto(pdfDataUrl, { waitUntil: "networkidle0", timeout: 30000 });
+    log.info(`Navigating to PDF data URL...`);
+    const navStart = Date.now();
 
-    const images: string[] = [];
+    const response = await page.goto(pdfDataUrl, {
+      waitUntil: "networkidle0",
+      timeout: 60000,
+    });
 
-    // Take screenshot of the PDF as rendered by Chrome
+    log.info(`Navigation complete in ${Date.now() - navStart}ms`, {
+      status: response?.status(),
+      ok: response?.ok(),
+      url: response?.url()?.substring(0, 100),
+    });
+
+    // Take screenshot
+    log.info(`Taking screenshot...`);
     const screenshot = await page.screenshot({ type: "png", fullPage: false });
-    images.push(`data:image/png;base64,${Buffer.from(screenshot).toString("base64")}`);
+    log.info(`Screenshot taken, size: ${screenshot.length} bytes`);
 
-    log.info(`PDF converted to ${images.length} image(s) using Puppeteer`);
+    const images = [`data:image/png;base64,${Buffer.from(screenshot).toString("base64")}`];
 
     await browser.close();
+    log.info(`Browser closed, returning ${images.length} image(s)`);
 
     return images;
   } catch (error) {
+    const err = error as Error;
+    log.error(`pdfToImages failed`, {
+      name: err.name,
+      message: err.message,
+      stack: err.stack,
+    });
     if (browser) await browser.close().catch(() => {});
-    throw new Error(`PDF conversion failed: ${error}`);
+    throw new Error(`PDF conversion failed: ${err.message}`);
   }
 }
 
