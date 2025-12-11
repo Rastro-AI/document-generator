@@ -278,7 +278,8 @@ CRITICAL RULES:
 - NEVER call mark_complete in the same turn as write_svg or apply_patch
 - You MUST see the rendered preview image before marking complete
 - If you haven't seen a preview of your latest changes, DO NOT mark complete
-- Be careful with text wrapping - use foreignObject for text that needs to wrap within a container`;
+- Be careful with text wrapping - use foreignObject for text that needs to wrap within a container
+- Always try to follow user instructions even if it deviates from the template`;
 
 /**
  * Run the SVG template generator agent
