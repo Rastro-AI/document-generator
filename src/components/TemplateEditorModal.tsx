@@ -136,10 +136,11 @@ export function TemplateEditorModal({
   const allInputRef = useRef<HTMLInputElement>(null);
 
   const [feedbackInput, setFeedbackInput] = useState("");
-  const [isRefining, setIsRefining] = useState(false);
   const [expandedTraces, setExpandedTraces] = useState<Set<number>>(new Set());
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [conversationHistory, setConversationHistory] = useState<any[] | null>(null);
+  // Track if this is the initial generation (no versions yet) vs refinement iterations
+  const hasAnyVersion = versions.length > 0;
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -186,7 +187,6 @@ export function TemplateEditorModal({
       setVersions([]);
       setSelectedVersion(0);
       setFeedbackInput("");
-      setIsRefining(false);
       setExpandedTraces(new Set());
       setConversationHistory(null);
     }
@@ -339,11 +339,10 @@ export function TemplateEditorModal({
   };
 
   const handleSendFeedback = async () => {
-    if (!feedbackInput.trim() || isRefining || !selectedPdf) return;
+    if (!feedbackInput.trim() || !selectedPdf) return;
 
     const feedbackText = feedbackInput.trim();
     setFeedbackInput("");
-    setIsRefining(true);
     setIsGenerating(true);
     setGenerationComplete(false);
     // Don't switch to input tab - keep current view so user can see progress
@@ -461,7 +460,6 @@ export function TemplateEditorModal({
       setGenerationStatus(`Error: ${error instanceof Error ? error.message : "Unknown error"}`);
     } finally {
       setIsGenerating(false);
-      setIsRefining(false);
       abortControllerRef.current = null;
     }
   };
@@ -472,7 +470,6 @@ export function TemplateEditorModal({
       abortControllerRef.current = null;
     }
     setIsGenerating(false);
-    setIsRefining(false);
     setGenerationStatus("Generation cancelled");
   };
 
@@ -1120,7 +1117,7 @@ export function TemplateEditorModal({
                         <span className="truncate flex-1 mr-2 font-medium">
                           {generationComplete
                             ? "Complete"
-                            : (isGenerating || isRefining)
+                            : isGenerating
                               ? (generationStatus || "Processing...")
                               : "Ready"}
                         </span>
@@ -1257,9 +1254,8 @@ export function TemplateEditorModal({
                           handleSendFeedback();
                         }
                       }}
-                      placeholder="Add feedback to guide generation..."
+                      placeholder={isGenerating ? "Send feedback to interrupt and refine..." : "Add feedback to guide generation..."}
                       className="flex-1 px-3 py-2 text-[12px] bg-[#f5f5f7] border-0 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#424245] resize-none min-h-[36px] max-h-[120px]"
-                      disabled={isRefining}
                       rows={1}
                       style={{ height: 'auto', overflow: 'hidden' }}
                       onInput={(e) => {
@@ -1270,10 +1266,10 @@ export function TemplateEditorModal({
                     />
                     <button
                       onClick={handleSendFeedback}
-                      disabled={!feedbackInput.trim() || isRefining}
+                      disabled={!feedbackInput.trim()}
                       className="px-3 py-2 text-[11px] font-medium text-white bg-[#1d1d1f] rounded-lg hover:bg-[#424245] disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex-shrink-0"
                     >
-                      Send
+                      {isGenerating ? "Interrupt & Send" : "Send"}
                     </button>
                   </div>
                 </div>
@@ -1561,11 +1557,11 @@ export function TemplateEditorModal({
             </button>
           )}
 
-          {/* Save button - after generation is complete or when editing */}
-          {(!isCreating || generationComplete) && (
+          {/* Save button - available when we have at least one version or when editing */}
+          {(!isCreating || hasAnyVersion) && (
             <button
               onClick={handleSave}
-              disabled={isSaving || !!jsonError || isGenerating}
+              disabled={isSaving || !!jsonError}
               className="px-4 py-2 text-[14px] font-medium text-white bg-[#1d1d1f] rounded-lg
                         hover:bg-[#424245] disabled:opacity-40 disabled:cursor-not-allowed
                         transition-all duration-200"
