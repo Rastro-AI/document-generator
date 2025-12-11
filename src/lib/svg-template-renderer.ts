@@ -17,7 +17,7 @@ import os from "os";
 import { Resvg } from "@resvg/resvg-js";
 import { PDFDocument } from "pdf-lib";
 import puppeteer from "puppeteer-core";
-import chromium from "@sparticuz/chromium";
+import chromium from "@sparticuz/chromium-min";
 
 const execAsync = promisify(exec);
 
@@ -340,12 +340,16 @@ export async function svgToPdf(svgContent: string): Promise<Buffer> {
   try {
     log.info("Converting SVG to PDF with Puppeteer");
 
-    // Use @sparticuz/chromium for Vercel, local Chrome for dev
-    const isVercel = process.env.VERCEL === "1" || process.env.AWS_LAMBDA_FUNCTION_NAME;
+    // Use @sparticuz/chromium-min for serverless, local Chrome for dev
+    const isServerless = process.env.VERCEL === "1" || process.env.AWS_LAMBDA_FUNCTION_NAME;
+
+    // Chromium binary URL for serverless environments
+    const CHROMIUM_URL = "https://github.com/nicholasgriffintn/chrome-aws-lambda-binaries/releases/download/v143.0.0/chromium-v143.0.0-pack.tar";
+
     const browser = await puppeteer.launch({
-      args: isVercel ? chromium.args : ["--no-sandbox", "--disable-setuid-sandbox"],
-      executablePath: isVercel
-        ? await chromium.executablePath()
+      args: isServerless ? chromium.args : ["--no-sandbox", "--disable-setuid-sandbox"],
+      executablePath: isServerless
+        ? await chromium.executablePath(CHROMIUM_URL)
         : process.platform === "darwin"
           ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
           : "/usr/bin/google-chrome",

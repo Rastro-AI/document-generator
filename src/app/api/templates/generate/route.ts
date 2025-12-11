@@ -4,7 +4,10 @@ import fs from "fs/promises";
 import path from "path";
 import os from "os";
 import puppeteer from "puppeteer-core";
-import chromium from "@sparticuz/chromium";
+import chromium from "@sparticuz/chromium-min";
+
+// Chromium binary URL for serverless environments
+const CHROMIUM_URL = "https://github.com/nicholasgriffintn/chrome-aws-lambda-binaries/releases/download/v143.0.0/chromium-v143.0.0-pack.tar";
 
 // Logger for SSE route
 const log = {
@@ -35,11 +38,11 @@ async function pdfToImages(pdfBuffer: Buffer): Promise<string[]> {
     await fs.writeFile(pdfPath, pdfBuffer);
 
     // Launch Puppeteer with correct Chrome for environment (Vercel vs local)
-    const isVercel = process.env.VERCEL === "1" || process.env.AWS_LAMBDA_FUNCTION_NAME;
+    const isServerless = process.env.VERCEL === "1" || process.env.AWS_LAMBDA_FUNCTION_NAME;
     browser = await puppeteer.launch({
-      args: isVercel ? chromium.args : ["--no-sandbox", "--disable-setuid-sandbox"],
-      executablePath: isVercel
-        ? await chromium.executablePath()
+      args: isServerless ? chromium.args : ["--no-sandbox", "--disable-setuid-sandbox"],
+      executablePath: isServerless
+        ? await chromium.executablePath(CHROMIUM_URL)
         : process.platform === "darwin"
           ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
           : "/usr/bin/google-chrome",
