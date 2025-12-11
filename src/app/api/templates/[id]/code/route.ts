@@ -5,8 +5,7 @@ import { pathExists } from "@/lib/fs-utils";
 import { exportFigmaCompatibleSvg } from "@/lib/svg-template-renderer";
 
 // GET - Get template SVG code
-// Query params:
-//   ?format=figma - Convert foreignObject to native SVG text for Figma compatibility
+// Always returns pure SVG (foreignObject converted to native text)
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -21,11 +20,8 @@ export async function GET(
 
     let code = await fs.readFile(codePath, "utf-8");
 
-    // Check if Figma-compatible format is requested
-    const format = request.nextUrl.searchParams.get("format");
-    if (format === "figma") {
-      code = exportFigmaCompatibleSvg(code);
-    }
+    // Always convert to pure SVG (foreignObject → native text, CSS classes → inline)
+    code = exportFigmaCompatibleSvg(code);
 
     return new NextResponse(code, {
       headers: { "Content-Type": "image/svg+xml" },
