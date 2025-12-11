@@ -107,7 +107,7 @@ export async function getJobFromDb(jobId: string): Promise<Job | null> {
 }
 
 /**
- * Create a new job
+ * Create a new job (uses upsert to handle retries gracefully)
  */
 export async function createJobInDb(job: Job): Promise<void> {
   if (!isDbConfigured()) return;
@@ -115,7 +115,8 @@ export async function createJobInDb(job: Job): Promise<void> {
   const supabase = getSupabase();
   const row = jobToRow(job);
 
-  const { error } = await supabase.from("jobs").insert(row);
+  // Use upsert to handle duplicate key errors gracefully (e.g., client retries)
+  const { error } = await supabase.from("jobs").upsert(row, { onConflict: "id" });
 
   if (error) {
     throw new Error(`Failed to create job: ${error.message}`);

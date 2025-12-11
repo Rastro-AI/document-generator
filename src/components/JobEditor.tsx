@@ -6,7 +6,6 @@ import { useTemplate } from "@/hooks/useTemplates";
 import { FieldsEditor } from "./FieldsEditor";
 import { PdfPreview } from "./PdfPreview";
 import { ChatPanel } from "./ChatPanel";
-import { HistoryPanel } from "./HistoryPanel";
 
 type ReasoningMode = "none" | "low";
 
@@ -44,7 +43,6 @@ export function JobEditor({ jobId, templateId, onBack, initialPrompt, initialFil
   const uploadAsset = useUploadJobAsset();
   const renderJob = useRenderJob();
   const hasAutoRendered = useRef(false);
-  const [showHistoryPanel, setShowHistoryPanel] = useState(false);
   const [showCodeModal, setShowCodeModal] = useState(false);
   const [templateCode, setTemplateCode] = useState("");
   const [showExportMenu, setShowExportMenu] = useState(false);
@@ -413,7 +411,7 @@ export function JobEditor({ jobId, templateId, onBack, initialPrompt, initialFil
                     <button
                       onClick={() => setShowHistoryMenu(!showHistoryMenu)}
                       className={`px-3 py-1.5 text-[12px] font-medium rounded-md transition-colors flex items-center gap-1 ${
-                        showHistoryPanel
+                        showHistoryMenu
                           ? "text-[#1d1d1f] bg-[#f5f5f7]"
                           : "text-[#86868b] hover:text-[#1d1d1f] hover:bg-[#f5f5f7]"
                       }`}
@@ -425,16 +423,53 @@ export function JobEditor({ jobId, templateId, onBack, initialPrompt, initialFil
                     </button>
 
                     {showHistoryMenu && (
-                      <div className="absolute right-0 top-full mt-1 w-40 bg-white rounded-lg shadow-lg border border-[#e8e8ed] py-1 z-50">
-                        <button
-                          onClick={() => {
-                            setShowHistoryPanel(!showHistoryPanel);
-                            setShowHistoryMenu(false);
-                          }}
-                          className="block w-full px-3 py-2 text-left text-[12px] text-[#1d1d1f] hover:bg-[#f5f5f7] transition-colors"
-                        >
-                          {showHistoryPanel ? "Hide Panel" : "Show Panel"}
-                        </button>
+                      <div className="absolute right-0 top-full mt-1 w-64 bg-white rounded-lg shadow-lg border border-[#e8e8ed] py-1 z-50 max-h-80 overflow-y-auto">
+                        {job.history && job.history.length > 0 ? (
+                          [...job.history].reverse().map((entry, index) => (
+                            <div
+                              key={entry.id}
+                              className={`px-3 py-2 flex items-center justify-between gap-2 ${
+                                index === 0 ? "bg-[#f5f5f7]" : "hover:bg-[#f5f5f7]"
+                              }`}
+                            >
+                              <div className="flex-1 min-w-0">
+                                <p className="text-[12px] font-medium text-[#1d1d1f] truncate">
+                                  {entry.description}
+                                </p>
+                                <p className="text-[10px] text-[#86868b]">
+                                  {new Date(entry.timestamp).toLocaleString("en-US", {
+                                    month: "short",
+                                    day: "numeric",
+                                    hour: "numeric",
+                                    minute: "2-digit",
+                                  })}
+                                </p>
+                              </div>
+                              {index === 0 ? (
+                                <span className="text-[10px] text-[#86868b]">Current</span>
+                              ) : (
+                                <button
+                                  onClick={async () => {
+                                    setShowHistoryMenu(false);
+                                    try {
+                                      await fetch(`/api/jobs/${job.id}/history/${entry.id}/restore`, { method: "POST" });
+                                      await handleJobUpdated();
+                                    } catch (error) {
+                                      console.error("Failed to restore:", error);
+                                    }
+                                  }}
+                                  className="px-2 py-1 text-[10px] font-medium text-[#1d1d1f] bg-white border border-[#d2d2d7] rounded hover:bg-[#f5f5f7] transition-colors"
+                                >
+                                  Restore
+                                </button>
+                              )}
+                            </div>
+                          ))
+                        ) : (
+                          <div className="px-3 py-4 text-center text-[12px] text-[#86868b]">
+                            No history yet
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
@@ -530,12 +565,6 @@ export function JobEditor({ jobId, templateId, onBack, initialPrompt, initialFil
             </div>
           </div>
 
-          {/* History panel */}
-          {showHistoryPanel && isReady && (
-            <div className="mt-4 flex-shrink-0 h-[200px]">
-              <HistoryPanel job={job} onJobUpdated={handleJobUpdated} />
-            </div>
-          )}
         </div>
       </div>
 

@@ -524,8 +524,31 @@ Request: ${userMessage}`;
 
     // Debug logging for context size analysis
     const estimateTokens = (obj: unknown): number => {
+      if (obj == null) return 0;
       const str = typeof obj === "string" ? obj : JSON.stringify(obj);
       return Math.ceil(str.length / 4); // Rough estimate: 4 chars per token
+    };
+
+    // Helper to safely get content length
+    const getContentLength = (content: unknown): number => {
+      if (content == null) return 0;
+      if (typeof content === "string") return content.length;
+      return JSON.stringify(content).length;
+    };
+
+    // Helper to analyze content breakdown for arrays (like OpenAI message content)
+    const analyzeContent = (content: unknown): string => {
+      if (content == null) return "null";
+      if (typeof content === "string") return `string(${content.length})`;
+      if (Array.isArray(content)) {
+        const breakdown = content.map((item: { type?: string }, idx) => {
+          const itemLen = JSON.stringify(item).length;
+          const itemType = item?.type || "unknown";
+          return `${idx}:${itemType}(${itemLen})`;
+        });
+        return `[${breakdown.join(", ")}]`;
+      }
+      return `object(${JSON.stringify(content).length})`;
     };
 
     const contextAnalysis = {
@@ -540,11 +563,12 @@ Request: ${userMessage}`;
       userMessageLength: userMessage.length,
       totalInputTokens: estimateTokens(input),
       // Break down history by message type
-      historyBreakdown: previousHistory.map((msg: { role: string; content: unknown }, i: number) => ({
+      historyBreakdown: previousHistory.map((msg: { role?: string; content?: unknown }, i: number) => ({
         index: i,
-        role: msg.role,
-        contentLength: typeof msg.content === "string" ? msg.content.length : JSON.stringify(msg.content).length,
-        estimatedTokens: estimateTokens(msg.content),
+        role: msg?.role || "undefined",
+        contentLength: getContentLength(msg?.content),
+        estimatedTokens: estimateTokens(msg?.content),
+        contentBreakdown: analyzeContent(msg?.content),
       })),
     };
 
@@ -559,8 +583,8 @@ Request: ${userMessage}`;
 
     if (contextAnalysis.historyBreakdown.length > 0) {
       console.log(`  History breakdown:`);
-      contextAnalysis.historyBreakdown.forEach((msg: { index: number; role: string; contentLength: number; estimatedTokens: number }) => {
-        console.log(`    [${msg.index}] ${msg.role}: ${msg.contentLength} chars, ~${msg.estimatedTokens} tokens`);
+      contextAnalysis.historyBreakdown.forEach((msg: { index: number; role: string; contentLength: number; estimatedTokens: number; contentBreakdown: string }) => {
+        console.log(`    [${msg.index}] ${msg.role}: ${msg.contentLength} chars, ~${msg.estimatedTokens} tokens - ${msg.contentBreakdown}`);
       });
     }
 

@@ -413,9 +413,9 @@ export function ChatPanel({ jobId, initialMessage, uploadedFiles, initialUserPro
       onClick={() => setIsFocused(true)}
       className="flex flex-col h-full bg-white transition-all duration-200 cursor-text overflow-visible"
     >
-      {/* Header with back button */}
+      {/* Back button */}
       {onBack && (
-        <div className="flex-shrink-0 flex items-center gap-2 px-4 py-3 border-b border-[#e8e8ed]">
+        <div className="flex-shrink-0 px-3 pt-3">
           <button
             onClick={onBack}
             className="w-7 h-7 flex items-center justify-center rounded-full hover:bg-[#f5f5f7] transition-colors"
@@ -424,7 +424,6 @@ export function ChatPanel({ jobId, initialMessage, uploadedFiles, initialUserPro
               <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
             </svg>
           </button>
-          <span className="text-[13px] font-medium text-[#1d1d1f]">Edit with AI</span>
         </div>
       )}
 
