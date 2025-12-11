@@ -12,6 +12,7 @@ interface FieldsEditorProps {
   onAssetUpload?: (name: string, file: File) => Promise<void>;
   onSave?: () => void;
   disabled?: boolean;
+  activeTab?: "assets" | "data";
 }
 
 export function FieldsEditor({
@@ -23,6 +24,7 @@ export function FieldsEditor({
   onAssetUpload,
   onSave,
   disabled,
+  activeTab = "assets",
 }: FieldsEditorProps) {
   // Group fields by category based on naming patterns
   const groupFields = () => {
@@ -57,82 +59,100 @@ export function FieldsEditor({
 
   return (
     <div className="space-y-6">
-      {/* Asset Slots Section - Show first */}
-      {hasAssets && (
-        <div>
-          <h3 className="text-[11px] font-semibold uppercase tracking-wider text-[#86868b] mb-3">
-            Images
-          </h3>
-          <div className="space-y-3">
-            {template.assetSlots.map((slot) => (
-              <AssetSlotInput
-                key={slot.name}
-                slot={slot}
-                value={job.assets[slot.name]}
-                jobId={job.id}
-                onChange={(value) => onAssetChange(slot.name, value)}
-                onUpload={onAssetUpload ? (file) => onAssetUpload(slot.name, file) : undefined}
-                disabled={disabled}
-              />
-            ))}
-          </div>
-        </div>
+      {/* Assets Tab */}
+      {activeTab === "assets" && (
+        <>
+          {hasAssets ? (
+            <div>
+              <h3 className="text-[11px] font-semibold uppercase tracking-wider text-[#86868b] mb-3">
+                Images
+              </h3>
+              <div className="space-y-3">
+                {template.assetSlots.map((slot) => (
+                  <AssetSlotInput
+                    key={slot.name}
+                    slot={slot}
+                    value={job.assets[slot.name]}
+                    jobId={job.id}
+                    onChange={(value) => onAssetChange(slot.name, value)}
+                    onUpload={onAssetUpload ? (file) => onAssetUpload(slot.name, file) : undefined}
+                    disabled={disabled}
+                  />
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="text-center py-8">
+              <p className="text-[13px] text-[#86868b]">No asset slots defined for this template</p>
+            </div>
+          )}
+        </>
       )}
 
-      {/* Field Groups */}
-      {fieldGroups.map(([groupName, fields]) => (
-        <div key={groupName}>
-          <h3 className="text-[11px] font-semibold uppercase tracking-wider text-[#86868b] mb-3">
-            {groupName}
-          </h3>
-          <div className="space-y-3">
-            {fields.map((field) => {
-              // Use localFields for display (immediate updates), fall back to job.fields
-              const value = localFields[field.name] ?? job.fields[field.name];
-              const displayName = field.name
-                .replace(/_/g, " ")
-                .toLowerCase()
-                .replace(/\b\w/g, (c) => c.toUpperCase());
+      {/* Data Tab */}
+      {activeTab === "data" && (
+        <>
+          {fieldGroups.length > 0 ? (
+            fieldGroups.map(([groupName, fields]) => (
+              <div key={groupName}>
+                <h3 className="text-[11px] font-semibold uppercase tracking-wider text-[#86868b] mb-3">
+                  {groupName}
+                </h3>
+                <div className="space-y-3">
+                  {fields.map((field) => {
+                    // Use localFields for display (immediate updates), fall back to job.fields
+                    const value = localFields[field.name] ?? job.fields[field.name];
+                    const displayName = field.name
+                      .replace(/_/g, " ")
+                      .toLowerCase()
+                      .replace(/\b\w/g, (c) => c.toUpperCase());
 
-              return (
-                <div key={field.name}>
-                  <label
-                    htmlFor={field.name}
-                    className="block text-[13px] font-medium text-[#1d1d1f] mb-1.5"
-                  >
-                    {displayName}
-                  </label>
-                  <input
-                    id={field.name}
-                    type={field.type === "number" ? "number" : "text"}
-                    value={value ?? ""}
-                    onChange={(e) => {
-                      const newValue =
-                        field.type === "number"
-                          ? e.target.value === ""
-                            ? null
-                            : parseFloat(e.target.value)
-                          : e.target.value || null;
-                      onFieldChange(field.name, newValue);
-                    }}
-                    onBlur={() => {
-                      // Auto-save when user leaves the field
-                      if (onSave) onSave();
-                    }}
-                    disabled={disabled}
-                    placeholder={field.description}
-                    className="w-full px-3 py-2.5 bg-[#f5f5f7] border-0 rounded-lg text-[14px]
-                              text-[#1d1d1f] placeholder:text-[#86868b]
-                              focus:outline-none focus:ring-2 focus:ring-[#1d1d1f] focus:ring-offset-1
-                              disabled:opacity-50 disabled:cursor-not-allowed
-                              transition-shadow duration-200"
-                  />
+                    return (
+                      <div key={field.name}>
+                        <label
+                          htmlFor={field.name}
+                          className="block text-[13px] font-medium text-[#1d1d1f] mb-1.5"
+                        >
+                          {displayName}
+                        </label>
+                        <input
+                          id={field.name}
+                          type={field.type === "number" ? "number" : "text"}
+                          value={value ?? ""}
+                          onChange={(e) => {
+                            const newValue =
+                              field.type === "number"
+                                ? e.target.value === ""
+                                  ? null
+                                  : parseFloat(e.target.value)
+                                : e.target.value || null;
+                            onFieldChange(field.name, newValue);
+                          }}
+                          onBlur={() => {
+                            // Auto-save when user leaves the field
+                            if (onSave) onSave();
+                          }}
+                          disabled={disabled}
+                          placeholder={field.description}
+                          className="w-full px-3 py-2.5 bg-[#f5f5f7] border-0 rounded-lg text-[14px]
+                                    text-[#1d1d1f] placeholder:text-[#86868b]
+                                    focus:outline-none focus:ring-2 focus:ring-[#1d1d1f] focus:ring-offset-1
+                                    disabled:opacity-50 disabled:cursor-not-allowed
+                                    transition-shadow duration-200"
+                        />
+                      </div>
+                    );
+                  })}
                 </div>
-              );
-            })}
-          </div>
-        </div>
-      ))}
+              </div>
+            ))
+          ) : (
+            <div className="text-center py-8">
+              <p className="text-[13px] text-[#86868b]">No data fields defined for this template</p>
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
 }

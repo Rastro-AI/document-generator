@@ -2,10 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import fs from "fs/promises";
 import { getTemplateSvgPath, getTemplateDir } from "@/lib/paths";
 import { pathExists } from "@/lib/fs-utils";
-import { exportFigmaCompatibleSvg } from "@/lib/svg-template-renderer";
+import { exportFigmaCompatibleSvgAsync } from "@/lib/svg-template-renderer";
 
 // GET - Get template SVG code
-// Always returns pure SVG (foreignObject converted to native text)
+// Always returns pure SVG (foreignObject converted to native text with exact layout)
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -20,8 +20,8 @@ export async function GET(
 
     let code = await fs.readFile(codePath, "utf-8");
 
-    // Always convert to pure SVG (foreignObject → native text, CSS classes → inline)
-    code = exportFigmaCompatibleSvg(code);
+    // Convert to pure SVG using Puppeteer for exact text layout matching
+    code = await exportFigmaCompatibleSvgAsync(code);
 
     return new NextResponse(code, {
       headers: { "Content-Type": "image/svg+xml" },

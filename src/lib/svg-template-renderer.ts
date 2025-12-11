@@ -834,8 +834,9 @@ export function convertCssClassesToInline(svgContent: string): string {
 }
 
 /**
- * Export SVG in Figma-compatible format
+ * Export SVG in Figma-compatible format (sync version - uses estimation)
  * Converts foreignObject to native text and CSS classes to inline styles
+ * Note: For exact text layout matching, use exportFigmaCompatibleSvgAsync instead
  */
 export function exportFigmaCompatibleSvg(svgContent: string): string {
   let result = svgContent;
@@ -847,4 +848,184 @@ export function exportFigmaCompatibleSvg(svgContent: string): string {
   result = convertForeignObjectToText(result);
 
   return result;
+}
+
+/**
+ * Export SVG in Figma-compatible format (async version - uses Puppeteer for exact text layout)
+ * Renders the SVG in a browser to get exact line breaks, then converts to native SVG
+ */
+export async function exportFigmaCompatibleSvgAsync(svgContent: string): Promise<string> {
+  // First convert CSS classes to inline styles (this doesn't affect layout)
+  let result = convertCssClassesToInline(svgContent);
+
+  // Check if there are any foreignObject elements to convert
+  if (!result.includes('<foreignObject')) {
+    return result;
+  }
+
+  // Extract dimensions from SVG
+  const widthMatch = result.match(/width="(\d+)"/);
+  const heightMatch = result.match(/height="(\d+)"/);
+  const width = widthMatch ? parseInt(widthMatch[1]) : 612;
+  const height = heightMatch ? parseInt(heightMatch[1]) : 792;
+
+  try {
+    // Use Puppeteer to render and measure actual text layout
+    const isVercel = process.env.VERCEL === "1" || process.env.AWS_LAMBDA_FUNCTION_NAME;
+    const browser = await puppeteer.launch({
+      args: isVercel ? chromium.args : ["--no-sandbox", "--disable-setuid-sandbox"],
+      executablePath: isVercel
+        ? await chromium.executablePath()
+        : process.platform === "darwin"
+          ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+          : "/usr/bin/google-chrome",
+      headless: true,
+    });
+
+    try {
+      const page = await browser.newPage();
+      await page.setViewport({ width, height });
+
+      // Create HTML page with SVG
+      const html = `
+        <!DOCTYPE html>
+        <html>
+          <head>
+            <style>
+              * { margin: 0; padding: 0; }
+              body { width: ${width}px; height: ${height}px; }
+            </style>
+          </head>
+          <body>${result}</body>
+        </html>
+      `;
+
+      await page.setContent(html, { waitUntil: "networkidle0" });
+
+      // Extract text layout from each foreignObject
+      const textLayouts = await page.evaluate(() => {
+        const layouts: Array<{
+          index: number;
+          x: number;
+          y: number;
+          width: number;
+          lines: Array<{ text: string; y: number }>;
+          style: {
+            fontFamily: string;
+            fontSize: number;
+            fontWeight: string;
+            color: string;
+            lineHeight: number;
+          };
+        }> = [];
+
+        const foreignObjects = document.querySelectorAll('foreignObject');
+        foreignObjects.forEach((fo, index) => {
+          const rect = fo.getBoundingClientRect();
+          const div = fo.querySelector('div');
+          if (!div) return;
+
+          const computedStyle = window.getComputedStyle(div);
+          const fontSize = parseFloat(computedStyle.fontSize);
+          const lineHeight = parseFloat(computedStyle.lineHeight) || fontSize * 1.4;
+
+          // Get the actual rendered text with line breaks
+          // Create a range to measure each line
+          const text = div.textContent || '';
+          const lines: Array<{ text: string; y: number }> = [];
+
+          // Use a temporary element to measure text
+          const temp = document.createElement('div');
+          temp.style.cssText = `
+            position: absolute;
+            visibility: hidden;
+            white-space: nowrap;
+            font-family: ${computedStyle.fontFamily};
+            font-size: ${computedStyle.fontSize};
+            font-weight: ${computedStyle.fontWeight};
+          `;
+          document.body.appendChild(temp);
+
+          // Word wrap manually using actual measurements
+          const words = text.trim().split(/\s+/);
+          const maxWidth = rect.width;
+          let currentLine = '';
+          let currentY = fontSize; // First line starts at fontSize (baseline)
+
+          for (const word of words) {
+            const testLine = currentLine ? currentLine + ' ' + word : word;
+            temp.textContent = testLine;
+
+            if (temp.offsetWidth <= maxWidth || !currentLine) {
+              currentLine = testLine;
+            } else {
+              lines.push({ text: currentLine, y: currentY });
+              currentLine = word;
+              currentY += lineHeight;
+            }
+          }
+          if (currentLine) {
+            lines.push({ text: currentLine, y: currentY });
+          }
+
+          document.body.removeChild(temp);
+
+          layouts.push({
+            index,
+            x: parseFloat(fo.getAttribute('x') || '0'),
+            y: parseFloat(fo.getAttribute('y') || '0'),
+            width: rect.width,
+            lines,
+            style: {
+              fontFamily: computedStyle.fontFamily,
+              fontSize,
+              fontWeight: computedStyle.fontWeight,
+              color: computedStyle.color,
+              lineHeight,
+            },
+          });
+        });
+
+        return layouts;
+      });
+
+      // Now replace foreignObject elements with text elements using exact layouts
+      let foreignObjectIndex = 0;
+      result = result.replace(/<foreignObject([^>]*)>[\s\S]*?<\/foreignObject>/gi, (match, attrs) => {
+        const layout = textLayouts[foreignObjectIndex++];
+        if (!layout || layout.lines.length === 0) {
+          return ''; // Remove empty foreignObjects
+        }
+
+        // Convert RGB color to hex if needed
+        let fill = layout.style.color;
+        const rgbMatch = fill.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/);
+        if (rgbMatch) {
+          const r = parseInt(rgbMatch[1]).toString(16).padStart(2, '0');
+          const g = parseInt(rgbMatch[2]).toString(16).padStart(2, '0');
+          const b = parseInt(rgbMatch[3]).toString(16).padStart(2, '0');
+          fill = `#${r}${g}${b}`;
+        }
+
+        const style = `font-family: ${layout.style.fontFamily}; font-size: ${layout.style.fontSize}px; font-weight: ${layout.style.fontWeight}; fill: ${fill};`;
+
+        const tspans = layout.lines.map((line, i) => {
+          const dy = i === 0 ? layout.style.fontSize : layout.style.lineHeight;
+          return `<tspan x="${layout.x}" dy="${dy}">${escapeXml(line.text)}</tspan>`;
+        }).join('\n    ');
+
+        return `<text x="${layout.x}" y="${layout.y}" style="${style}">
+    ${tspans}
+  </text>`;
+      });
+
+      return result;
+    } finally {
+      await browser.close();
+    }
+  } catch (error) {
+    log.error("Puppeteer text measurement failed, falling back to estimation", error);
+    // Fall back to sync version with estimation
+    return convertForeignObjectToText(result);
+  }
 }

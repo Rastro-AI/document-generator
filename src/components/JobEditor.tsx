@@ -49,6 +49,7 @@ export function JobEditor({ jobId, templateId, onBack, initialPrompt, initialFil
   const [showExportMenu, setShowExportMenu] = useState(false);
   const [pdfExpanded, setPdfExpanded] = useState(false);
   const [chatMinimized, setChatMinimized] = useState(false);
+  const [extractedDataTab, setExtractedDataTab] = useState<"assets" | "data">("assets");
   const exportMenuRef = useRef<HTMLDivElement>(null);
   // Locally track the last render timestamp to drive preview updates immediately
   const [previewRenderedAt, setPreviewRenderedAt] = useState<string | undefined>(undefined);
@@ -336,7 +337,6 @@ export function JobEditor({ jobId, templateId, onBack, initialPrompt, initialFil
                         </svg>
                         SVG
                       </a>
-                      <div className="border-t border-[#e8e8ed] my-1" />
                       <button
                         onClick={async () => {
                           setShowExportMenu(false);
@@ -401,9 +401,32 @@ export function JobEditor({ jobId, templateId, onBack, initialPrompt, initialFil
             <div className="bg-white rounded-2xl shadow-sm h-full overflow-y-auto">
               <div className="p-6">
                 {/* Sidebar Title */}
-                <h2 className="text-[17px] font-semibold text-[#1d1d1f] mb-6">
+                <h2 className="text-[17px] font-semibold text-[#1d1d1f] mb-4">
                   Extracted Data
                 </h2>
+                {/* Tabs */}
+                <div className="flex gap-1 mb-6 p-1 bg-[#f5f5f7] rounded-lg">
+                  <button
+                    onClick={() => setExtractedDataTab("assets")}
+                    className={`flex-1 px-3 py-1.5 text-[13px] font-medium rounded-md transition-colors ${
+                      extractedDataTab === "assets"
+                        ? "bg-white text-[#1d1d1f] shadow-sm"
+                        : "text-[#86868b] hover:text-[#1d1d1f]"
+                    }`}
+                  >
+                    Assets
+                  </button>
+                  <button
+                    onClick={() => setExtractedDataTab("data")}
+                    className={`flex-1 px-3 py-1.5 text-[13px] font-medium rounded-md transition-colors ${
+                      extractedDataTab === "data"
+                        ? "bg-white text-[#1d1d1f] shadow-sm"
+                        : "text-[#86868b] hover:text-[#1d1d1f]"
+                    }`}
+                  >
+                    Data
+                  </button>
+                </div>
               {isReady ? (
                 <>
                   <FieldsEditor
@@ -415,6 +438,7 @@ export function JobEditor({ jobId, templateId, onBack, initialPrompt, initialFil
                     onAssetUpload={handleAssetUpload}
                     onSave={hasChanges ? handleSave : undefined}
                     disabled={updateFields.isPending || updateAssets.isPending || uploadAsset.isPending}
+                    activeTab={extractedDataTab}
                   />
                 </>
               ) : (

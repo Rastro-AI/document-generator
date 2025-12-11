@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getJobOutputSvg } from "@/lib/fs-utils";
-import { exportFigmaCompatibleSvg } from "@/lib/svg-template-renderer";
+import { exportFigmaCompatibleSvgAsync } from "@/lib/svg-template-renderer";
 
 export async function GET(
   request: NextRequest,
@@ -17,8 +17,9 @@ export async function GET(
       );
     }
 
-    // Convert to pure SVG (foreignObject → native text, CSS classes → inline styles)
-    svgContent = exportFigmaCompatibleSvg(svgContent);
+    // Convert to pure SVG using Puppeteer for exact text layout matching
+    // (foreignObject → native text with exact line breaks, CSS classes → inline styles)
+    svgContent = await exportFigmaCompatibleSvgAsync(svgContent);
 
     return new NextResponse(svgContent, {
       headers: {
