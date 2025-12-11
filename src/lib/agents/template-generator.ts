@@ -246,7 +246,8 @@ NOTE: Our system automatically converts foreignObject to native SVG text when ex
 - Images: xlink:href="{{ASSET_NAME}}"
 - Use SCREAMING_SNAKE_CASE (e.g., PRODUCT_NAME, WATTAGE, LOGO_IMAGE)
 - Static labels stay as-is (e.g., "Wattage:" is static, but the value becomes {{WATTAGE}})
-- For image placeholder boxes, use GRAY (#CCCCCC or similar) background, NOT green
+- For image placeholders, use the <image> element with xlink:href="{{ASSET_NAME}}"
+- Note: Missing images render as bright green boxes. If user mentions these, manipulate the entire <image> element (e.g., remove it or add visibility logic), don't try to change the color
 
 ## SVG BASICS
 - US Letter = 612x792 points, A4 = 595x842 points
