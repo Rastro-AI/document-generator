@@ -34,6 +34,7 @@ interface ChatPanelProps {
   onFieldsUpdated: (fields: Record<string, string | number | null>) => void;
   onTemplateUpdated: () => void;
   onFilesChanged?: () => void;
+  onBack?: () => void;
 }
 
 /**
@@ -96,7 +97,7 @@ function TracesDisplay({ traces }: { traces: AgentTrace[] }) {
 
 type ReasoningMode = "none" | "low";
 
-export function ChatPanel({ jobId, initialMessage, uploadedFiles, initialUserPrompt, initialUserFiles, isCreating, creationStatus, creationTraces, initialReasoningMode, onFieldsUpdated, onTemplateUpdated, onFilesChanged }: ChatPanelProps) {
+export function ChatPanel({ jobId, initialMessage, uploadedFiles, initialUserPrompt, initialUserFiles, isCreating, creationStatus, creationTraces, initialReasoningMode, onFieldsUpdated, onTemplateUpdated, onFilesChanged, onBack }: ChatPanelProps) {
   const [reasoningMode, setReasoningMode] = useState<ReasoningMode>(initialReasoningMode || "none");
   const [messages, setMessages] = useState<ChatMessage[]>(() => {
     const msgs: ChatMessage[] = [];
@@ -412,6 +413,20 @@ export function ChatPanel({ jobId, initialMessage, uploadedFiles, initialUserPro
       onClick={() => setIsFocused(true)}
       className="flex flex-col h-full bg-white transition-all duration-200 cursor-text overflow-visible"
     >
+      {/* Header with back button */}
+      {onBack && (
+        <div className="flex-shrink-0 flex items-center gap-2 px-4 py-3 border-b border-[#e8e8ed]">
+          <button
+            onClick={onBack}
+            className="w-7 h-7 flex items-center justify-center rounded-full hover:bg-[#f5f5f7] transition-colors"
+          >
+            <svg className="w-4 h-4 text-[#1d1d1f]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+            </svg>
+          </button>
+          <span className="text-[13px] font-medium text-[#1d1d1f]">Edit with AI</span>
+        </div>
+      )}
 
       {/* Messages - increased height for more conversation history */}
       <div className="flex-[1.2] overflow-y-auto p-4 space-y-3 min-h-0">
@@ -476,48 +491,68 @@ export function ChatPanel({ jobId, initialMessage, uploadedFiles, initialUserPro
             <div className="bg-[#f5f5f7] px-3 py-2 rounded-xl max-w-[80%]">
               {(() => {
                 const tracesToShow = isCreating && creationTraces && creationTraces.length > 0 ? creationTraces : liveTraces;
-                // If we have traces, show them directly (no "Processing..." header)
-                if (tracesToShow.length > 0) {
+                // Filter to only tool_call and tool_result traces
+                const toolTraces = tracesToShow.filter(t => t.type === "tool_call" || t.type === "tool_result");
+
+                if (toolTraces.length > 0) {
+                  // Find the last tool call that doesn't have a result yet
+                  const lastToolCall = [...toolTraces].reverse().find(t => t.type === "tool_call");
+                  const completedTraces = toolTraces.slice(0, -1); // All but the last
+                  const isLastPending = toolTraces[toolTraces.length - 1]?.type === "tool_call";
+
                   return (
-                    <div className="space-y-1 max-h-[200px] overflow-y-auto">
-                      {tracesToShow.map((trace, idx) => (
-                        <div key={idx} className="text-[11px] flex items-center gap-1.5">
-                          {trace.type === "status" && (
-                            <>
-                              <svg className="animate-spin h-3 w-3 text-[#86868b] flex-shrink-0" viewBox="0 0 24 24">
-                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                              </svg>
-                              <span className="text-[#86868b]">{trace.content}</span>
-                            </>
-                          )}
-                          {trace.type === "tool_call" && (
-                            <>
-                              <span className="text-[#0066CC]">→</span>
-                              <span className="text-[#0066CC] font-mono">{trace.toolName}()</span>
-                            </>
-                          )}
-                          {trace.type === "tool_result" && (
-                            <>
-                              <span className="text-[#00aa00]">✓</span>
-                              <span className="text-[#00aa00] font-mono">{trace.toolName}</span>
-                            </>
-                          )}
+                    <div>
+                      {/* Expandable completed traces */}
+                      {completedTraces.length > 0 && (
+                        <details className="mb-2">
+                          <summary className="text-[11px] text-[#86868b] cursor-pointer hover:text-[#1d1d1f]">
+                            {completedTraces.filter(t => t.type === "tool_result").length} tool{completedTraces.filter(t => t.type === "tool_result").length !== 1 ? "s" : ""} completed
+                          </summary>
+                          <div className="mt-1 pl-2 border-l-2 border-[#e8e8ed] space-y-0.5">
+                            {completedTraces.map((trace, idx) => (
+                              <div key={idx} className="text-[10px] flex items-center gap-1">
+                                {trace.type === "tool_call" && (
+                                  <span className="text-[#86868b] font-mono">{trace.toolName}</span>
+                                )}
+                                {trace.type === "tool_result" && (
+                                  <span className="text-[#00aa00]">✓ {trace.toolName}</span>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        </details>
+                      )}
+                      {/* Current/last tool call with spinner if pending */}
+                      {isLastPending && lastToolCall && (
+                        <div className="flex items-center gap-2">
+                          <svg className="animate-spin h-3.5 w-3.5 text-[#0066CC] flex-shrink-0" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                          </svg>
+                          <span className="text-[12px] text-[#0066CC] font-mono">{lastToolCall.toolName}()</span>
                         </div>
-                      ))}
+                      )}
+                      {/* If last was a result, show waiting for response */}
+                      {!isLastPending && (
+                        <div className="flex items-center gap-2">
+                          <svg className="animate-spin h-3.5 w-3.5 text-[#86868b] flex-shrink-0" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                          </svg>
+                          <span className="text-[12px] text-[#86868b]">Thinking...</span>
+                        </div>
+                      )}
                     </div>
                   );
                 }
-                // No traces yet, show simple spinner
+                // No tool traces yet, show simple spinner
                 return (
                   <div className="flex items-center gap-2">
                     <svg className="animate-spin h-4 w-4 text-[#86868b] flex-shrink-0" viewBox="0 0 24 24">
                       <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
                       <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                     </svg>
-                    <span className="text-[13px] text-[#86868b]">
-                      {isCreating ? "Starting..." : uploadFilesHook.isPending ? "Processing files..." : "Thinking..."}
-                    </span>
+                    <span className="text-[13px] text-[#86868b]">Thinking...</span>
                   </div>
                 );
               })()}

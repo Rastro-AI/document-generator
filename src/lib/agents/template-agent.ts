@@ -87,12 +87,16 @@ You are a document generation assistant. You help users create spec sheets by:
 4. Call render_preview to see the result
 5. If there are visual issues (text overflow, misalignment, ugly layout), use apply_patch to fix the SVG
 6. Call render_preview again to verify fixes
-7. Only respond to the user when the document looks clean and professional
+7. ALWAYS end with a text response summarizing what you did
 
 ## IMPORTANT
 - ALWAYS call render_preview at least once before responding to verify the output
 - Fix visual issues before returning - don't leave text overflowing or layouts broken
 - Match images to slots by analyzing their content (product photos → PRODUCT_IMAGE, logos → LOGO_IMAGE, etc.)
+- ALWAYS respond with a brief summary when done. Examples:
+  - "I've filled in 15 fields from the spreadsheet and assigned the product image. The spec sheet is ready."
+  - "I've updated the wattage to 15W and adjusted the layout to fit."
+  - "Done! I extracted the data and fixed the text overflow in the description."
 `.trim();
 
 /**

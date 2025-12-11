@@ -51,6 +51,8 @@ export function JobEditor({ jobId, templateId, onBack, initialPrompt, initialFil
   const [pdfExpanded, setPdfExpanded] = useState(false);
   const [rightPanelTab, setRightPanelTab] = useState<"preview" | "assets" | "data">("preview");
   const exportMenuRef = useRef<HTMLDivElement>(null);
+  const historyMenuRef = useRef<HTMLDivElement>(null);
+  const [showHistoryMenu, setShowHistoryMenu] = useState(false);
   // Locally track the last render timestamp to drive preview updates immediately
   const [previewRenderedAt, setPreviewRenderedAt] = useState<string | undefined>(undefined);
 
@@ -64,11 +66,14 @@ export function JobEditor({ jobId, templateId, onBack, initialPrompt, initialFil
     }
   }, [job]);
 
-  // Close export menu when clicking outside
+  // Close dropdown menus when clicking outside
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (exportMenuRef.current && !exportMenuRef.current.contains(event.target as Node)) {
         setShowExportMenu(false);
+      }
+      if (historyMenuRef.current && !historyMenuRef.current.contains(event.target as Node)) {
+        setShowHistoryMenu(false);
       }
     };
     document.addEventListener("mousedown", handleClickOutside);
@@ -267,116 +272,6 @@ export function JobEditor({ jobId, templateId, onBack, initialPrompt, initialFil
 
   return (
     <div className="flex flex-col h-full bg-white">
-      {/* Header - compact */}
-      <header className="flex-shrink-0 flex items-center justify-between px-4 py-2 border-b border-[#d2d2d7]">
-        <div className="flex items-center gap-3">
-          <button
-            onClick={onBack}
-            className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-[#f5f5f7] transition-colors"
-          >
-            <svg className="w-4 h-4 text-[#1d1d1f]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
-            </svg>
-          </button>
-          <h1 className="text-[15px] font-semibold text-[#1d1d1f]">
-            {template?.name || "Loading..."}
-          </h1>
-        </div>
-
-        <div className="flex items-center gap-2">
-          {isReady && (
-            <>
-              {hasChanges && (
-                <span className="text-[12px] text-[#86868b]">Unsaved</span>
-              )}
-              {hasChanges && (
-                <button
-                  onClick={handleSave}
-                  disabled={updateFields.isPending || renderJob.isPending}
-                  className="px-3 py-1.5 text-[13px] font-medium text-white bg-[#1d1d1f] rounded-lg
-                            hover:bg-[#424245] active:scale-[0.98]
-                            disabled:opacity-40 disabled:cursor-not-allowed
-                            transition-all duration-200"
-                >
-                  {updateFields.isPending || renderJob.isPending ? "Saving..." : "Save"}
-                </button>
-              )}
-              {job.renderedAt && (
-                <div className="relative" ref={exportMenuRef}>
-                  <button
-                    onClick={() => setShowExportMenu(!showExportMenu)}
-                    className="px-3 py-1.5 text-[13px] font-medium text-[#1d1d1f] bg-white border border-[#d2d2d7] rounded-lg
-                              hover:bg-[#f5f5f7] active:scale-[0.98]
-                              transition-all duration-200 flex items-center gap-1.5"
-                  >
-                    Export
-                    <svg className={`w-3.5 h-3.5 transition-transform ${showExportMenu ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-                    </svg>
-                  </button>
-
-                  {showExportMenu && (
-                    <div className="absolute right-0 top-full mt-1 w-44 bg-white rounded-lg shadow-lg border border-[#e8e8ed] py-1 z-50">
-                      <a
-                        href={`/api/jobs/${jobId}/pdf?t=${(previewRenderedAt || job.renderedAt) ?? Date.now()}`}
-                        download="output.pdf"
-                        onClick={() => setShowExportMenu(false)}
-                        className="w-full px-3 py-2 text-left text-[13px] text-[#1d1d1f] hover:bg-[#f5f5f7] transition-colors flex items-center gap-2"
-                      >
-                        <svg className="w-4 h-4 text-[#86868b]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
-                        </svg>
-                        PDF
-                      </a>
-                      <a
-                        href={`/api/jobs/${jobId}/svg?t=${(previewRenderedAt || job.renderedAt) ?? Date.now()}`}
-                        download="output.svg"
-                        onClick={() => setShowExportMenu(false)}
-                        className="w-full px-3 py-2 text-left text-[13px] text-[#1d1d1f] hover:bg-[#f5f5f7] transition-colors flex items-center gap-2"
-                      >
-                        <svg className="w-4 h-4 text-[#86868b]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 001.5-1.5V6a1.5 1.5 0 00-1.5-1.5H3.75A1.5 1.5 0 002.25 6v12a2.25 2.25 0 001.5 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
-                        </svg>
-                        SVG
-                      </a>
-                      <button
-                        onClick={async () => {
-                          setShowExportMenu(false);
-                          const res = await fetch(`/api/jobs/${job.id}/template-code`);
-                          if (res.ok) {
-                            setTemplateCode(await res.text());
-                            setShowCodeModal(true);
-                          }
-                        }}
-                        className="w-full px-3 py-2 text-left text-[13px] text-[#1d1d1f] hover:bg-[#f5f5f7] transition-colors flex items-center gap-2"
-                      >
-                        <svg className="w-4 h-4 text-[#86868b]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M17.25 6.75L22.5 12l-5.25 5.25m-10.5 0L1.5 12l5.25-5.25m7.5-3l-4.5 16.5" />
-                        </svg>
-                        Code
-                      </button>
-                    </div>
-                  )}
-                </div>
-              )}
-              <button
-                onClick={() => setShowHistoryPanel(!showHistoryPanel)}
-                className={`px-3 py-1.5 text-[13px] font-medium rounded-lg transition-colors flex items-center gap-1.5 border ${
-                  showHistoryPanel
-                    ? "bg-[#1d1d1f] text-white border-[#1d1d1f]"
-                    : "bg-white text-[#1d1d1f] border-[#d2d2d7] hover:bg-[#f5f5f7]"
-                }`}
-              >
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-                History
-              </button>
-            </>
-          )}
-        </div>
-      </header>
-
       {/* Error banner */}
       {(updateFields.isError || renderJob.isError) && (
         <div className="px-6 py-3 bg-red-50 border-b border-red-100">
@@ -404,6 +299,7 @@ export function JobEditor({ jobId, templateId, onBack, initialPrompt, initialFil
               onFieldsUpdated={handleFieldsUpdated}
               onTemplateUpdated={handleTemplateUpdated}
               onFilesChanged={() => refetch()}
+              onBack={onBack}
             />
           </div>
         </div>
@@ -411,8 +307,8 @@ export function JobEditor({ jobId, templateId, onBack, initialPrompt, initialFil
         {/* Right: Preview/Assets/Data with tabs (50%) */}
         <div className="w-1/2 flex flex-col bg-[#f5f5f7] p-4 pl-2">
           <div className="flex-1 min-h-0 bg-white rounded-xl overflow-hidden border border-[#d2d2d7] flex flex-col">
-            {/* Tabs */}
-            <div className="flex-shrink-0 px-4 pt-3 pb-2">
+            {/* Tabs + Actions */}
+            <div className="flex-shrink-0 px-4 pt-3 pb-2 flex items-center justify-between">
               <div className="flex gap-1 p-1 bg-[#f5f5f7] rounded-lg w-fit">
                 <button
                   onClick={() => setRightPanelTab("preview")}
@@ -445,6 +341,105 @@ export function JobEditor({ jobId, templateId, onBack, initialPrompt, initialFil
                   Data
                 </button>
               </div>
+
+              {/* Actions: Export and History dropdowns */}
+              {isReady && (
+                <div className="flex items-center gap-2">
+                  {/* Save button when there are changes */}
+                  {hasChanges && (
+                    <button
+                      onClick={handleSave}
+                      disabled={updateFields.isPending || renderJob.isPending}
+                      className="px-3 py-1.5 text-[12px] font-medium text-white bg-[#1d1d1f] rounded-md
+                                hover:bg-[#424245] active:scale-[0.98]
+                                disabled:opacity-40 disabled:cursor-not-allowed
+                                transition-all duration-200"
+                    >
+                      {updateFields.isPending || renderJob.isPending ? "Saving..." : "Save"}
+                    </button>
+                  )}
+
+                  {/* Export dropdown */}
+                  {job.renderedAt && (
+                    <div className="relative" ref={exportMenuRef}>
+                      <button
+                        onClick={() => setShowExportMenu(!showExportMenu)}
+                        className="px-3 py-1.5 text-[12px] font-medium text-[#86868b] hover:text-[#1d1d1f] rounded-md hover:bg-[#f5f5f7] transition-colors flex items-center gap-1"
+                      >
+                        Export
+                        <svg className={`w-3 h-3 transition-transform ${showExportMenu ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                        </svg>
+                      </button>
+
+                      {showExportMenu && (
+                        <div className="absolute right-0 top-full mt-1 w-36 bg-white rounded-lg shadow-lg border border-[#e8e8ed] py-1 z-50">
+                          <a
+                            href={`/api/jobs/${jobId}/pdf?t=${(previewRenderedAt || job.renderedAt) ?? Date.now()}`}
+                            download="output.pdf"
+                            onClick={() => setShowExportMenu(false)}
+                            className="block w-full px-3 py-2 text-left text-[12px] text-[#1d1d1f] hover:bg-[#f5f5f7] transition-colors"
+                          >
+                            PDF
+                          </a>
+                          <a
+                            href={`/api/jobs/${jobId}/svg?t=${(previewRenderedAt || job.renderedAt) ?? Date.now()}`}
+                            download="output.svg"
+                            onClick={() => setShowExportMenu(false)}
+                            className="block w-full px-3 py-2 text-left text-[12px] text-[#1d1d1f] hover:bg-[#f5f5f7] transition-colors"
+                          >
+                            SVG
+                          </a>
+                          <button
+                            onClick={async () => {
+                              setShowExportMenu(false);
+                              const res = await fetch(`/api/jobs/${job.id}/template-code`);
+                              if (res.ok) {
+                                setTemplateCode(await res.text());
+                                setShowCodeModal(true);
+                              }
+                            }}
+                            className="block w-full px-3 py-2 text-left text-[12px] text-[#1d1d1f] hover:bg-[#f5f5f7] transition-colors"
+                          >
+                            Code
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* History dropdown */}
+                  <div className="relative" ref={historyMenuRef}>
+                    <button
+                      onClick={() => setShowHistoryMenu(!showHistoryMenu)}
+                      className={`px-3 py-1.5 text-[12px] font-medium rounded-md transition-colors flex items-center gap-1 ${
+                        showHistoryPanel
+                          ? "text-[#1d1d1f] bg-[#f5f5f7]"
+                          : "text-[#86868b] hover:text-[#1d1d1f] hover:bg-[#f5f5f7]"
+                      }`}
+                    >
+                      History
+                      <svg className={`w-3 h-3 transition-transform ${showHistoryMenu ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                      </svg>
+                    </button>
+
+                    {showHistoryMenu && (
+                      <div className="absolute right-0 top-full mt-1 w-40 bg-white rounded-lg shadow-lg border border-[#e8e8ed] py-1 z-50">
+                        <button
+                          onClick={() => {
+                            setShowHistoryPanel(!showHistoryPanel);
+                            setShowHistoryMenu(false);
+                          }}
+                          className="block w-full px-3 py-2 text-left text-[12px] text-[#1d1d1f] hover:bg-[#f5f5f7] transition-colors"
+                        >
+                          {showHistoryPanel ? "Hide Panel" : "Show Panel"}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Tab content */}

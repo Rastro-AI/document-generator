@@ -239,9 +239,13 @@ export async function updateJobTemplateContent(
 // Get job SVG template content (from job storage)
 export async function getJobSvgContent(jobId: string): Promise<string | null> {
   try {
-    const buffer = await downloadFile(BUCKETS.JOBS, getJobFilePath(jobId, "template.svg"));
+    const path = getJobFilePath(jobId, "template.svg");
+    console.log(`[getJobSvgContent] Loading SVG for job ${jobId} from ${path}`);
+    const buffer = await downloadFile(BUCKETS.JOBS, path);
+    console.log(`[getJobSvgContent] Loaded SVG (${buffer.length} bytes)`);
     return buffer.toString("utf-8");
-  } catch {
+  } catch (error) {
+    console.log(`[getJobSvgContent] No SVG found for job ${jobId}:`, error);
     return null;
   }
 }
@@ -251,10 +255,13 @@ export async function updateJobSvgContent(
   jobId: string,
   content: string
 ): Promise<void> {
-  await uploadFile(BUCKETS.JOBS, getJobFilePath(jobId, "template.svg"), content, {
+  const path = getJobFilePath(jobId, "template.svg");
+  console.log(`[updateJobSvgContent] Saving SVG for job ${jobId} to ${path} (${content.length} chars)`);
+  await uploadFile(BUCKETS.JOBS, path, content, {
     contentType: "image/svg+xml",
     upsert: true,
   });
+  console.log(`[updateJobSvgContent] SVG saved successfully`);
 }
 
 // Copy template.svg from template folder to job storage
