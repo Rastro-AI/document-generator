@@ -1,0 +1,165 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="612" height="792" viewBox="0 0 612 792">
+  <!-- Background -->
+  <rect x="0" y="0" width="612" height="792" fill="#ffffff"/>
+
+  <!-- Global text defaults to reduce overlap (denser specs) -->
+  <!-- Top brand bar -->
+  <rect x="0" y="0" width="612" height="53" fill="#0B91B7"/>
+  <image x="19" y="18" width="75" height="18" xlink:href="{{LOGO_IMAGE}}" preserveAspectRatio="xMinYMid meet"/>
+
+  <!-- Title + description (left) -->
+  <text x="28.5" y="116" style="font-family: Arial, Helvetica, sans-serif; font-size: 30px; font-weight: 800; fill: #222222; letter-spacing: 0.2px;">
+    {{PRODUCT_TITLE:PAR38 LED BULB}}
+  </text>
+
+  <!-- Description (no foreignObject to ensure compatibility) -->
+  <text x="28.5" y="160" style="font-family: Arial, Helvetica, sans-serif; font-size: 12px; fill: #222222;">
+    <tspan x="28.5" dy="0">{{DESCRIPTION_LINE1:Save up to 85% on your electric bill with Sunco Lighting long-lasting}}</tspan>
+    <tspan x="28.5" dy="16">{{DESCRIPTION_LINE2:lamp life 25,000 hour LEDs. Low power usage replacement for}}</tspan>
+    <tspan x="28.5" dy="16">{{DESCRIPTION_LINE3:incandescent, halogen and fluorescent light bulbs.}}</tspan>
+  </text>
+
+  <!-- Product image (right) -->
+  <image x="367" y="69" width="193" height="193" xlink:href="{{PRODUCT_IMAGE}}" preserveAspectRatio="xMidYMid meet"/>
+
+  <!-- MODELS -->
+  <text x="28.5" y="235" style="font-family: Arial, Helvetica, sans-serif; font-size: 16px; font-weight: 800; fill: #222222;">
+    MODELS
+  </text>
+  <line x1="28.5" y1="245" x2="290" y2="245" stroke="#222222" stroke-width="1"/>
+
+  <text x="28.5" y="265" style="font-family: Arial, Helvetica, sans-serif; font-size: 11px; fill: #222222;">
+    <tspan x="28.5" dy="0">{{MODEL_1:PAR38_13W-2700K}}</tspan>
+    <tspan x="28.5" dy="16">{{MODEL_2:PAR38_13W-3000K}}</tspan>
+    <tspan x="28.5" dy="16">{{MODEL_3:PAR38_13W-4000K}}</tspan>
+  </text>
+  <text x="155" y="265" style="font-family: Arial, Helvetica, sans-serif; font-size: 11px; fill: #222222;">
+    <tspan x="155" dy="0">{{MODEL_4:PAR38_13W-5000K}}</tspan>
+    <tspan x="155" dy="16">{{MODEL_5:PAR38_13W-6000K}}</tspan>
+  </text>
+
+  <!-- Left charts -->
+  <text x="28.5" y="320" style="font-family: Arial, Helvetica, sans-serif; font-size: 16px; font-weight: 800; fill: #222222;">
+    LIGHT DISTRIBUTION ANGLE
+  </text>
+  <line x1="28.5" y1="330" x2="290" y2="330" stroke="#222222" stroke-width="1"/>
+
+  <image x="72" y="338" width="175" height="176" xlink:href="{{POLAR_CHART_IMAGE}}" preserveAspectRatio="xMidYMid meet"/>
+  <image x="80" y="514" width="149" height="176" xlink:href="{{BEAM_CHART_IMAGE}}" preserveAspectRatio="xMidYMid meet"/>
+
+  <text x="28.5" y="720" style="font-family: Arial, Helvetica, sans-serif; font-size: 9.5px; fill: #222222;">
+    <tspan style="font-weight:700;">NOTE:</tspan>
+    <tspan> {{NOTE_TEXT:The curves indicate the illuminated area and the average illumination at different distances.}}</tspan>
+  </text>
+
+  <!-- CERTIFICATIONS -->
+  <text x="28.5" y="748" style="font-family: Arial, Helvetica, sans-serif; font-size: 16px; font-weight: 800; fill: #222222;">
+    CERTIFICATIONS
+  </text>
+  <line x1="28.5" y1="758" x2="290" y2="758" stroke="#222222" stroke-width="1"/>
+  <image x="35" y="766" width="260" height="24" xlink:href="{{CERTIFICATIONS_IMAGE}}" preserveAspectRatio="xMinYMin meet"/>
+
+
+  <!-- Right column tables (absolute positioning) -->
+  <!-- SECTION: SPECIFICATIONS -->
+  <text x="320" y="314" style="font-family: Arial, Helvetica, sans-serif; font-size: 14px; font-weight: 800; fill: #222222;">SPECIFICATIONS</text>
+  <line x1="320" y1="322" x2="584" y2="322" stroke="#222222" stroke-width="1"/>
+
+  <!-- rows: 18pt height -->
+  <rect x="320" y="332" width="264" height="18" fill="#F3F4F5"/>
+  <rect x="320" y="350" width="264" height="18" fill="#FFFFFF"/>
+  <rect x="320" y="368" width="264" height="18" fill="#F3F4F5"/>
+  <rect x="320" y="386" width="264" height="18" fill="#FFFFFF"/>
+
+  <text x="332" y="345" style="font-family: Arial, Helvetica, sans-serif; font-size: 10px; fill: #222222;">Voltage</text>
+  <text x="500" y="345" style="font-family: Arial, Helvetica, sans-serif; font-size: 10px; font-weight: 700; fill: #222222;">{{VOLTAGE:120V}}</text>
+
+  <text x="332" y="363" style="font-family: Arial, Helvetica, sans-serif; font-size: 10px; fill: #222222;">Wattage</text>
+  <text x="500" y="363" style="font-family: Arial, Helvetica, sans-serif; font-size: 10px; font-weight: 700; fill: #222222;">{{WATTAGE:13W}}</text>
+
+  <text x="332" y="381" style="font-family: Arial, Helvetica, sans-serif; font-size: 10px; fill: #222222;">Current</text>
+  <text x="500" y="381" style="font-family: Arial, Helvetica, sans-serif; font-size: 10px; font-weight: 700; fill: #222222;">{{CURRENT:0.145A}}</text>
+
+  <text x="332" y="399" style="font-family: Arial, Helvetica, sans-serif; font-size: 10px; fill: #222222;">Power Factor</text>
+  <text x="500" y="399" style="font-family: Arial, Helvetica, sans-serif; font-size: 10px; font-weight: 700; fill: #222222;">{{POWER_FACTOR:0.7}}</text>
+
+  <!-- SECTION: LIGHTING PERFORMANCE -->
+  <text x="320" y="436" style="font-family: Arial, Helvetica, sans-serif; font-size: 14px; font-weight: 800; fill: #222222;">LIGHTING PERFORMANCE</text>
+  <line x1="320" y1="444" x2="584" y2="444" stroke="#222222" stroke-width="1"/>
+
+  <!-- rows: 18pt height -->
+  <rect x="320" y="454" width="264" height="18" fill="#F3F4F5"/>
+  <rect x="320" y="472" width="264" height="18" fill="#FFFFFF"/>
+  <rect x="320" y="490" width="264" height="18" fill="#F3F4F5"/>
+  <rect x="320" y="508" width="264" height="18" fill="#FFFFFF"/>
+  <rect x="320" y="526" width="264" height="18" fill="#F3F4F5"/>
+  <rect x="320" y="544" width="264" height="18" fill="#FFFFFF"/>
+  <rect x="320" y="562" width="264" height="18" fill="#F3F4F5"/>
+  <rect x="320" y="580" width="264" height="18" fill="#FFFFFF"/>
+
+  <text x="332" y="467" style="font-family: Arial, Helvetica, sans-serif; font-size: 10px; fill: #222222;">Lumens</text>
+  <text x="470" y="467" style="font-family: Arial, Helvetica, sans-serif; font-size: 10px; font-weight: 700; fill: #222222;">{{LUMENS:1,050 lm}}</text>
+
+  <text x="332" y="485" style="font-family: Arial, Helvetica, sans-serif; font-size: 10px; fill: #222222;">Equivalency</text>
+  <text x="470" y="485" style="font-family: Arial, Helvetica, sans-serif; font-size: 10px; font-weight: 700; fill: #222222;">{{EQUIVALENCY:100W}}</text>
+
+  <text x="332" y="503" style="font-family: Arial, Helvetica, sans-serif; font-size: 10px; fill: #222222;">Frequency</text>
+  <text x="470" y="503" style="font-family: Arial, Helvetica, sans-serif; font-size: 10px; font-weight: 700; fill: #222222;">{{FREQUENCY:60 Hz}}</text>
+
+  <text x="332" y="521" style="font-family: Arial, Helvetica, sans-serif; font-size: 10px; fill: #222222;">Color Rendering Index</text>
+  <text x="470" y="521" style="font-family: Arial, Helvetica, sans-serif; font-size: 10px; font-weight: 700; fill: #222222;">{{CRI:80}}</text>
+
+  <text x="332" y="539" style="font-family: Arial, Helvetica, sans-serif; font-size: 10px; fill: #222222;">Beam Angle</text>
+  <text x="470" y="539" style="font-family: Arial, Helvetica, sans-serif; font-size: 10px; font-weight: 700; fill: #222222;">{{BEAM_ANGLE:40°}}</text>
+
+  <text x="332" y="557" style="font-family: Arial, Helvetica, sans-serif; font-size: 10px; fill: #222222;">Dimmable</text>
+  <text x="470" y="557" style="font-family: Arial, Helvetica, sans-serif; font-size: 10px; font-weight: 700; fill: #222222;">{{DIMMABLE:Yes}}</text>
+
+  <text x="332" y="575" style="font-family: Arial, Helvetica, sans-serif; font-size: 10px; fill: #222222;">Efficacy</text>
+  <text x="470" y="575" style="font-family: Arial, Helvetica, sans-serif; font-size: 10px; font-weight: 700; fill: #222222;">{{EFFICACY:81 lm/w}}</text>
+
+  <text x="332" y="593" style="font-family: Arial, Helvetica, sans-serif; font-size: 10px; fill: #222222;">Color Temperature</text>
+  <!-- use foreignObject so long CCT list wraps instead of overlapping other sections -->
+  <text x="470" y="584" style="font-family: Arial, Helvetica, sans-serif; font-size: 10px; font-weight: 700; fill: #222222;">
+    <tspan x="470" dy="10">{{COLOR_TEMPERATURE:2700K/3000K/4000K/5000K/6000K}}</tspan>
+  </text>
+
+  <!-- SECTION: ENVIRONMENT -->
+  <text x="320" y="630" style="font-family: Arial, Helvetica, sans-serif; font-size: 14px; font-weight: 800; fill: #222222;">ENVIRONMENT</text>
+  <line x1="320" y1="638" x2="584" y2="638" stroke="#222222" stroke-width="1"/>
+
+  <rect x="320" y="648" width="264" height="18" fill="#F3F4F5"/>
+  <rect x="320" y="666" width="264" height="18" fill="#FFFFFF"/>
+
+  <text x="332" y="661" style="font-family: Arial, Helvetica, sans-serif; font-size: 10px; fill: #222222;">Operating Temperature</text>
+  <text x="470" y="661" style="font-family: Arial, Helvetica, sans-serif; font-size: 10px; font-weight: 700; fill: #222222;">{{OPERATING_TEMPERATURE:-4° F - 104° F}}</text>
+
+  <text x="332" y="679" style="font-family: Arial, Helvetica, sans-serif; font-size: 10px; fill: #222222;">Moisture Rating</text>
+  <text x="470" y="679" style="font-family: Arial, Helvetica, sans-serif; font-size: 10px; font-weight: 700; fill: #222222;">{{MOISTURE_RATING:Wet}}</text>
+
+  <!-- SECTION: CONSTRUCTION -->
+  <text x="320" y="704" style="font-family: Arial, Helvetica, sans-serif; font-size: 14px; font-weight: 800; fill: #222222;">CONSTRUCTION</text>
+  <line x1="320" y1="712" x2="584" y2="712" stroke="#222222" stroke-width="1"/>
+
+  <rect x="320" y="722" width="264" height="18" fill="#F3F4F5"/>
+  <rect x="320" y="740" width="264" height="18" fill="#FFFFFF"/>
+
+  <text x="332" y="735" style="font-family: Arial, Helvetica, sans-serif; font-size: 10px; fill: #222222;">Housing Material</text>
+  <text x="470" y="735" style="font-family: Arial, Helvetica, sans-serif; font-size: 10px; font-weight: 700; fill: #222222;">{{HOUSING_MATERIAL:Aluminum + PC}}</text>
+
+  <text x="332" y="753" style="font-family: Arial, Helvetica, sans-serif; font-size: 10px; fill: #222222;">Weight</text>
+  <text x="470" y="753" style="font-family: Arial, Helvetica, sans-serif; font-size: 10px; font-weight: 700; fill: #222222;">{{WEIGHT:0.22 lbs}}</text>
+
+  <!-- SECTION: LIFETIME -->
+  <text x="320" y="762" style="font-family: Arial, Helvetica, sans-serif; font-size: 14px; font-weight: 800; fill: #222222;">LIFETIME</text>
+  <line x1="320" y1="770" x2="584" y2="770" stroke="#222222" stroke-width="1"/>
+
+  <rect x="320" y="776" width="264" height="16" fill="#F3F4F5"/>
+  <rect x="320" y="792" width="264" height="16" fill="#FFFFFF"/>
+
+  <text x="332" y="788" style="font-family: Arial, Helvetica, sans-serif; font-size: 10px; fill: #222222;">Average Lifetime</text>
+  <text x="470" y="788" style="font-family: Arial, Helvetica, sans-serif; font-size: 10px; font-weight: 700; fill: #222222;">{{AVERAGE_LIFETIME:25,000+ hrs}}</text>
+
+  <text x="332" y="804" style="font-family: Arial, Helvetica, sans-serif; font-size: 10px; fill: #222222;">Warranty</text>
+  <text x="470" y="804" style="font-family: Arial, Helvetica, sans-serif; font-size: 10px; font-weight: 700; fill: #222222;">{{WARRANTY:5 Years}}</text>
+</svg>

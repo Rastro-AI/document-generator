@@ -1,0 +1,262 @@
+{
+  "id": "sunco-par38-led-bulb-spec-sheet",
+  "name": "Bulb spec sheet",
+  "format": "svg",
+  "canvas": {
+    "width": 612,
+    "height": 792
+  },
+  "fields": [
+    {
+      "name": "PRODUCT_TITLE",
+      "type": "string",
+      "description": "Main product title at top-left.",
+      "optional": true,
+      "default": "PAR38 LED BULB",
+      "example": "PAR38 LED BULB"
+    },
+    {
+      "name": "DESCRIPTION_LINE1",
+      "type": "string",
+      "description": "Description line 1 under title.",
+      "optional": true,
+      "default": "Save up to 85% on your electric bill with Sunco Lighting long-lasting",
+      "example": "Save up to 85% on your electric bill with Sunco Lighting long-lasting"
+    },
+    {
+      "name": "DESCRIPTION_LINE2",
+      "type": "string",
+      "description": "Description line 2 under title.",
+      "optional": true,
+      "default": "lamp life 25,000 hour LEDs. Low power usage replacement for",
+      "example": "lamp life 25,000 hour LEDs. Low power usage replacement for"
+    },
+    {
+      "name": "DESCRIPTION_LINE3",
+      "type": "string",
+      "description": "Description line 3 under title.",
+      "optional": true,
+      "default": "incandescent, halogen and fluorescent light bulbs.",
+      "example": "incandescent, halogen and fluorescent light bulbs."
+    },
+    {
+      "name": "MODEL_1",
+      "type": "string",
+      "description": "Model list item 1 (left column).",
+      "optional": true,
+      "default": "PAR38_13W-2700K",
+      "example": "PAR38_13W-2700K"
+    },
+    {
+      "name": "MODEL_2",
+      "type": "string",
+      "description": "Model list item 2 (left column).",
+      "optional": true,
+      "default": "PAR38_13W-3000K",
+      "example": "PAR38_13W-3000K"
+    },
+    {
+      "name": "MODEL_3",
+      "type": "string",
+      "description": "Model list item 3 (left column).",
+      "optional": true,
+      "default": "PAR38_13W-4000K",
+      "example": "PAR38_13W-4000K"
+    },
+    {
+      "name": "MODEL_4",
+      "type": "string",
+      "description": "Model list item 4 (right column).",
+      "optional": true,
+      "default": "PAR38_13W-5000K",
+      "example": "PAR38_13W-5000K"
+    },
+    {
+      "name": "MODEL_5",
+      "type": "string",
+      "description": "Model list item 5 (right column).",
+      "optional": true,
+      "default": "PAR38_13W-6000K",
+      "example": "PAR38_13W-6000K"
+    },
+    {
+      "name": "NOTE_TEXT",
+      "type": "string",
+      "description": "Note text above certifications.",
+      "optional": true,
+      "default": "The curves indicate the illuminated area and the average illumination at different distances.",
+      "example": "The curves indicate the illuminated area and the average illumination at different distances."
+    },
+    {
+      "name": "VOLTAGE",
+      "type": "string",
+      "description": "Specifications: Voltage value.",
+      "optional": true,
+      "default": "120V",
+      "example": "120V"
+    },
+    {
+      "name": "WATTAGE",
+      "type": "string",
+      "description": "Specifications: Wattage value.",
+      "optional": true,
+      "default": "13W",
+      "example": "13W"
+    },
+    {
+      "name": "CURRENT",
+      "type": "string",
+      "description": "Specifications: Current value.",
+      "optional": true,
+      "default": "0.145A",
+      "example": "0.145A"
+    },
+    {
+      "name": "POWER_FACTOR",
+      "type": "string",
+      "description": "Specifications: Power factor value.",
+      "optional": true,
+      "default": "0.7",
+      "example": "0.7"
+    },
+    {
+      "name": "LUMENS",
+      "type": "string",
+      "description": "Lighting performance: Lumens value.",
+      "optional": true,
+      "default": "1,050 lm",
+      "example": "1,050 lm"
+    },
+    {
+      "name": "EQUIVALENCY",
+      "type": "string",
+      "description": "Lighting performance: Equivalency value.",
+      "optional": true,
+      "default": "100W",
+      "example": "100W"
+    },
+    {
+      "name": "FREQUENCY",
+      "type": "string",
+      "description": "Lighting performance: Frequency value.",
+      "optional": true,
+      "default": "60 Hz",
+      "example": "60 Hz"
+    },
+    {
+      "name": "CRI",
+      "type": "string",
+      "description": "Lighting performance: Color rendering index value.",
+      "optional": true,
+      "default": "80",
+      "example": "80"
+    },
+    {
+      "name": "BEAM_ANGLE",
+      "type": "string",
+      "description": "Lighting performance: Beam angle value.",
+      "optional": true,
+      "default": "40°",
+      "example": "40°"
+    },
+    {
+      "name": "DIMMABLE",
+      "type": "string",
+      "description": "Lighting performance: Dimmable value.",
+      "optional": true,
+      "default": "Yes",
+      "example": "Yes"
+    },
+    {
+      "name": "EFFICACY",
+      "type": "string",
+      "description": "Lighting performance: Efficacy value.",
+      "optional": true,
+      "default": "81 lm/w",
+      "example": "81 lm/w"
+    },
+    {
+      "name": "COLOR_TEMPERATURE",
+      "type": "string",
+      "description": "Lighting performance: Color temperature list (wraps).",
+      "optional": true,
+      "default": "2700K/3000K/4000K/5000K/6000K",
+      "example": "2700K/3000K/4000K/5000K/6000K"
+    },
+    {
+      "name": "OPERATING_TEMPERATURE",
+      "type": "string",
+      "description": "Environment: Operating temperature value.",
+      "optional": true,
+      "default": "-4° F - 104° F",
+      "example": "-4° F - 104° F"
+    },
+    {
+      "name": "MOISTURE_RATING",
+      "type": "string",
+      "description": "Environment: Moisture rating value.",
+      "optional": true,
+      "default": "Wet",
+      "example": "Wet"
+    },
+    {
+      "name": "HOUSING_MATERIAL",
+      "type": "string",
+      "description": "Construction: Housing material value.",
+      "optional": true,
+      "default": "Aluminum + PC",
+      "example": "Aluminum + PC"
+    },
+    {
+      "name": "WEIGHT",
+      "type": "string",
+      "description": "Construction: Weight value.",
+      "optional": true,
+      "default": "0.22 lbs",
+      "example": "0.22 lbs"
+    },
+    {
+      "name": "AVERAGE_LIFETIME",
+      "type": "string",
+      "description": "Lifetime: Average lifetime value.",
+      "optional": true,
+      "default": "25,000+ hrs",
+      "example": "25,000+ hrs"
+    },
+    {
+      "name": "WARRANTY",
+      "type": "string",
+      "description": "Lifetime: Warranty value.",
+      "optional": true,
+      "default": "5 Years",
+      "example": "5 Years"
+    }
+  ],
+  "assetSlots": [
+    {
+      "name": "LOGO_IMAGE",
+      "kind": "logo",
+      "description": "Sunco logo in top bar (white on teal)."
+    },
+    {
+      "name": "PRODUCT_IMAGE",
+      "kind": "photo",
+      "description": "Product photo (PAR38 bulb) top-right."
+    },
+    {
+      "name": "POLAR_CHART_IMAGE",
+      "kind": "chart",
+      "description": "Polar light distribution chart (left middle)."
+    },
+    {
+      "name": "BEAM_CHART_IMAGE",
+      "kind": "chart",
+      "description": "Beam/distance chart below polar chart (left middle)."
+    },
+    {
+      "name": "CERTIFICATIONS_IMAGE",
+      "kind": "icon",
+      "description": "Certifications icons strip at bottom-left."
+    }
+  ]
+}

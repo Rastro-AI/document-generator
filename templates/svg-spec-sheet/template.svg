@@ -1,42 +1,23 @@
 <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="816" height="1056" viewBox="0 0 816 1056">
-  <defs>
-    <style>
-      .page { fill: #ffffff; }
-      .header { fill: #0099CC; }
-      .header-text { fill: #ffffff; font-family: Arial, sans-serif; font-size: 24px; font-weight: bold; }
-      .title { fill: #1a1a1a; font-family: Arial, sans-serif; font-size: 32px; font-weight: bold; }
-      .subtitle { fill: #666666; font-family: Arial, sans-serif; font-size: 14px; }
-      .description { fill: #333333; font-family: Arial, sans-serif; font-size: 12px; }
-      .section-header { fill: #0099CC; font-family: Arial, sans-serif; font-size: 16px; font-weight: bold; }
-      .spec-label { fill: #666666; font-family: Arial, sans-serif; font-size: 11px; }
-      .spec-value { fill: #1a1a1a; font-family: Arial, sans-serif; font-size: 12px; font-weight: bold; }
-      .footer-text { fill: #999999; font-family: Arial, sans-serif; font-size: 10px; }
-      .divider { stroke: #e0e0e0; stroke-width: 1; }
-      .spec-row-even { fill: #f7f7f7; }
-      .spec-row-odd { fill: #ffffff; }
-      .image-placeholder { fill: #f0f0f0; stroke: #cccccc; stroke-width: 1; }
-    </style>
-  </defs>
-
   <!-- Page background -->
-  <rect class="page" x="0" y="0" width="816" height="1056"/>
+  <rect style="fill: #ffffff;" x="0" y="0" width="816" height="1056"/>
 
   <!-- Header bar -->
-  <rect class="header" x="0" y="0" width="816" height="60"/>
+  <rect style="fill: #0099CC;" x="0" y="0" width="816" height="60"/>
 
   <!-- Company logo placeholder -->
   <g transform="translate(28, 10)">
     <image xlink:href="{{COMPANY_LOGO}}" x="0" y="0" width="120" height="40" preserveAspectRatio="xMidYMid meet"/>
   </g>
 
-  <text class="header-text" x="788" y="40" text-anchor="end">SPEC SHEET</text>
+  <text style="fill: #ffffff; font-family: Arial, sans-serif; font-size: 24px; font-weight: bold;" x="788" y="40" text-anchor="end">SPEC SHEET</text>
 
   <!-- Main content area -->
   <g transform="translate(28, 80)">
 
     <!-- Product title -->
-    <text class="title" x="0" y="30">{{PRODUCT_NAME}}</text>
-    <text class="subtitle" x="0" y="50">Model: {{MODEL_NUMBER}}</text>
+    <text style="fill: #1a1a1a; font-family: Arial, sans-serif; font-size: 32px; font-weight: bold;" x="0" y="30">{{PRODUCT_NAME}}</text>
+    <text style="fill: #666666; font-family: Arial, sans-serif; font-size: 14px;" x="0" y="50">Model: {{MODEL_NUMBER}}</text>
 
     <!-- Two column layout -->
     <g transform="translate(0, 70)">
@@ -44,67 +25,67 @@
       <!-- Left column: Product image and description -->
       <g>
         <!-- Product image -->
-        <rect class="image-placeholder" x="0" y="0" width="350" height="280" rx="8"/>
+        <rect style="fill: #f0f0f0; stroke: #cccccc; stroke-width: 1;" x="0" y="0" width="350" height="280" rx="8"/>
         <image xlink:href="{{PRODUCT_IMAGE}}" x="10" y="10" width="330" height="260" preserveAspectRatio="xMidYMid meet"/>
 
         <!-- Description -->
-        <text class="section-header" x="0" y="310">Product Description</text>
-        <line class="divider" x1="0" y1="320" x2="350" y2="320"/>
+        <text style="fill: #0099CC; font-family: Arial, sans-serif; font-size: 16px; font-weight: bold;" x="0" y="310">Product Description</text>
+        <line style="stroke: #e0e0e0; stroke-width: 1;" x1="0" y1="320" x2="350" y2="320"/>
 
-        <text class="description" x="0" y="345">{{PRODUCT_DESCRIPTION}}</text>
+        <text style="fill: #333333; font-family: Arial, sans-serif; font-size: 12px;" x="0" y="345">{{PRODUCT_DESCRIPTION}}</text>
       </g>
 
       <!-- Right column: Specifications -->
       <g transform="translate(400, 0)">
-        <text class="section-header" x="0" y="20">Specifications</text>
-        <line class="divider" x1="0" y1="30" x2="360" y2="30"/>
+        <text style="fill: #0099CC; font-family: Arial, sans-serif; font-size: 16px; font-weight: bold;" x="0" y="20">Specifications</text>
+        <line style="stroke: #e0e0e0; stroke-width: 1;" x1="0" y1="30" x2="360" y2="30"/>
 
         <!-- Spec rows -->
         <g transform="translate(0, 40)">
           <!-- Row 1: Wattage -->
-          <rect class="spec-row-even" x="0" y="0" width="360" height="36"/>
-          <text class="spec-label" x="10" y="24">Wattage</text>
-          <text class="spec-value" x="350" y="24" text-anchor="end">{{WATTAGE}}</text>
+          <rect style="fill: #f7f7f7;" x="0" y="0" width="360" height="36"/>
+          <text style="fill: #666666; font-family: Arial, sans-serif; font-size: 11px;" x="10" y="24">Wattage</text>
+          <text style="fill: #1a1a1a; font-family: Arial, sans-serif; font-size: 12px; font-weight: bold;" x="350" y="24" text-anchor="end">{{WATTAGE}}</text>
 
           <!-- Row 2: Lumens -->
-          <rect class="spec-row-odd" x="0" y="36" width="360" height="36"/>
-          <text class="spec-label" x="10" y="60">Light Output</text>
-          <text class="spec-value" x="350" y="60" text-anchor="end">{{LUMENS}}</text>
+          <rect style="fill: #ffffff;" x="0" y="36" width="360" height="36"/>
+          <text style="fill: #666666; font-family: Arial, sans-serif; font-size: 11px;" x="10" y="60">Light Output</text>
+          <text style="fill: #1a1a1a; font-family: Arial, sans-serif; font-size: 12px; font-weight: bold;" x="350" y="60" text-anchor="end">{{LUMENS}}</text>
 
           <!-- Row 3: Color Temperature -->
-          <rect class="spec-row-even" x="0" y="72" width="360" height="36"/>
-          <text class="spec-label" x="10" y="96">Color Temperature</text>
-          <text class="spec-value" x="350" y="96" text-anchor="end">{{COLOR_TEMP}}</text>
+          <rect style="fill: #f7f7f7;" x="0" y="72" width="360" height="36"/>
+          <text style="fill: #666666; font-family: Arial, sans-serif; font-size: 11px;" x="10" y="96">Color Temperature</text>
+          <text style="fill: #1a1a1a; font-family: Arial, sans-serif; font-size: 12px; font-weight: bold;" x="350" y="96" text-anchor="end">{{COLOR_TEMP}}</text>
 
           <!-- Row 4: CRI -->
-          <rect class="spec-row-odd" x="0" y="108" width="360" height="36"/>
-          <text class="spec-label" x="10" y="132">CRI</text>
-          <text class="spec-value" x="350" y="132" text-anchor="end">{{CRI}}</text>
+          <rect style="fill: #ffffff;" x="0" y="108" width="360" height="36"/>
+          <text style="fill: #666666; font-family: Arial, sans-serif; font-size: 11px;" x="10" y="132">CRI</text>
+          <text style="fill: #1a1a1a; font-family: Arial, sans-serif; font-size: 12px; font-weight: bold;" x="350" y="132" text-anchor="end">{{CRI}}</text>
 
           <!-- Row 5: Beam Angle -->
-          <rect class="spec-row-even" x="0" y="144" width="360" height="36"/>
-          <text class="spec-label" x="10" y="168">Beam Angle</text>
-          <text class="spec-value" x="350" y="168" text-anchor="end">{{BEAM_ANGLE}}</text>
+          <rect style="fill: #f7f7f7;" x="0" y="144" width="360" height="36"/>
+          <text style="fill: #666666; font-family: Arial, sans-serif; font-size: 11px;" x="10" y="168">Beam Angle</text>
+          <text style="fill: #1a1a1a; font-family: Arial, sans-serif; font-size: 12px; font-weight: bold;" x="350" y="168" text-anchor="end">{{BEAM_ANGLE}}</text>
 
           <!-- Row 6: Voltage -->
-          <rect class="spec-row-odd" x="0" y="180" width="360" height="36"/>
-          <text class="spec-label" x="10" y="204">Input Voltage</text>
-          <text class="spec-value" x="350" y="204" text-anchor="end">{{VOLTAGE}}</text>
+          <rect style="fill: #ffffff;" x="0" y="180" width="360" height="36"/>
+          <text style="fill: #666666; font-family: Arial, sans-serif; font-size: 11px;" x="10" y="204">Input Voltage</text>
+          <text style="fill: #1a1a1a; font-family: Arial, sans-serif; font-size: 12px; font-weight: bold;" x="350" y="204" text-anchor="end">{{VOLTAGE}}</text>
 
           <!-- Row 7: Lifetime -->
-          <rect class="spec-row-even" x="0" y="216" width="360" height="36"/>
-          <text class="spec-label" x="10" y="240">Rated Lifetime</text>
-          <text class="spec-value" x="350" y="240" text-anchor="end">{{LIFETIME}}</text>
+          <rect style="fill: #f7f7f7;" x="0" y="216" width="360" height="36"/>
+          <text style="fill: #666666; font-family: Arial, sans-serif; font-size: 11px;" x="10" y="240">Rated Lifetime</text>
+          <text style="fill: #1a1a1a; font-family: Arial, sans-serif; font-size: 12px; font-weight: bold;" x="350" y="240" text-anchor="end">{{LIFETIME}}</text>
 
           <!-- Row 8: Dimmable -->
-          <rect class="spec-row-odd" x="0" y="252" width="360" height="36"/>
-          <text class="spec-label" x="10" y="276">Dimmable</text>
-          <text class="spec-value" x="350" y="276" text-anchor="end">{{DIMMABLE}}</text>
+          <rect style="fill: #ffffff;" x="0" y="252" width="360" height="36"/>
+          <text style="fill: #666666; font-family: Arial, sans-serif; font-size: 11px;" x="10" y="276">Dimmable</text>
+          <text style="fill: #1a1a1a; font-family: Arial, sans-serif; font-size: 12px; font-weight: bold;" x="350" y="276" text-anchor="end">{{DIMMABLE}}</text>
 
           <!-- Row 9: Warranty -->
-          <rect class="spec-row-even" x="0" y="288" width="360" height="36"/>
-          <text class="spec-label" x="10" y="312">Warranty</text>
-          <text class="spec-value" x="350" y="312" text-anchor="end">{{WARRANTY}}</text>
+          <rect style="fill: #f7f7f7;" x="0" y="288" width="360" height="36"/>
+          <text style="fill: #666666; font-family: Arial, sans-serif; font-size: 11px;" x="10" y="312">Warranty</text>
+          <text style="fill: #1a1a1a; font-family: Arial, sans-serif; font-size: 12px; font-weight: bold;" x="350" y="312" text-anchor="end">{{WARRANTY}}</text>
         </g>
       </g>
     </g>
@@ -112,8 +93,8 @@
 
   <!-- Footer -->
   <g transform="translate(28, 1020)">
-    <line class="divider" x1="0" y1="0" x2="760" y2="0"/>
-    <text class="footer-text" x="0" y="20">Generated with Document Generator</text>
-    <text class="footer-text" x="760" y="20" text-anchor="end">Page 1 of 1</text>
+    <line style="stroke: #e0e0e0; stroke-width: 1;" x1="0" y1="0" x2="760" y2="0"/>
+    <text style="fill: #999999; font-family: Arial, sans-serif; font-size: 10px;" x="0" y="20">Generated with Document Generator</text>
+    <text style="fill: #999999; font-family: Arial, sans-serif; font-size: 10px;" x="760" y="20" text-anchor="end">Page 1 of 1</text>
   </g>
 </svg>
