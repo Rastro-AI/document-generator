@@ -74,6 +74,8 @@ export interface TemplateJsonField {
   name: string;
   type: string;
   description: string;
+  optional?: boolean;
+  default?: unknown;
   example?: unknown;
   items?: { type: string; properties?: Record<string, { type: string; description?: string }> };
   properties?: Record<string, { type: string; description?: string }>;
@@ -94,6 +96,9 @@ export interface TemplateGeneratorResult {
   templateCode?: string; // SVG content
   message: string;
   versions?: Array<{ version: number; previewBase64: string; pdfBase64?: string }>;
+  // Full conversation history for resuming later
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  conversationHistory?: any[];
 }
 
 // Note: We don't use pdf2svg because it produces uneditable glyph-based SVG.
@@ -183,8 +188,8 @@ CRITICAL:
  */
 export async function runTemplateGeneratorAgent(
   pdfPageImages: string | string[],
-  pdfBuffer: Buffer,
   pdfFilename: string,
+  pdfBuffer?: Buffer | null,
   userPrompt?: string,
   onEvent?: GeneratorEventCallback,
   reasoning: "none" | "low" | "high" = "low",
@@ -192,7 +197,9 @@ export async function runTemplateGeneratorAgent(
   existingSvg?: string,
   existingJson?: TemplateJson,
   feedback?: string,
-  startVersion: number = 0
+  startVersion: number = 0,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  existingConversationHistory?: any[]
 ): Promise<TemplateGeneratorResult> {
   const pageImages = Array.isArray(pdfPageImages) ? pdfPageImages : [pdfPageImages];
   const isContinuation = !!(existingSvg && feedback);
@@ -213,6 +220,8 @@ export async function runTemplateGeneratorAgent(
   let currentSvg: string | null = existingSvg || null;
   let currentJson: TemplateJson | null = existingJson || null;
   let isComplete = false;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let conversationHistory: any[] = existingConversationHistory || [];
 
   // Container for code_interpreter
   let containerId: string | null = null;
@@ -235,13 +244,17 @@ export async function runTemplateGeneratorAgent(
     containerId = container.id;
     log.info("Container created", containerId);
 
-    // Upload PDF for analysis
-    const pdfPath = path.join(os.tmpdir(), "original.pdf");
-    fsSync.writeFileSync(pdfPath, pdfBuffer);
-    const pdfStream = fsSync.createReadStream(pdfPath);
-    await openai.containers.files.create(containerId, { file: pdfStream });
-    log.info("Original PDF uploaded");
-    fsSync.unlinkSync(pdfPath);
+    // Upload PDF for analysis (if provided)
+    if (pdfBuffer && pdfBuffer.length > 0) {
+      const pdfPath = path.join(os.tmpdir(), "original.pdf");
+      fsSync.writeFileSync(pdfPath, pdfBuffer);
+      const pdfStream = fsSync.createReadStream(pdfPath);
+      await openai.containers.files.create(containerId, { file: pdfStream });
+      log.info("Original PDF uploaded");
+      fsSync.unlinkSync(pdfPath);
+    } else {
+      log.info("No PDF provided (prompt-only mode)");
+    }
 
     // If continuing, upload current SVG as PNG for visual reference
     if (currentSvg) {
@@ -258,14 +271,24 @@ export async function runTemplateGeneratorAgent(
       }
     }
 
-    // Upload screenshot for visual reference
-    const screenshotBuffer = Buffer.from(pageImages[0].split(",")[1], "base64");
-    const screenshotPath = path.join(os.tmpdir(), "original_screenshot.png");
-    fsSync.writeFileSync(screenshotPath, screenshotBuffer);
-    const screenshotStream = fsSync.createReadStream(screenshotPath);
-    await openai.containers.files.create(containerId, { file: screenshotStream });
-    log.info("Screenshot uploaded");
-    fsSync.unlinkSync(screenshotPath);
+    // Upload screenshot for visual reference (if we have one)
+    if (pageImages[0]) {
+      try {
+        const commaIdx = pageImages[0].indexOf(",");
+        const base64Data = commaIdx >= 0 ? pageImages[0].slice(commaIdx + 1) : pageImages[0];
+        const screenshotBuffer = Buffer.from(base64Data, "base64");
+        const screenshotPath = path.join(os.tmpdir(), "original_screenshot.png");
+        fsSync.writeFileSync(screenshotPath, screenshotBuffer);
+        const screenshotStream = fsSync.createReadStream(screenshotPath);
+        await openai.containers.files.create(containerId, { file: screenshotStream });
+        log.info("Screenshot uploaded");
+        fsSync.unlinkSync(screenshotPath);
+      } catch (e) {
+        log.error("Failed to upload screenshot", e);
+      }
+    } else {
+      log.info("No screenshot provided");
+    }
 
     // Create custom tools
     const readSvgTool = tool({
@@ -348,6 +371,8 @@ export async function runTemplateGeneratorAgent(
           name: z.string().describe("SCREAMING_SNAKE_CASE field name"),
           type: z.enum(["string", "number", "boolean", "array", "object"]),
           description: z.string(),
+          optional: z.boolean().nullable().describe("Whether this field is optional (default: false)"),
+          defaultValue: z.string().nullable().describe("Default value if field is not provided"),
           exampleJson: z.string().nullable().describe("JSON-encoded example value"),
           itemsJson: z.string().nullable().describe("For arrays: item schema"),
           propertiesJson: z.string().nullable().describe("For objects: properties schema"),
@@ -376,10 +401,12 @@ export async function runTemplateGeneratorAgent(
           name: name || "Generated Template",
           format: "svg",
           canvas: canvas || { width: 612, height: 792 },
-          fields: fields.map((f: { name: string; type: string; description: string; exampleJson?: string | null; itemsJson?: string | null; propertiesJson?: string | null }) => ({
+          fields: fields.map((f: { name: string; type: string; description: string; optional?: boolean | null; defaultValue?: string | null; exampleJson?: string | null; itemsJson?: string | null; propertiesJson?: string | null }) => ({
             name: f.name,
             type: f.type,
             description: f.description,
+            optional: f.optional ?? false,
+            default: f.defaultValue || undefined,
             example: parseJson(f.exampleJson || null),
             items: parseJson(f.itemsJson || null),
             properties: parseJson(f.propertiesJson || null),
@@ -466,9 +493,9 @@ Files in container:
 
 Original filename: ${pdfFilename}${userInstructions}
 
-Files in container:
+${pdfBuffer && pdfBuffer.length > 0 ? `Files in container:
 - /mnt/user/original.pdf - The PDF to analyze (use code_interpreter to extract colors, measure positions)
-- /mnt/user/original_screenshot.png - Screenshot of the PDF
+${pageImages[0] ? "- /mnt/user/original_screenshot.png - Screenshot of the PDF" : ""}
 
 ## PHASE 1: EXACT RECREATION
 First, recreate the PDF EXACTLY - copy all text verbatim, match all colors and positions.
@@ -482,7 +509,19 @@ Then write_svg with the EXACT text from the PDF. Do NOT use placeholders yet (ex
 ## PHASE 2: ADD PLACEHOLDERS (later)
 Only after your SVG matches the original visually, then convert dynamic text to {{PLACEHOLDERS}}.
 
-START NOW: Use code_interpreter to analyze the PDF, then write_svg with exact text content.`;
+START NOW: Use code_interpreter to analyze the PDF, then write_svg with exact text content.` : `PROMPT-ONLY MODE
+There is no PDF reference. Create a clean, production-grade SVG layout that fulfills the user's instructions. Use best practices:
+- Establish a consistent grid, spacing, and typographic scale
+- Use a neutral base font (e.g., Helvetica/Arial) unless the prompt specifies otherwise
+- Define CSS classes in <defs><style> and reuse them
+- Keep vector shapes simple and editable
+- Leave image areas as rectangles with xlink:href="{{ASSET_NAME}}" if the prompt implies images
+
+Proceed with the TWO-PHASE approach adapted for prompt-only:
+1) Phase 1: produce a high-quality fixed SVG (no text placeholders yet). Focus on visual quality and layout.
+2) Phase 2: convert dynamic text to {{PLACEHOLDERS}} and write_template_json.
+
+START NOW: Design the SVG from the prompt, then write_svg.`}`;
     }
 
     // Track last render for comparison
@@ -491,9 +530,6 @@ START NOW: Use code_interpreter to analyze the PDF, then write_svg with exact te
     // Iteration loop - allow plenty of iterations for quality output
     const MAX_ITERATIONS = 15;
     log.info("Starting iteration loop", { maxIterations: MAX_ITERATIONS });
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let conversationHistory: any[] = [];
 
     for (let iteration = 0; iteration < MAX_ITERATIONS && !isComplete; iteration++) {
       log.info(`\n${"=".repeat(80)}`);
@@ -511,29 +547,53 @@ START NOW: Use code_interpreter to analyze the PDF, then write_svg with exact te
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       let input: any;
 
-      if (iteration === 0) {
+      if (iteration === 0 && existingConversationHistory && existingConversationHistory.length > 0) {
+        // Resuming with existing history - inject user feedback into the conversation
+        log.info(`Resuming with existing conversation history (${existingConversationHistory.length} items)`);
+
+        const feedbackContent = `USER FEEDBACK (please address this):
+${feedback}
+
+The current template state has been preserved. Please:
+1. Review the feedback carefully
+2. Use read_svg to see the current template if needed
+3. Make the requested changes using patch_svg
+4. Update write_template_json if fields changed`;
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const feedbackMessage: any[] = [
+          { type: "input_text", text: feedbackContent },
+        ];
+        if (pageImages[0]) {
+          feedbackMessage.push({ type: "input_image", image: pageImages[0] });
+        }
+
+        input = [...existingConversationHistory, { role: "user", content: feedbackMessage }];
+      } else if (iteration === 0) {
+        // Fresh start
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const initialContent: any[] = [
           { type: "input_text", text: initialPrompt },
-          { type: "input_image", image: pageImages[0] },
         ];
+        if (pageImages[0]) {
+          initialContent.push({ type: "input_image", image: pageImages[0] });
+        }
         input = [{ role: "user", content: initialContent }];
       } else {
         // Check if we're still in Phase 1 (no placeholders yet) or Phase 2
         const hasPlaceholders = currentSvg && currentSvg.includes("{{") && !currentSvg.match(/\{\{[A-Z_]+\}\}/g)?.every(p => p.includes("IMAGE") || p.includes("LOGO") || p.includes("PHOTO"));
+        const hasOriginalRef = !!pageImages[0];
 
         const comparisonText = hasPlaceholders
           ? `COMPARISON - Version ${currentVersion} rendered.
 
-Left image: Original PDF screenshot
-Right image: Current rendered template (V${currentVersion})
+${hasOriginalRef ? "Left image: Original reference\nRight image: Current rendered template (V" + currentVersion + ")" : "Reference: Current rendered template (V" + currentVersion + ")"}
 
 You are in PHASE 2 (placeholders added). Review the template and refine if needed.
 Call mark_complete when satisfied with the final result.`
           : `COMPARISON - Version ${currentVersion} rendered.
 
-Left image: Original PDF screenshot
-Right image: Current rendered template (V${currentVersion})
+${hasOriginalRef ? "Left image: Original reference\nRight image: Current rendered template (V" + currentVersion + ")" : "Reference: Current rendered template (V" + currentVersion + ")"}
 
 You are in PHASE 1 (exact recreation). Compare carefully:
 - Does the layout match? (positions, sizes, spacing)
@@ -546,12 +606,15 @@ If it doesn't match → use patch_svg to fix the differences first.`;
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const content: any[] = [
           { type: "input_text", text: comparisonText },
-          { type: "input_image", image: pageImages[0] },
         ];
+        if (pageImages[0]) {
+          content.push({ type: "input_image", image: pageImages[0] });
+        }
 
         if (lastRenderPngBase64) {
           content.push({ type: "input_image", image: lastRenderPngBase64 });
-          log.info(`Sending comparison: original PDF (${pageImages[0].length} chars) + current render (${lastRenderPngBase64.length} chars)`);
+          const originalLen = pageImages[0] ? pageImages[0].length : 0;
+          log.info(`Sending comparison: original reference (${originalLen} chars) + current render (${lastRenderPngBase64.length} chars)`);
         } else {
           log.error(`WARNING: No lastRenderPngBase64 available for iteration ${iteration + 1}! Model won't see current template.`);
         }
@@ -692,6 +755,7 @@ If it doesn't match → use patch_svg to fix the differences first.`;
         templateCode: currentSvg,
         message: `SVG template generated with ${currentVersion} version(s)`,
         versions,
+        conversationHistory,
       };
     }
 
@@ -700,6 +764,7 @@ If it doesn't match → use patch_svg to fix the differences first.`;
       success: false,
       message: "Failed to generate template - no valid output produced",
       versions,
+      conversationHistory,
     };
   } catch (error) {
     log.error("Template generation EXCEPTION", error);
@@ -716,6 +781,7 @@ If it doesn't match → use patch_svg to fix the differences first.`;
       success: false,
       message: `Generation failed: ${error}`,
       versions,
+      conversationHistory,
     };
   }
 }

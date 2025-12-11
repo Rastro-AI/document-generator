@@ -1,0 +1,93 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="612" height="792" viewBox="0 0 612 792">
+  <defs>
+    <style type="text/css"><![CDATA[
+      .bg { fill: #ffffff; }
+      .header-bar { fill: #0099cc; }
+      .spec-alt { fill: #f7f7f7; }
+      .spec-normal { fill: #ffffff; }
+      .image-frame { fill: #f0f0f0; stroke: #cccccc; stroke-width: 0.75; }
+      .divider { stroke: #e0e0e0; stroke-width: 0.75; }
+      .title-main { font-family: Arial, Helvetica, sans-serif; font-size: 24px; font-weight: bold; fill: #1a1a1a; }
+      .title-sub { font-family: Arial, Helvetica, sans-serif; font-size: 10.5px; fill: #666666; }
+      .header-text { font-family: Arial, Helvetica, sans-serif; font-size: 18px; font-weight: bold; fill: #ffffff; }
+      .section-header { font-family: Arial, Helvetica, sans-serif; font-size: 12px; font-weight: bold; fill: #0099cc; }
+      .label { font-family: Arial, Helvetica, sans-serif; font-size: 8.25px; fill: #666666; }
+      .value { font-family: Arial, Helvetica, sans-serif; font-size: 9px; font-weight: bold; fill: #1a1a1a; }
+      .body-text { font-family: Arial, Helvetica, sans-serif; font-size: 9px; fill: #333333; }
+      .footer-text { font-family: Arial, Helvetica, sans-serif; font-size: 7.5px; fill: #999999; }
+    ]]></style>
+  </defs>
+
+  <!-- Background -->
+  <rect class="bg" x="0" y="0" width="612" height="792" />
+
+  <!-- Top header bar -->
+  <rect class="header-bar" x="0" y="0" width="612" height="45" />
+
+  <!-- UL logo image placeholder -->
+  <image x="38" y="7" width="30" height="30" xlink:href="{{UL_LOGO}}" />
+
+  <!-- SPEC SHEET text -->
+  <text class="header-text" x="476.97" y="30">SPEC SHEET</text>
+
+  <!-- Main title -->
+  <text class="title-main" x="21" y="82">PAR38 LED BULB</text>
+  <text class="title-sub" x="21" y="98">Model: {{MODEL_NUMBER}}</text>
+
+  <!-- Image frame and FCC image placeholder -->
+  <rect class="image-frame" x="21" y="112.5" width="262.5" height="210" rx="6" ry="6" />
+  <image x="35.71" y="120" width="233.54" height="195" xlink:href="{{PRODUCT_IMAGE}}" />
+
+  <!-- Left section: Product Description -->
+  <line class="divider" x1="21" y1="352.5" x2="283.5" y2="352.5" />
+  <text class="section-header" x="21" y="344">Product Description</text>
+  <text class="body-text" x="21" y="372">{{PRODUCT_DESCRIPTION}}</text>
+
+  <!-- Right section: Specifications heading -->
+  <text class="section-header" x="321" y="132">Specifications</text>
+  <line class="divider" x1="321" y1="138" x2="591" y2="138" />
+
+  <!-- Specification rows background -->
+  <rect class="spec-alt" x="321" y="142.5" width="270" height="27" />
+  <rect class="spec-normal" x="321" y="169.5" width="270" height="27" />
+  <rect class="spec-alt" x="321" y="196.5" width="270" height="27" />
+  <rect class="spec-normal" x="321" y="223.5" width="270" height="27" />
+  <rect class="spec-alt" x="321" y="250.5" width="270" height="27" />
+  <rect class="spec-normal" x="321" y="277.5" width="270" height="27" />
+  <rect class="spec-alt" x="321" y="304.5" width="270" height="27" />
+  <rect class="spec-normal" x="321" y="331.5" width="270" height="27" />
+  <rect class="spec-alt" x="321" y="358.5" width="270" height="27" />
+
+  <!-- Specification labels and values -->
+  <text class="label" x="328.5" y="161">Wattage</text>
+  <text class="value" x="525.83" y="161">{{WATTAGE}}</text>
+
+  <text class="label" x="328.5" y="188">Light Output</text>
+  <text class="value" x="531.49" y="188">{{LUMENS}}</text>
+
+  <text class="label" x="328.5" y="215">Color Temperature</text>
+  <text class="value" x="506.99" y="215">{{COLOR_TEMP}}</text>
+
+  <text class="label" x="328.5" y="242">CRI</text>
+  <text class="value" x="553.99" y="242">{{CRI}}</text>
+
+  <text class="label" x="328.5" y="269">Beam Angle</text>
+  <text class="value" x="506.48" y="269">{{BEAM_ANGLE}}</text>
+
+  <text class="label" x="328.5" y="296">Input Voltage</text>
+  <text class="value" x="527.32" y="296">{{VOLTAGE}}</text>
+
+  <text class="label" x="328.5" y="323">Rated Lifetime</text>
+  <text class="value" x="528.49" y="323">{{LIFETIME}}</text>
+
+  <text class="label" x="328.5" y="350">Dimmable</text>
+  <text class="value" x="520.99" y="350">{{DIMMABLE}}</text>
+
+  <text class="label" x="328.5" y="377">Warranty</text>
+  <text class="value" x="517.49" y="377">{{WARRANTY}}</text>
+
+  <!-- Bottom divider and footer text -->
+  <line class="divider" x1="21" y1="760" x2="591" y2="760" />
+  <text class="footer-text" x="21" y="775">Generated with Document Generator</text>
+  <text class="footer-text" x="552.64" y="775">Page 1 of 1</text>
+</svg>

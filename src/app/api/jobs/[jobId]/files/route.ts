@@ -129,6 +129,7 @@ export async function POST(
         }
       }
 
+      console.log(`[Files] Job ${jobId} - Updating fields:`, JSON.stringify(updatedFields, null, 2));
       await updateJobFields(jobId, updatedFields);
       await updateJobAssets(jobId, updatedAssets);
 
@@ -139,7 +140,11 @@ export async function POST(
       message = `Uploaded ${files.length} file(s) and re-extracted data. Found ${extractedCount} field values.`;
     }
 
+    // Small delay to allow Supabase to propagate the write
+    await new Promise(resolve => setTimeout(resolve, 500));
+
     const finalJob = await getJob(jobId);
+    console.log(`[Files] Job ${jobId} - Final job fields:`, JSON.stringify(finalJob?.fields, null, 2));
 
     return NextResponse.json({
       success: true,

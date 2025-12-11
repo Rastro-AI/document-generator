@@ -1,0 +1,100 @@
+{
+  "id": "par38-led-bulb-spec-sheet",
+  "name": "PAR38 LED Bulb Spec Sheet",
+  "format": "svg",
+  "canvas": {
+    "width": 612,
+    "height": 792
+  },
+  "fields": [
+    {
+      "name": "MODEL_NUMBER",
+      "type": "string",
+      "description": "Product model number displayed under the main title.",
+      "optional": false,
+      "example": "ABC-123"
+    },
+    {
+      "name": "PRODUCT_DESCRIPTION",
+      "type": "string",
+      "description": "Multiline body text describing the product features and details.",
+      "optional": false,
+      "example": "High-efficiency PAR38 LED bulb suitable for indoor and outdoor use."
+    },
+    {
+      "name": "WATTAGE",
+      "type": "string",
+      "description": "Wattage value for the bulb.",
+      "optional": false,
+      "example": "13W"
+    },
+    {
+      "name": "LUMENS",
+      "type": "string",
+      "description": "Light output in lumens.",
+      "optional": false,
+      "example": "1050 lm"
+    },
+    {
+      "name": "COLOR_TEMP",
+      "type": "string",
+      "description": "Color temperature specification.",
+      "optional": false,
+      "example": "3000K"
+    },
+    {
+      "name": "CRI",
+      "type": "string",
+      "description": "Color Rendering Index value.",
+      "optional": false,
+      "example": "80+"
+    },
+    {
+      "name": "BEAM_ANGLE",
+      "type": "string",
+      "description": "Beam angle of the bulb.",
+      "optional": false,
+      "example": "40°"
+    },
+    {
+      "name": "VOLTAGE",
+      "type": "string",
+      "description": "Input voltage range.",
+      "optional": false,
+      "example": "120V"
+    },
+    {
+      "name": "LIFETIME",
+      "type": "string",
+      "description": "Rated lifetime of the bulb.",
+      "optional": false,
+      "example": "25,000 hours"
+    },
+    {
+      "name": "DIMMABLE",
+      "type": "string",
+      "description": "Dimmable information (Yes/No or description).",
+      "optional": false,
+      "example": "Yes"
+    },
+    {
+      "name": "WARRANTY",
+      "type": "string",
+      "description": "Warranty information.",
+      "optional": false,
+      "example": "5 years"
+    }
+  ],
+  "assetSlots": [
+    {
+      "name": "UL_LOGO",
+      "kind": "logo",
+      "description": "UL logo displayed in the top-left of the header bar."
+    },
+    {
+      "name": "PRODUCT_IMAGE",
+      "kind": "photo",
+      "description": "Main product image shown in the large frame on the left side."
+    }
+  ]
+}

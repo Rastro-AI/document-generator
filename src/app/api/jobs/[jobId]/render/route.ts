@@ -8,17 +8,18 @@ import {
   saveJobOutputPdf,
   saveJobOutputSvg,
   getAssetBankFile,
+  getAssetFile,
 } from "@/lib/fs-utils";
 import { renderSVGTemplate, prepareAssets, svgToPdf } from "@/lib/svg-template-renderer";
 
 export async function POST(
-  request: NextRequest,
+  _request: NextRequest,
   { params }: { params: Promise<{ jobId: string }> }
 ) {
   try {
     const { jobId } = await params;
 
-    // Get the job
+    // Get the job (now uses Postgres DB with strong consistency)
     const job = await getJob(jobId);
     if (!job) {
       return NextResponse.json({ error: "Job not found" }, { status: 404 });
@@ -36,6 +37,7 @@ export async function POST(
     // Get SVG template content
     // Try job-specific SVG first, then fall back to template SVG
     let svgContent = await getJobSvgContent(jobId);
+    const usedJobSvg = !!svgContent;
     if (!svgContent) {
       svgContent = await getTemplateSvgContent(job.templateId);
     }
@@ -47,15 +49,28 @@ export async function POST(
       );
     }
 
+    console.log(`[Render] Job ${jobId} - Using ${usedJobSvg ? "job-specific" : "template"} SVG (${svgContent.length} chars)`);
+    console.log(`[Render] Job ${jobId} - SVG preview: ${svgContent.substring(0, 200)}...`);
+    // Log title font-size to debug state mismatch
+    const titleFontMatch = svgContent.match(/\.title-main\s*\{[^}]*font-size:\s*([^;]+)/);
+    console.log(`[Render] Job ${jobId} - Title font-size in SVG: ${titleFontMatch ? titleFontMatch[1] : 'NOT FOUND'}`);
+
     // Prepare assets - convert image paths/references to data URLs
     const assets: Record<string, string | null> = {};
     for (const [key, value] of Object.entries(job.assets)) {
       if (value) {
         try {
-          // Value could be a storage path or asset bank reference
-          // Try to load from asset bank
+          // Value could be a job asset path or asset bank reference
           const assetFilename = value.includes("/") ? value.split("/").pop()! : value;
-          const imageBuffer = await getAssetBankFile(assetFilename);
+          let imageBuffer: Buffer | null = null;
+
+          // First try to load from job's assets folder
+          imageBuffer = await getAssetFile(jobId, assetFilename);
+
+          // If not found in job assets, try asset bank
+          if (!imageBuffer) {
+            imageBuffer = await getAssetBankFile(assetFilename);
+          }
 
           if (imageBuffer) {
             const ext = assetFilename.split(".").pop()?.toLowerCase() || "png";
@@ -70,6 +85,7 @@ export async function POST(
             const mimeType = mimeTypes[ext] || "application/octet-stream";
             assets[key] = `data:${mimeType};base64,${imageBuffer.toString("base64")}`;
           } else {
+            console.warn(`Asset not found: ${value} (tried job assets and asset bank)`);
             assets[key] = null;
           }
         } catch (err) {
@@ -84,8 +100,21 @@ export async function POST(
     // Prepare assets for SVG rendering
     const preparedAssets = await prepareAssets(assets);
 
+    // Debug: log fields and assets being rendered
+    console.log(`[Render] Job ${jobId} - Fields:`, JSON.stringify(job.fields, null, 2));
+    console.log(`[Render] Job ${jobId} - Job assets (raw):`, JSON.stringify(job.assets, null, 2));
+    console.log(`[Render] Job ${jobId} - Prepared assets:`, Object.entries(preparedAssets).map(([k, v]) =>
+      `${k}: ${v ? (v.startsWith('data:') ? `data URL (${v.length} chars)` : v) : 'null'}`
+    ));
+
     // Render SVG template with field values
     const renderedSvg = renderSVGTemplate(svgContent, job.fields, preparedAssets);
+
+    // Debug: check if placeholders remain
+    const remainingPlaceholders = renderedSvg.match(/\{\{[A-Z_]+\}\}/g);
+    if (remainingPlaceholders && remainingPlaceholders.length > 0) {
+      console.log(`[Render] Job ${jobId} - Remaining placeholders:`, remainingPlaceholders);
+    }
 
     // Convert SVG to PDF
     const pdfBuffer = await svgToPdf(renderedSvg);

@@ -15,6 +15,9 @@ import { exec } from "child_process";
 import { promisify } from "util";
 import os from "os";
 import { Resvg } from "@resvg/resvg-js";
+import { PDFDocument } from "pdf-lib";
+import puppeteer from "puppeteer-core";
+import chromium from "@sparticuz/chromium";
 
 const execAsync = promisify(exec);
 
@@ -56,6 +59,17 @@ function escapeXml(str: string): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&apos;");
+}
+
+/**
+ * Sanitize SVG content by removing invalid XML characters
+ * This includes null bytes, control characters, and other non-printable characters
+ */
+function sanitizeSvg(svgContent: string): string {
+  // Remove null bytes and other control characters that are invalid in XML
+  // Valid XML characters: #x9 | #xA | #xD | [#x20-#xD7FF] | [#xE000-#xFFFD] | [#x10000-#x10FFFF]
+  // eslint-disable-next-line no-control-regex
+  return svgContent.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
 }
 
 /**
@@ -236,6 +250,9 @@ export async function prepareAssets(
 export async function svgToPng(svgContent: string, width?: number, height?: number): Promise<Buffer> {
   const errors: string[] = [];
 
+  // Sanitize SVG content to remove invalid XML characters (null bytes, control chars)
+  const sanitizedSvg = sanitizeSvg(svgContent);
+
   // Try resvg-js first (works on Vercel, no system dependencies)
   try {
     const opts: { fitTo?: { mode: "width" | "height"; value: number } } = {};
@@ -245,7 +262,7 @@ export async function svgToPng(svgContent: string, width?: number, height?: numb
       opts.fitTo = { mode: "height", value: height };
     }
 
-    const resvg = new Resvg(svgContent, opts);
+    const resvg = new Resvg(sanitizedSvg, opts);
     const pngData = resvg.render();
     const pngBuffer = pngData.asPng();
     log.info("PNG generated with resvg-js", { size: pngBuffer.length });
@@ -262,7 +279,7 @@ export async function svgToPng(svgContent: string, width?: number, height?: numb
   const pngPath = path.join(tempDir, `${tempId}.png`);
 
   try {
-    await fs.writeFile(svgPath, svgContent);
+    await fs.writeFile(svgPath, sanitizedSvg);
 
     const sizeArgs = width && height ? `-w ${width} -h ${height}` : "";
 
@@ -305,23 +322,88 @@ export async function svgToPng(svgContent: string, width?: number, height?: numb
 }
 
 /**
- * Convert SVG to PDF using system tools
- * Falls back to using PNG + basic PDF wrapper if no tools available
+ * Convert SVG to PDF using Puppeteer (best foreignObject support)
+ * Falls back to system tools or PNG-based PDF if Puppeteer fails
  */
 export async function svgToPdf(svgContent: string): Promise<Buffer> {
+  // Sanitize SVG content to remove invalid XML characters (null bytes, control chars)
+  const sanitizedSvg = sanitizeSvg(svgContent);
+  const errors: string[] = [];
+
+  // Extract dimensions from SVG
+  const widthMatch = sanitizedSvg.match(/width="(\d+)"/);
+  const heightMatch = sanitizedSvg.match(/height="(\d+)"/);
+  const width = widthMatch ? parseInt(widthMatch[1]) : 612;
+  const height = heightMatch ? parseInt(heightMatch[1]) : 792;
+
+  // Try Puppeteer first (best quality, full foreignObject support)
+  try {
+    log.info("Converting SVG to PDF with Puppeteer");
+
+    // Use @sparticuz/chromium for Vercel, local Chrome for dev
+    const isVercel = process.env.VERCEL === "1" || process.env.AWS_LAMBDA_FUNCTION_NAME;
+    const browser = await puppeteer.launch({
+      args: isVercel ? chromium.args : ["--no-sandbox", "--disable-setuid-sandbox"],
+      executablePath: isVercel
+        ? await chromium.executablePath()
+        : process.platform === "darwin"
+          ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+          : "/usr/bin/google-chrome",
+      headless: true,
+    });
+
+    try {
+      const page = await browser.newPage();
+
+      // Create HTML page with SVG
+      const html = `
+        <!DOCTYPE html>
+        <html>
+          <head>
+            <style>
+              * { margin: 0; padding: 0; }
+              body { width: ${width}px; height: ${height}px; }
+              svg { display: block; }
+            </style>
+          </head>
+          <body>${sanitizedSvg}</body>
+        </html>
+      `;
+
+      await page.setContent(html, { waitUntil: "networkidle0" });
+      await page.setViewport({ width, height });
+
+      const pdfBuffer = await page.pdf({
+        width: `${width}px`,
+        height: `${height}px`,
+        printBackground: true,
+        pageRanges: "1",
+      });
+
+      log.info("PDF generated with Puppeteer", { size: pdfBuffer.length });
+      return Buffer.from(pdfBuffer);
+    } finally {
+      await browser.close();
+    }
+  } catch (err) {
+    errors.push(`puppeteer: ${err}`);
+    log.error("Puppeteer failed:", err);
+  }
+
+  // Fallback to system tools
   const tempDir = os.tmpdir();
   const tempId = `svg_${Date.now()}_${Math.random().toString(36).slice(2)}`;
   const svgPath = path.join(tempDir, `${tempId}.svg`);
   const pdfPath = path.join(tempDir, `${tempId}.pdf`);
 
   try {
-    await fs.writeFile(svgPath, svgContent);
-    const errors: string[] = [];
+    await fs.writeFile(svgPath, sanitizedSvg);
 
-    // Try Inkscape first (best quality)
+    // Try Inkscape
     try {
       await execAsync(`inkscape "${svgPath}" --export-filename="${pdfPath}" --export-type=pdf 2>/dev/null`);
       const pdfBuffer = await fs.readFile(pdfPath);
+      log.info("PDF generated with Inkscape", { size: pdfBuffer.length });
       return pdfBuffer;
     } catch (err) {
       errors.push(`inkscape: ${err}`);
@@ -332,6 +414,7 @@ export async function svgToPdf(svgContent: string): Promise<Buffer> {
       const rsvgCmd = process.platform === "darwin" ? "/opt/homebrew/bin/rsvg-convert" : "rsvg-convert";
       await execAsync(`${rsvgCmd} -f pdf -o "${pdfPath}" "${svgPath}"`);
       const pdfBuffer = await fs.readFile(pdfPath);
+      log.info("PDF generated with rsvg-convert", { size: pdfBuffer.length });
       return pdfBuffer;
     } catch (err) {
       errors.push(`rsvg-convert: ${err}`);
@@ -341,20 +424,18 @@ export async function svgToPdf(svgContent: string): Promise<Buffer> {
     try {
       await execAsync(`cairosvg "${svgPath}" -o "${pdfPath}"`);
       const pdfBuffer = await fs.readFile(pdfPath);
+      log.info("PDF generated with cairosvg", { size: pdfBuffer.length });
       return pdfBuffer;
     } catch (err) {
       errors.push(`cairosvg: ${err}`);
     }
 
-    // Fallback: Generate PNG with resvg and create a simple PDF
-    // This is a basic fallback - the PDF will be rasterized
+    // Last resort: PNG + pdf-lib (no foreignObject support but works everywhere)
     try {
       log.info("Falling back to PNG-based PDF generation");
-      const pngBuffer = await svgToPng(svgContent, 2400, undefined); // High res for quality
-
-      // Create a simple PDF with the PNG embedded
-      // This is a minimal PDF that just embeds the image
-      const pdfContent = createSimplePdfWithImage(pngBuffer);
+      const pngBuffer = await svgToPng(sanitizedSvg, 2400, undefined);
+      const pdfContent = await createSimplePdfWithImage(pngBuffer);
+      log.info("PDF generated with png+pdf-lib fallback", { size: pdfContent.length });
       return pdfContent;
     } catch (pngErr) {
       errors.push(`png-fallback: ${pngErr}`);
@@ -371,11 +452,47 @@ export async function svgToPdf(svgContent: string): Promise<Buffer> {
 /**
  * Create a simple PDF with an embedded PNG image
  * This is a fallback when no proper SVG-to-PDF converter is available
+ * Uses pdf-lib which works on Vercel (pure JavaScript, no native dependencies)
  */
-function createSimplePdfWithImage(pngBuffer: Buffer): Buffer {
-  // For simplicity, we'll just return an error for now
-  // A proper implementation would use a library like pdfkit
-  throw new Error("PDF fallback not yet implemented - please install inkscape, librsvg, or cairosvg");
+async function createSimplePdfWithImage(pngBuffer: Buffer): Promise<Buffer> {
+  const pdfDoc = await PDFDocument.create();
+
+  // Embed the PNG image
+  const pngImage = await pdfDoc.embedPng(pngBuffer);
+
+  // Get image dimensions
+  const imgWidth = pngImage.width;
+  const imgHeight = pngImage.height;
+
+  // Create a page with the same aspect ratio as the image
+  // Scale to fit on a US Letter page (612x792 points) if needed
+  const maxWidth = 612;
+  const maxHeight = 792;
+
+  let pageWidth = imgWidth;
+  let pageHeight = imgHeight;
+
+  // Scale down if image is larger than max page size
+  if (imgWidth > maxWidth || imgHeight > maxHeight) {
+    const scaleX = maxWidth / imgWidth;
+    const scaleY = maxHeight / imgHeight;
+    const scale = Math.min(scaleX, scaleY);
+    pageWidth = imgWidth * scale;
+    pageHeight = imgHeight * scale;
+  }
+
+  // Create page and draw the image
+  const page = pdfDoc.addPage([pageWidth, pageHeight]);
+  page.drawImage(pngImage, {
+    x: 0,
+    y: 0,
+    width: pageWidth,
+    height: pageHeight,
+  });
+
+  // Serialize PDF to bytes
+  const pdfBytes = await pdfDoc.save();
+  return Buffer.from(pdfBytes);
 }
 
 /**

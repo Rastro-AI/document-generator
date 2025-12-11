@@ -169,7 +169,10 @@ export async function POST(request: NextRequest) {
 
       // Extract fields and assign assets using LLM
       let extractedCount = 0;
-      if (documentFiles.length > 0 || imageFiles.length > 0) {
+      const hasFiles = documentFiles.length > 0 || imageFiles.length > 0;
+      const hasPromptOnly = !hasFiles && prompt && prompt.trim().length > 0;
+
+      if (hasFiles) {
         const extractionResult = await extractFieldsAndAssetsFromFiles(
           template,
           documentFiles,
@@ -199,16 +202,60 @@ export async function POST(request: NextRequest) {
 
         // Generate a descriptive initial message
         const totalFiles = documentFiles.length + imageFiles.length;
-        const imageCount = imageFiles.length;
+        const assignedAssetsCount = Object.values(assets).filter((v) => v !== null).length;
 
-        if (extractedCount > 0 || Object.values(assets).some(v => v !== null)) {
-          const parts = [];
+        // Emit a concise extraction summary trace for debugging
+        sendEvent("trace", {
+          type: "status",
+          content: `Extraction summary: fields=${extractedCount}, assetsAssigned=${assignedAssetsCount}/${template.assetSlots.length}, imagesUploaded=${imageFiles.length}, documentsUploaded=${documentFiles.length}`,
+        });
+
+        if (extractedCount > 0 || assignedAssetsCount > 0) {
+          const parts = [] as string[];
           if (extractedCount > 0) parts.push(`extracted ${extractedCount} fields`);
-          if (imageCount > 0) parts.push(`assigned ${imageCount} image${imageCount > 1 ? "s" : ""} to the template`);
-
-          initialMessage = `I've ${parts.join(" and ")} from your ${totalFiles} file${totalFiles > 1 ? "s" : ""}. The spec sheet is ready for preview. Feel free to edit any values or ask me to make changes.`;
+          if (assignedAssetsCount > 0) parts.push(`assigned ${assignedAssetsCount} image${assignedAssetsCount > 1 ? "s" : ""} to slots`);
+          initialMessage = `I've ${parts.join(" and ")} from your ${totalFiles} file${totalFiles > 1 ? "s" : ""}. The spec sheet is ready for preview.`;
         } else {
-          initialMessage = `I've processed ${totalFiles} file${totalFiles > 1 ? "s" : ""} but couldn't extract specific data. Please fill in the values manually or provide more guidance.`;
+          initialMessage = `I've processed ${totalFiles} file${totalFiles > 1 ? "s" : ""} but couldn't confidently extract data. You can edit values or provide more guidance.`;
+          if (imageFiles.length > 0 && template.assetSlots.length > 0) {
+            sendEvent("trace", {
+              type: "status",
+              content: `No assets were mapped to slots. Uploaded images: ${imageFiles.map((f) => f.filename).join(", ")}. Slots: ${template.assetSlots.map((s) => s.name).join(", ")}.`,
+            });
+          }
+        }
+      } else if (hasPromptOnly) {
+        // Prompt-only case: use the template agent to fill fields
+        sendEvent("trace", { type: "status", content: "Processing your request..." });
+
+        // Import and use the template agent
+        const { runTemplateAgent } = await import("@/lib/agents/template-agent");
+
+        const agentResult = await runTemplateAgent(
+          jobId,
+          templateId,
+          prompt!,
+          fields, // Start with empty/null fields
+          template.fields,
+          [], // No previous history
+          (trace) => sendEvent("trace", trace),
+          reasoning
+        );
+
+        // Merge field updates from the agent
+        if (agentResult.fieldUpdates && Object.keys(agentResult.fieldUpdates).length > 0) {
+          for (const [key, value] of Object.entries(agentResult.fieldUpdates)) {
+            if (key in fields) {
+              fields[key] = value;
+            }
+          }
+          extractedCount = Object.keys(agentResult.fieldUpdates).length;
+        }
+
+        if (extractedCount > 0) {
+          initialMessage = agentResult.message || `I've populated ${extractedCount} fields based on your request. The document is ready for preview.`;
+        } else {
+          initialMessage = agentResult.message || "I've created a new document. You can edit the field values on the left, or ask me to make changes.";
         }
       }
 

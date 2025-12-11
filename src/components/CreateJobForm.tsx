@@ -319,6 +319,12 @@ export function CreateJobForm({ onJobCreated }: CreateJobFormProps) {
             id="prompt"
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey && selectedTemplate) {
+                e.preventDefault();
+                handleSubmit(e as unknown as React.FormEvent);
+              }
+            }}
             placeholder="Upload product documents (XLSX, PDF, images) and add any instructions..."
             rows={2}
             className="w-full px-4 py-3 bg-transparent text-[14px] text-[#1d1d1f]
@@ -437,17 +443,18 @@ export function CreateJobForm({ onJobCreated }: CreateJobFormProps) {
                 )}
               </button>
 
-              {/* Submit Arrow Button */}
+              {/* Submit Button */}
               <button
                 type="submit"
                 disabled={!selectedTemplate}
-                className="w-8 h-8 flex items-center justify-center rounded-lg bg-[#1d1d1f] text-white
+                className="h-8 px-3 flex items-center justify-center gap-1.5 rounded-lg bg-[#1d1d1f] text-white
                           hover:bg-[#424245] active:scale-[0.95]
                           disabled:bg-[#d2d2d7] disabled:cursor-not-allowed
-                          transition-all duration-200"
+                          transition-all duration-200 text-[13px] font-medium"
               >
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 12h14M12 5l7 7-7 7" />
+                Go
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3" />
                 </svg>
               </button>
             </div>

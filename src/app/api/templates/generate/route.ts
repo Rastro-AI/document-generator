@@ -83,7 +83,7 @@ async function pdfToImages(pdfBuffer: Buffer, maxPages: number = 5): Promise<str
 export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData();
-    const file = formData.get("pdf") as File | null;
+    const pdfFile = formData.get("pdf") as File | null;
     const userPrompt = formData.get("prompt") as string | null;
     const reasoning = (formData.get("reasoning") as "none" | "low" | "high" | null) || "none";
 
@@ -92,9 +92,19 @@ export async function POST(request: NextRequest) {
     const currentJson = formData.get("currentJson") as string | null;
     const feedback = formData.get("feedback") as string | null;
     const startVersion = parseInt(formData.get("startVersion") as string || "0", 10);
+    const conversationHistoryJson = formData.get("conversationHistory") as string | null;
 
-    if (!file) {
-      return new Response(JSON.stringify({ error: "PDF file is required" }), {
+    // Get all image files (for prompt-only mode)
+    const imageFiles: File[] = [];
+    for (const [key, value] of formData.entries()) {
+      if (key === "images" && value instanceof File) {
+        imageFiles.push(value);
+      }
+    }
+
+    // Either PDF or (prompt + optional images) is required
+    if (!pdfFile && !userPrompt) {
+      return new Response(JSON.stringify({ error: "Either a PDF file or a text prompt is required" }), {
         status: 400,
         headers: { "Content-Type": "application/json" },
       });
@@ -102,21 +112,35 @@ export async function POST(request: NextRequest) {
 
     const isContinuation = !!(currentCode && feedback);
     log.info(isContinuation ? "Continuing generation with feedback" : "Starting new generation");
+    log.info(`Mode: ${pdfFile ? "PDF reference" : "Prompt-only"}, Images: ${imageFiles.length}`);
 
-    // Convert PDF to buffer and screenshots (all pages)
-    const arrayBuffer = await file.arrayBuffer();
-    const pdfBuffer = Buffer.from(arrayBuffer);
+    let pageImages: string[] = [];
+    let pdfBuffer: Buffer | undefined;
 
-    let pageImages: string[];
-    try {
-      pageImages = await pdfToImages(pdfBuffer);
-      log.info(`Converted PDF to ${pageImages.length} page images`);
-    } catch (conversionError) {
-      console.error("PDF conversion error:", conversionError);
-      return new Response(
-        JSON.stringify({ error: "Failed to convert PDF to image", details: String(conversionError) }),
-        { status: 500, headers: { "Content-Type": "application/json" } }
-      );
+    // If PDF provided, convert to images
+    if (pdfFile) {
+      const arrayBuffer = await pdfFile.arrayBuffer();
+      pdfBuffer = Buffer.from(arrayBuffer);
+
+      try {
+        pageImages = await pdfToImages(pdfBuffer);
+        log.info(`Converted PDF to ${pageImages.length} page images`);
+      } catch (conversionError) {
+        console.error("PDF conversion error:", conversionError);
+        return new Response(
+          JSON.stringify({ error: "Failed to convert PDF to image", details: String(conversionError) }),
+          { status: 500, headers: { "Content-Type": "application/json" } }
+        );
+      }
+    }
+
+    // Add any directly uploaded images
+    for (const imageFile of imageFiles) {
+      const arrayBuffer = await imageFile.arrayBuffer();
+      const base64 = Buffer.from(arrayBuffer).toString("base64");
+      const mimeType = imageFile.type || "image/png";
+      pageImages.push(`data:${mimeType};base64,${base64}`);
+      log.info(`Added image: ${imageFile.name} (${mimeType})`);
     }
 
     // Create SSE stream for real-time updates
@@ -143,10 +167,21 @@ export async function POST(request: NextRequest) {
           sendEvent("trace", trace);
         };
 
+        // Parse conversation history if provided
+        let conversationHistory;
+        if (conversationHistoryJson) {
+          try {
+            conversationHistory = JSON.parse(conversationHistoryJson);
+            log.info(`Resuming with conversation history (${conversationHistory.length} items)`);
+          } catch (e) {
+            log.error("Failed to parse conversation history", e);
+          }
+        }
+
         const result = await runTemplateGeneratorAgent(
           pageImages,
+          pdfFile?.name || "prompt-based-template",
           pdfBuffer,
-          file.name,
           userPrompt || undefined,
           onEvent,
           reasoning,
@@ -154,7 +189,8 @@ export async function POST(request: NextRequest) {
           currentCode || undefined,
           currentJson ? JSON.parse(currentJson) : undefined,
           feedback || undefined,
-          startVersion
+          startVersion,
+          conversationHistory
         );
 
         sendEvent("result", result);

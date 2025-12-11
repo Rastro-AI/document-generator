@@ -17,6 +17,19 @@ import {
   BUCKETS,
   isSupabaseConfigured,
 } from "./supabase";
+import {
+  isDbConfigured,
+  getJobFromDb,
+  createJobInDb,
+  updateJobFieldsInDb,
+  updateJobAssetsInDb,
+  markJobRenderedInDb,
+  addUploadedFileToJobInDb,
+  addJobHistoryEntryInDb,
+  updateAgentHistoryInDb,
+  restoreJobFromHistoryInDb,
+  deleteJobFromDb,
+} from "./db";
 
 // ============================================================================
 // Template Operations (Local Filesystem - bundled with app)
@@ -32,7 +45,8 @@ export async function pathExists(filePath: string): Promise<boolean> {
   }
 }
 
-// List all templates (from local filesystem)
+// List all SVG templates (from local filesystem)
+// Only returns templates that have a template.svg file
 export async function listTemplates(): Promise<{ id: string; name: string }[]> {
   const entries = await fs.readdir(TEMPLATES_DIR, { withFileTypes: true });
   const templates: { id: string; name: string }[] = [];
@@ -40,7 +54,10 @@ export async function listTemplates(): Promise<{ id: string; name: string }[]> {
   for (const entry of entries) {
     if (entry.isDirectory()) {
       const jsonPath = getTemplateJsonPath(entry.name);
-      if (await pathExists(jsonPath)) {
+      const svgPath = getTemplateSvgPath(entry.name);
+
+      // Only include templates with a .svg file
+      if (await pathExists(jsonPath) && await pathExists(svgPath)) {
         const content = await fs.readFile(jsonPath, "utf-8");
         const template = JSON.parse(content) as Template;
         templates.push({ id: template.id, name: template.name });
@@ -71,13 +88,8 @@ export async function getTemplateSvgContent(templateId: string): Promise<string 
 }
 
 // ============================================================================
-// Job Operations (Supabase Storage)
+// Job Operations (Supabase Postgres DB for metadata, Storage for files)
 // ============================================================================
-
-// Helper to get job JSON path in storage
-function getJobStoragePath(jobId: string): string {
-  return `${jobId}/job.json`;
-}
 
 // Helper to get job file path in storage
 function getJobFilePath(jobId: string, filename: string): string {
@@ -91,37 +103,18 @@ function getJobAssetPath(jobId: string, filename: string): string {
 
 // Create a new job
 export async function createJob(job: Job): Promise<void> {
-  if (!isSupabaseConfigured()) {
-    throw new Error("Supabase not configured - cannot create job");
+  if (!isDbConfigured()) {
+    throw new Error("Database not configured - cannot create job");
   }
-
-  const jobJson = JSON.stringify(job, null, 2);
-  await uploadFile(BUCKETS.JOBS, getJobStoragePath(job.id), jobJson, {
-    contentType: "application/json",
-  });
+  await createJobInDb(job);
 }
 
 // Get a job by ID
 export async function getJob(jobId: string): Promise<Job | null> {
-  if (!isSupabaseConfigured()) {
+  if (!isDbConfigured()) {
     return null;
   }
-
-  try {
-    const buffer = await downloadFile(BUCKETS.JOBS, getJobStoragePath(jobId));
-    return JSON.parse(buffer.toString("utf-8")) as Job;
-  } catch {
-    return null;
-  }
-}
-
-// Update job (internal helper)
-async function updateJob(job: Job): Promise<void> {
-  const jobJson = JSON.stringify(job, null, 2);
-  await uploadFile(BUCKETS.JOBS, getJobStoragePath(job.id), jobJson, {
-    contentType: "application/json",
-    upsert: true,
-  });
+  return await getJobFromDb(jobId);
 }
 
 // Update job fields
@@ -129,12 +122,8 @@ export async function updateJobFields(
   jobId: string,
   fields: Record<string, string | number | null>
 ): Promise<Job | null> {
-  const job = await getJob(jobId);
-  if (!job) return null;
-
-  job.fields = fields;
-  await updateJob(job);
-  return job;
+  if (!isDbConfigured()) return null;
+  return await updateJobFieldsInDb(jobId, fields);
 }
 
 // Update job assets
@@ -142,22 +131,14 @@ export async function updateJobAssets(
   jobId: string,
   assets: Record<string, string | null>
 ): Promise<Job | null> {
-  const job = await getJob(jobId);
-  if (!job) return null;
-
-  job.assets = assets;
-  await updateJob(job);
-  return job;
+  if (!isDbConfigured()) return null;
+  return await updateJobAssetsInDb(jobId, assets);
 }
 
 // Mark job as rendered
 export async function markJobRendered(jobId: string): Promise<Job | null> {
-  const job = await getJob(jobId);
-  if (!job) return null;
-
-  job.renderedAt = new Date().toISOString();
-  await updateJob(job);
-  return job;
+  if (!isDbConfigured()) return null;
+  return await markJobRenderedInDb(jobId);
 }
 
 // Save uploaded file to job storage
@@ -229,6 +210,7 @@ export async function copyTemplateToJob(
     const content = await fs.readFile(sourcePath, "utf-8");
     await uploadFile(BUCKETS.JOBS, getJobFilePath(jobId, "template.tsx"), content, {
       contentType: "text/plain",
+      upsert: true,
     });
   }
 }
@@ -286,31 +268,23 @@ export async function copySvgTemplateToJob(
     const content = await fs.readFile(sourcePath, "utf-8");
     await uploadFile(BUCKETS.JOBS, getJobFilePath(jobId, "template.svg"), content, {
       contentType: "image/svg+xml",
+      upsert: true,
     });
   }
 }
 
-// Add history entry to job
+// Add history entry to job with optional preview snapshot
 export async function addJobHistoryEntry(
   jobId: string,
-  description: string
+  description: string,
+  svgContent?: string,
+  previewBase64?: string
 ): Promise<JobHistoryEntry | null> {
+  if (!isDbConfigured()) return null;
+  await addJobHistoryEntryInDb(jobId, description, svgContent, previewBase64);
+  // Return a placeholder - the actual entry is created in the DB
   const job = await getJob(jobId);
-  if (!job) return null;
-
-  const entry: JobHistoryEntry = {
-    id: uuidv4(),
-    fields: { ...job.fields },
-    assets: { ...job.assets },
-    timestamp: new Date().toISOString(),
-    description,
-  };
-
-  job.history = job.history || [];
-  job.history.push(entry);
-
-  await updateJob(job);
-  return entry;
+  return job?.history?.[job.history.length - 1] || null;
 }
 
 // Restore job from history entry
@@ -318,21 +292,8 @@ export async function restoreJobFromHistory(
   jobId: string,
   historyId: string
 ): Promise<Job | null> {
-  const job = await getJob(jobId);
-  if (!job || !job.history) return null;
-
-  const entry = job.history.find((h) => h.id === historyId);
-  if (!entry) return null;
-
-  // Save current state to history before restoring
-  await addJobHistoryEntry(jobId, "Before restore");
-
-  // Restore fields and assets
-  job.fields = { ...entry.fields };
-  job.assets = { ...entry.assets };
-
-  await updateJob(job);
-  return job;
+  if (!isDbConfigured()) return null;
+  return await restoreJobFromHistoryInDb(jobId, historyId);
 }
 
 // Add uploaded file to job
@@ -340,14 +301,9 @@ export async function addUploadedFileToJob(
   jobId: string,
   file: UploadedFile
 ): Promise<Job | null> {
-  const job = await getJob(jobId);
-  if (!job) return null;
-
-  job.uploadedFiles = job.uploadedFiles || [];
-  job.uploadedFiles.push(file);
-
-  await updateJob(job);
-  return job;
+  if (!isDbConfigured()) return null;
+  await addUploadedFileToJobInDb(jobId, file);
+  return await getJob(jobId);
 }
 
 // Remove uploaded file from job
@@ -355,15 +311,26 @@ export async function removeUploadedFileFromJob(
   jobId: string,
   filename: string
 ): Promise<Job | null> {
+  if (!isDbConfigured()) return null;
   const job = await getJob(jobId);
   if (!job) return null;
 
-  job.uploadedFiles = (job.uploadedFiles || []).filter(
+  const uploadedFiles = (job.uploadedFiles || []).filter(
     (f) => f.filename !== filename
   );
 
-  await updateJob(job);
-  return job;
+  // Use raw Supabase update for this
+  const { createClient } = await import("@supabase/supabase-js");
+  const supabase = createClient(
+    process.env.SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_KEY!
+  );
+  await supabase
+    .from("jobs")
+    .update({ uploaded_files: uploadedFiles })
+    .eq("id", jobId);
+
+  return await getJob(jobId);
 }
 
 // Update agent history for a job (full thread history)
@@ -372,13 +339,9 @@ export async function updateAgentHistory(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   history: any[]
 ): Promise<Job | null> {
-  const job = await getJob(jobId);
-  if (!job) return null;
-
-  job.agentHistory = history;
-
-  await updateJob(job);
-  return job;
+  if (!isDbConfigured()) return null;
+  await updateAgentHistoryInDb(jobId, history);
+  return await getJob(jobId);
 }
 
 // Get agent history for a job

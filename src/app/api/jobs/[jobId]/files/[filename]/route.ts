@@ -16,24 +16,37 @@ export async function GET(
   try {
     const { jobId, filename } = await params;
     const decodedFilename = decodeURIComponent(filename);
+    const url = new URL(request.url);
+    const fileType = url.searchParams.get("type");
 
     const job = await getJob(jobId);
     if (!job) {
       return NextResponse.json({ error: "Job not found" }, { status: 404 });
     }
 
-    // Find the file in uploadedFiles
-    const uploadedFile = job.uploadedFiles?.find((f) => f.filename === decodedFilename);
-    if (!uploadedFile) {
-      return NextResponse.json({ error: "File not found" }, { status: 404 });
-    }
+    let fileBuffer: Buffer | null = null;
 
-    // Get file from storage
-    let fileBuffer: Buffer | null;
-    if (uploadedFile.type === "image") {
+    // If type=asset is specified, check assets folder directly
+    if (fileType === "asset") {
       fileBuffer = await getAssetFile(jobId, decodedFilename);
     } else {
-      fileBuffer = await getUploadedFile(jobId, decodedFilename);
+      // Find the file in uploadedFiles
+      const uploadedFile = job.uploadedFiles?.find((f) => f.filename === decodedFilename);
+
+      if (uploadedFile) {
+        // Get file from storage based on type
+        if (uploadedFile.type === "image") {
+          fileBuffer = await getAssetFile(jobId, decodedFilename);
+        } else {
+          fileBuffer = await getUploadedFile(jobId, decodedFilename);
+        }
+      } else {
+        // Fallback: try assets folder anyway (for uploaded assets not in uploadedFiles list)
+        fileBuffer = await getAssetFile(jobId, decodedFilename);
+        if (!fileBuffer) {
+          fileBuffer = await getUploadedFile(jobId, decodedFilename);
+        }
+      }
     }
 
     if (!fileBuffer) {

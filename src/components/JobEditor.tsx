@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { useJob, useUpdateJobFields, useRenderJob, streamCreateJob } from "@/hooks/useJobs";
+import { useJob, useUpdateJobFields, useUpdateJobAssets, useUploadJobAsset, useRenderJob, streamCreateJob } from "@/hooks/useJobs";
 import { useTemplate } from "@/hooks/useTemplates";
 import { FieldsEditor } from "./FieldsEditor";
 import { PdfPreview } from "./PdfPreview";
@@ -39,6 +39,8 @@ export function JobEditor({ jobId, templateId, onBack, initialPrompt, initialFil
   const [hasEdited, setHasEdited] = useState(false);
 
   const updateFields = useUpdateJobFields();
+  const updateAssets = useUpdateJobAssets();
+  const uploadAsset = useUploadJobAsset();
   const renderJob = useRenderJob();
   const hasAutoRendered = useRef(false);
   const [showHistoryPanel, setShowHistoryPanel] = useState(false);
@@ -48,12 +50,16 @@ export function JobEditor({ jobId, templateId, onBack, initialPrompt, initialFil
   const [pdfExpanded, setPdfExpanded] = useState(false);
   const [chatMinimized, setChatMinimized] = useState(false);
   const exportMenuRef = useRef<HTMLDivElement>(null);
+  // Locally track the last render timestamp to drive preview updates immediately
+  const [previewRenderedAt, setPreviewRenderedAt] = useState<string | undefined>(undefined);
 
   // Sync local fields when job data loads
   useEffect(() => {
     if (job) {
       setLocalFields(job.fields);
       setHasChanges(false);
+      // Keep local preview timestamp in sync with server state
+      setPreviewRenderedAt(job.renderedAt);
     }
   }, [job]);
 
@@ -67,6 +73,7 @@ export function JobEditor({ jobId, templateId, onBack, initialPrompt, initialFil
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
+
 
   // Start job creation streaming when component mounts
   useEffect(() => {
@@ -106,7 +113,9 @@ export function JobEditor({ jobId, templateId, onBack, initialPrompt, initialFil
   useEffect(() => {
     if (job && !job.renderedAt && !hasAutoRendered.current && !renderJob.isPending && !isCreating) {
       hasAutoRendered.current = true;
-      renderJob.mutateAsync(jobId).then(() => {
+      renderJob.mutateAsync({ jobId }).then((res) => {
+        if (res?.renderedAt) setPreviewRenderedAt(res.renderedAt);
+        if (res?.renderedAt) console.log("[JobEditor] Auto-render complete:", res.renderedAt);
         setPdfKey((k) => k + 1);
       }).catch((error) => {
         console.error("Failed to auto-render:", error);
@@ -121,12 +130,49 @@ export function JobEditor({ jobId, templateId, onBack, initialPrompt, initialFil
     setHasEdited(true);
   };
 
+  const handleAssetChange = async (name: string, value: string | null) => {
+    if (!job) return;
+    try {
+      await updateAssets.mutateAsync({
+        jobId,
+        assets: { ...job.assets, [name]: value }
+      });
+      // Auto re-render after asset change
+      const res = await renderJob.mutateAsync({ jobId });
+      if (res?.renderedAt) setPreviewRenderedAt(res.renderedAt);
+      if (res?.renderedAt) console.log("[JobEditor] Render after asset change:", res.renderedAt);
+      setPdfKey((k) => k + 1);
+    } catch (error) {
+      console.error("Failed to update asset:", error);
+    }
+  };
+
+  const handleAssetUpload = async (slotName: string, file: File) => {
+    try {
+      const uploadResult = await uploadAsset.mutateAsync({ jobId, slotName, file });
+      console.log("[JobEditor] Asset uploaded:", slotName, "->", uploadResult.assetPath);
+
+      // Auto re-render after upload (DB has strong consistency now)
+      const res = await renderJob.mutateAsync({ jobId });
+      if (res?.renderedAt) setPreviewRenderedAt(res.renderedAt);
+      if (res?.renderedAt) console.log("[JobEditor] Render after asset upload:", res.renderedAt);
+      setPdfKey((k) => k + 1);
+
+      // Refetch to update local cache
+      await refetch();
+    } catch (error) {
+      console.error("Failed to upload asset:", error);
+    }
+  };
+
   const handleSave = async () => {
     try {
       await updateFields.mutateAsync({ jobId, fields: localFields });
       setHasChanges(false);
       // Auto-render after save
-      await renderJob.mutateAsync(jobId);
+      const res = await renderJob.mutateAsync({ jobId });
+      if (res?.renderedAt) setPreviewRenderedAt(res.renderedAt);
+      if (res?.renderedAt) console.log("[JobEditor] Render after save:", res.renderedAt);
       setPdfKey((k) => k + 1);
     } catch (error) {
       console.error("Failed to save fields:", error);
@@ -138,7 +184,9 @@ export function JobEditor({ jobId, templateId, onBack, initialPrompt, initialFil
       await handleSave();
     } else {
       try {
-        await renderJob.mutateAsync(jobId);
+        const res = await renderJob.mutateAsync({ jobId });
+        if (res?.renderedAt) setPreviewRenderedAt(res.renderedAt);
+        if (res?.renderedAt) console.log("[JobEditor] Manual render:", res.renderedAt);
         setPdfKey((k) => k + 1);
       } catch (error) {
         console.error("Failed to render:", error);
@@ -147,25 +195,38 @@ export function JobEditor({ jobId, templateId, onBack, initialPrompt, initialFil
   };
 
   const handleFieldsUpdated = async (newFields: Record<string, string | number | null>) => {
+    // Update local fields immediately with the server-provided values
     setLocalFields(newFields);
     setHasChanges(false);
     setHasEdited(true);
-    refetch();
-    // Auto-render after chat update
+
+    // Auto-render after chat update (DB has strong consistency now)
     try {
-      await renderJob.mutateAsync(jobId);
+      const res = await renderJob.mutateAsync({ jobId });
+      if (res?.renderedAt) setPreviewRenderedAt(res.renderedAt);
+      if (res?.renderedAt) console.log("[JobEditor] Render after chat fields update:", res.renderedAt);
       setPdfKey((k) => k + 1);
+      // Refetch after render to sync any other job state changes
+      await refetch();
     } catch (error) {
       console.error("Failed to render after chat update:", error);
     }
   };
 
   const handleTemplateUpdated = async () => {
+    console.log("[JobEditor] handleTemplateUpdated called - starting render");
     setHasEdited(true);
     // Auto-render after template change
     try {
-      await renderJob.mutateAsync(jobId);
+      console.log("[JobEditor] Calling renderJob.mutateAsync...");
+      const res = await renderJob.mutateAsync({ jobId });
+      console.log("[JobEditor] Render complete, response:", res);
+      if (res?.renderedAt) {
+        console.log("[JobEditor] Setting previewRenderedAt to:", res.renderedAt);
+        setPreviewRenderedAt(res.renderedAt);
+      }
       setPdfKey((k) => k + 1);
+      console.log("[JobEditor] PdfKey incremented");
     } catch (error) {
       console.error("Failed to render after template update:", error);
     }
@@ -176,7 +237,9 @@ export function JobEditor({ jobId, templateId, onBack, initialPrompt, initialFil
     await refetch();
     // Auto-render after job update
     try {
-      await renderJob.mutateAsync(jobId);
+      const res = await renderJob.mutateAsync({ jobId });
+      if (res?.renderedAt) setPreviewRenderedAt(res.renderedAt);
+      if (res?.renderedAt) console.log("[JobEditor] Render after job update:", res.renderedAt);
       setPdfKey((k) => k + 1);
     } catch (error) {
       console.error("Failed to render after job update:", error);
@@ -252,7 +315,7 @@ export function JobEditor({ jobId, templateId, onBack, initialPrompt, initialFil
                   {showExportMenu && (
                     <div className="absolute right-0 top-full mt-1 w-44 bg-white rounded-lg shadow-lg border border-[#e8e8ed] py-1 z-50">
                       <a
-                        href={`/api/jobs/${jobId}/pdf`}
+                        href={`/api/jobs/${jobId}/pdf?t=${(previewRenderedAt || job.renderedAt) ?? Date.now()}`}
                         download="output.pdf"
                         onClick={() => setShowExportMenu(false)}
                         className="w-full px-3 py-2 text-left text-[13px] text-[#1d1d1f] hover:bg-[#f5f5f7] transition-colors flex items-center gap-2"
@@ -262,37 +325,22 @@ export function JobEditor({ jobId, templateId, onBack, initialPrompt, initialFil
                         </svg>
                         PDF
                       </a>
-                      <button
-                        onClick={async () => {
-                          setShowExportMenu(false);
-                          // TODO: Implement SVG export
-                          alert("SVG export coming soon");
-                        }}
+                      <a
+                        href={`/api/jobs/${jobId}/svg?t=${(previewRenderedAt || job.renderedAt) ?? Date.now()}`}
+                        download="output.svg"
+                        onClick={() => setShowExportMenu(false)}
                         className="w-full px-3 py-2 text-left text-[13px] text-[#1d1d1f] hover:bg-[#f5f5f7] transition-colors flex items-center gap-2"
                       >
                         <svg className="w-4 h-4 text-[#86868b]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 001.5-1.5V6a1.5 1.5 0 00-1.5-1.5H3.75A1.5 1.5 0 002.25 6v12a1.5 1.5 0 001.5 1.5zm10.5-11.25h.008v.008h-.008V8.25zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z" />
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 001.5-1.5V6a1.5 1.5 0 00-1.5-1.5H3.75A1.5 1.5 0 002.25 6v12a2.25 2.25 0 001.5 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
                         </svg>
                         SVG
-                      </button>
-                      <button
-                        onClick={async () => {
-                          setShowExportMenu(false);
-                          // TODO: Implement save to catalog
-                          alert("Save to catalog coming soon");
-                        }}
-                        className="w-full px-3 py-2 text-left text-[13px] text-[#1d1d1f] hover:bg-[#f5f5f7] transition-colors flex items-center gap-2"
-                      >
-                        <svg className="w-4 h-4 text-[#86868b]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25" />
-                        </svg>
-                        Save to Catalog
-                      </button>
+                      </a>
                       <div className="border-t border-[#e8e8ed] my-1" />
                       <button
                         onClick={async () => {
                           setShowExportMenu(false);
-                          const res = await fetch(`/api/templates/${job.templateId}/code`);
+                          const res = await fetch(`/api/jobs/${job.id}/template-code`);
                           if (res.ok) {
                             setTemplateCode(await res.text());
                             setShowCodeModal(true);
@@ -349,19 +397,24 @@ export function JobEditor({ jobId, templateId, onBack, initialPrompt, initialFil
         {/* 2-pane layout */}
         <div className="flex min-h-0 flex-1">
           {/* Left: Fields editor */}
-          <div className="w-[380px] border-r border-[#d2d2d7] bg-white overflow-y-auto">
-            <div className="p-6">
-              {/* Sidebar Title */}
-              <h2 className="text-[17px] font-semibold text-[#1d1d1f] mb-6">
-                Extracted Data
-              </h2>
+          <div className="w-[380px] bg-[#f5f5f7] overflow-y-auto p-6 pr-0">
+            <div className="bg-white rounded-2xl shadow-sm h-full overflow-y-auto">
+              <div className="p-6">
+                {/* Sidebar Title */}
+                <h2 className="text-[17px] font-semibold text-[#1d1d1f] mb-6">
+                  Extracted Data
+                </h2>
               {isReady ? (
                 <>
                   <FieldsEditor
                     template={template}
-                    job={{ ...job, fields: localFields }}
+                    job={job}
+                    localFields={localFields}
                     onFieldChange={handleFieldChange}
-                    disabled={updateFields.isPending}
+                    onAssetChange={handleAssetChange}
+                    onAssetUpload={handleAssetUpload}
+                    onSave={hasChanges ? handleSave : undefined}
+                    disabled={updateFields.isPending || updateAssets.isPending || uploadAsset.isPending}
                   />
                 </>
               ) : (
@@ -373,6 +426,7 @@ export function JobEditor({ jobId, templateId, onBack, initialPrompt, initialFil
                   <p className="text-[13px] text-[#86868b]">Loading fields...</p>
                 </div>
               )}
+              </div>
             </div>
           </div>
 
@@ -380,7 +434,7 @@ export function JobEditor({ jobId, templateId, onBack, initialPrompt, initialFil
           <div className="flex-1 p-6 bg-[#f5f5f7] relative">
             {isReady ? (
               <>
-                <PdfPreview key={pdfKey} jobId={jobId} renderedAt={job.renderedAt} isRendering={renderJob.isPending} />
+                <PdfPreview key={pdfKey} jobId={jobId} renderedAt={previewRenderedAt || job.renderedAt} isRendering={renderJob.isPending} />
                 {/* Expand button */}
                 <button
                   onClick={() => setPdfExpanded(true)}
@@ -413,13 +467,13 @@ export function JobEditor({ jobId, templateId, onBack, initialPrompt, initialFil
         </div>
 
         {/* Chat panel - collapsible */}
-        <div className={`flex-shrink-0 px-4 pb-4 bg-[#f5f5f7] transition-all duration-300 ${chatMinimized ? "" : "h-[350px]"}`}>
-          {/* Chat container with outline */}
-          <div className={`bg-white rounded-xl border border-[#e8e8ed] overflow-hidden ${chatMinimized ? "" : "h-full flex flex-col"}`}>
+        <div className={`flex-shrink-0 px-4 pb-4 bg-[#f5f5f7] transition-all duration-300 ${chatMinimized ? "" : "h-[420px]"}`}>
+          {/* Chat container */}
+          <div className={`bg-white rounded-xl overflow-hidden transition-all duration-200 border border-[#d2d2d7] ${chatMinimized ? "" : "h-full flex flex-col"}`}>
             {/* Chat header - clickable to toggle */}
             <div
               onClick={() => setChatMinimized(!chatMinimized)}
-              className="flex items-center justify-between px-4 py-3 cursor-pointer group border-b border-[#e8e8ed] hover:bg-[#f9f9fb] transition-colors"
+              className={`flex items-center justify-between px-4 py-3 cursor-pointer group hover:bg-[#f9f9fb] transition-colors ${chatMinimized ? "" : "border-b border-[#e8e8ed]"}`}
             >
               <span className="text-[13px] font-medium text-[#1d1d1f]">
                 Chat
@@ -501,7 +555,7 @@ export function JobEditor({ jobId, templateId, onBack, initialPrompt, initialFil
                     });
                     if (res.ok) {
                       setShowCodeModal(false);
-                      await renderJob.mutateAsync(jobId);
+                      await renderJob.mutateAsync({ jobId });
                       setPdfKey((k) => k + 1);
                     }
                   } catch (error) {
@@ -546,7 +600,7 @@ export function JobEditor({ jobId, templateId, onBack, initialPrompt, initialFil
             </div>
             <div className="h-[calc(100%-52px)]">
               <iframe
-                src={`/api/jobs/${jobId}/pdf?t=${job.renderedAt}#toolbar=0&navpanes=0&scrollbar=1&view=FitH`}
+                src={`/api/jobs/${jobId}/pdf?t=${(previewRenderedAt || job.renderedAt) ?? Date.now()}#toolbar=0&navpanes=0&scrollbar=1&view=FitH`}
                 className="w-full h-full"
                 style={{ border: 0 }}
                 title="PDF Preview"

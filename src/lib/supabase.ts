@@ -72,6 +72,8 @@ export async function uploadFile(
 
 /**
  * Download a file from Supabase storage
+ * @param bucket - The storage bucket name
+ * @param path - The file path within the bucket
  */
 export async function downloadFile(bucket: string, path: string): Promise<Buffer> {
   const supabase = getSupabase();

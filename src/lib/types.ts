@@ -11,6 +11,10 @@ export interface TemplateField {
   type: "string" | "number" | "boolean" | "array" | "object";
   description: string;
   example?: FieldValue;
+  // Whether this field is optional (won't show error if missing)
+  optional?: boolean;
+  // Default value to use when field is not provided
+  default?: FieldValue;
   // For arrays: describes the item structure
   items?: {
     type: "string" | "number" | "object";
@@ -69,6 +73,10 @@ export interface JobHistoryEntry {
   assets: Record<string, string | null>;
   timestamp: string;
   description: string;
+  // Optional cached preview for instant viewing (base64 PNG thumbnail)
+  previewBase64?: string;
+  // Optional SVG content snapshot
+  svgContent?: string;
 }
 
 // Job types

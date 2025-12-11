@@ -1,5 +1,7 @@
 "use client";
 
+import { useEffect, useState, useRef } from "react";
+
 interface PdfPreviewProps {
   jobId: string;
   renderedAt?: string;
@@ -7,6 +9,29 @@ interface PdfPreviewProps {
 }
 
 export function PdfPreview({ jobId, renderedAt, isRendering }: PdfPreviewProps) {
+  // Use a local key that updates whenever renderedAt changes to force iframe reload
+  const [iframeKey, setIframeKey] = useState(0);
+  const prevRenderedAt = useRef<string | undefined>(undefined);
+
+  useEffect(() => {
+    console.log("[PdfPreview] Effect triggered:", {
+      prev: prevRenderedAt.current,
+      new: renderedAt,
+      isRendering,
+      iframeKey,
+    });
+
+    if (renderedAt && renderedAt !== prevRenderedAt.current) {
+      console.log("[PdfPreview] renderedAt CHANGED - incrementing key:", {
+        from: prevRenderedAt.current,
+        to: renderedAt,
+        newKey: iframeKey + 1,
+      });
+      prevRenderedAt.current = renderedAt;
+      setIframeKey(k => k + 1);
+    }
+  }, [renderedAt, isRendering, iframeKey]);
+
   if (isRendering) {
     return (
       <div className="flex items-center justify-center h-full bg-white rounded-2xl shadow-sm">
@@ -52,13 +77,16 @@ export function PdfPreview({ jobId, renderedAt, isRendering }: PdfPreviewProps) 
     );
   }
 
-  // Use iframe with PDF.js viewer parameters to hide controls
+  // Use timestamp in URL to bust cache, and key on iframe to force remount
   const pdfUrl = `/api/jobs/${jobId}/pdf?t=${renderedAt}#toolbar=0&navpanes=0&scrollbar=0&view=FitH`;
+  const iframeKeyStr = `${renderedAt}-${iframeKey}`;
+
+  console.log("[PdfPreview] Rendering iframe:", { pdfUrl, iframeKey: iframeKeyStr, jobId, renderedAt });
 
   return (
     <div className="h-full rounded-2xl overflow-hidden bg-white shadow-sm border border-[#d2d2d7]">
       <iframe
-        key={renderedAt}
+        key={iframeKeyStr}
         src={pdfUrl}
         className="w-full h-full"
         style={{ border: 0 }}

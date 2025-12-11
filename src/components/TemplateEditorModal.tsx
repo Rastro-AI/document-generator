@@ -3,45 +3,23 @@
 import { useState, useEffect, useRef } from "react";
 import { Template } from "@/lib/types";
 
-// Default template code - defined outside component for stable reference
-const DEFAULT_TEMPLATE_CODE = `// Template for @react-pdf/renderer
-import React from "react";
-import {
-  Document,
-  Page,
-  View,
-  Text,
-  Image,
-  StyleSheet,
-  Font,
-} from "@react-pdf/renderer";
+// Default SVG template code
+const DEFAULT_TEMPLATE_CODE = `<svg xmlns="http://www.w3.org/2000/svg" width="612" height="792" viewBox="0 0 612 792">
+  <defs>
+    <style>
+      .page { fill: #ffffff; }
+      .title { fill: #1a1a1a; font-family: Arial, sans-serif; font-size: 24px; font-weight: bold; }
+      .content { fill: #333333; font-family: Arial, sans-serif; font-size: 14px; }
+    </style>
+  </defs>
 
-const styles = StyleSheet.create({
-  page: {
-    padding: 40,
-    fontFamily: "Helvetica",
-  },
-  title: {
-    fontSize: 24,
-    fontWeight: "bold",
-    marginBottom: 20,
-  },
-});
+  <!-- Page background -->
+  <rect class="page" x="0" y="0" width="612" height="792"/>
 
-export function render(
-  fields: Record<string, string | number | null>,
-  assets: Record<string, string | null>,
-  templateRoot: string
-): React.ReactElement {
-  return (
-    <Document>
-      <Page size="LETTER" style={styles.page}>
-        <Text style={styles.title}>{fields.TITLE}</Text>
-      </Page>
-    </Document>
-  );
-}
-`;
+  <!-- Content -->
+  <text class="title" x="40" y="60">{{TITLE}}</text>
+  <text class="content" x="40" y="100">{{DESCRIPTION}}</text>
+</svg>`;
 
 interface TemplateJsonField {
   name: string;
@@ -141,6 +119,7 @@ export function TemplateEditorModal({
   // Generation state
   const [selectedPdf, setSelectedPdf] = useState<File | null>(null);
   const [pdfPreviewUrl, setPdfPreviewUrl] = useState<string | null>(null);
+  const [selectedImages, setSelectedImages] = useState<File[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
   const [generationStatus, setGenerationStatus] = useState<string | null>(null);
   const [generationTraces, setGenerationTraces] = useState<GeneratorTrace[]>([]);
@@ -152,13 +131,22 @@ export function TemplateEditorModal({
   const [userPrompt, setUserPrompt] = useState("");
   const [versions, setVersions] = useState<Array<{ version: number; previewBase64: string; pdfBase64?: string; templateCode?: string }>>([]);
   const [selectedVersion, setSelectedVersion] = useState<number>(0);
+  const [showAssetModal, setShowAssetModal] = useState(false);
+  const [selectedAssets, setSelectedAssets] = useState<Array<{ id: string; filename: string; type: string }>>([]);
+  const allInputRef = useRef<HTMLInputElement>(null);
 
   const [feedbackInput, setFeedbackInput] = useState("");
   const [isRefining, setIsRefining] = useState(false);
   const [expandedTraces, setExpandedTraces] = useState<Set<number>>(new Set());
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const [conversationHistory, setConversationHistory] = useState<any[] | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const EXPECTED_DURATION = 10 * 60; // 10 minutes in seconds
+
+  // Check if we have enough input to start generation
+  const canGenerate = userPrompt.trim().length > 0 || selectedPdf !== null || selectedImages.length > 0 || selectedAssets.length > 0;
 
   const toggleTraceExpanded = (idx: number) => {
     setExpandedTraces((prev) => {
@@ -184,6 +172,9 @@ export function TemplateEditorModal({
       }
       setSelectedPdf(null);
       setPdfPreviewUrl(null);
+      setSelectedImages([]);
+      setSelectedAssets([]);
+      setShowAssetModal(false);
       setIsGenerating(false);
       setGenerationStatus(null);
       setGenerationTraces([]);
@@ -197,6 +188,7 @@ export function TemplateEditorModal({
       setFeedbackInput("");
       setIsRefining(false);
       setExpandedTraces(new Set());
+      setConversationHistory(null);
     }
   }, [isOpen, isCreating]);
 
@@ -259,10 +251,12 @@ export function TemplateEditorModal({
       const defaultTemplate = {
         id: "new-template",
         name: "New Template",
+        format: "svg",
         canvas: { width: 612, height: 792 },
         fonts: [],
         fields: [
           { name: "TITLE", type: "string", description: "Main title" },
+          { name: "DESCRIPTION", type: "string", description: "Description text" },
         ],
         assetSlots: [],
       };
@@ -352,7 +346,7 @@ export function TemplateEditorModal({
     setIsRefining(true);
     setIsGenerating(true);
     setGenerationComplete(false);
-    setSelectedVersion(0); // Switch to "Running Job" tab
+    // Don't switch to input tab - keep current view so user can see progress
 
     // Add user feedback to traces so it shows in the chat
     setGenerationTraces((prev) => [
@@ -377,6 +371,10 @@ export function TemplateEditorModal({
       // Pass max version number so new versions continue numbering correctly
       const maxVersion = versions.length > 0 ? Math.max(...versions.map(v => v.version)) : 0;
       formData.append("startVersion", String(maxVersion));
+      // Pass conversation history to resume from where we left off
+      if (conversationHistory) {
+        formData.append("conversationHistory", JSON.stringify(conversationHistory));
+      }
 
       const response = await fetch("/api/templates/generate", {
         method: "POST",
@@ -434,6 +432,10 @@ export function TemplateEditorModal({
                 }
                 setGenerationTraces((prev) => [...prev, parsed]);
               } else if (currentEventType === "result") {
+                // Always save conversation history for potential resume
+                if (parsed.conversationHistory) {
+                  setConversationHistory(parsed.conversationHistory);
+                }
                 if (parsed.success && parsed.templateJson && parsed.templateCode) {
                   setJsonText(JSON.stringify(parsed.templateJson, null, 2));
                   setCode(parsed.templateCode);
@@ -475,7 +477,7 @@ export function TemplateEditorModal({
   };
 
   const handleGenerate = async () => {
-    if (!selectedPdf) return;
+    if (!canGenerate) return;
 
     // Cancel any existing generation
     if (abortControllerRef.current) {
@@ -493,10 +495,37 @@ export function TemplateEditorModal({
 
     try {
       const formData = new FormData();
-      formData.append("pdf", selectedPdf);
+
+      // Add PDF if provided
+      if (selectedPdf) {
+        formData.append("pdf", selectedPdf);
+      }
+
+      // Add prompt
       if (userPrompt.trim()) {
         formData.append("prompt", userPrompt.trim());
       }
+
+      // Add selected images
+      for (const image of selectedImages) {
+        formData.append("images", image);
+      }
+
+      // Add asset bank images - fetch them and add as files
+      for (const asset of selectedAssets) {
+        if (asset.type === "image") {
+          try {
+            const response = await fetch(`/api/assets/${asset.id}`);
+            if (response.ok) {
+              const blob = await response.blob();
+              formData.append("images", blob, asset.filename);
+            }
+          } catch (e) {
+            console.error(`Failed to fetch asset ${asset.id}:`, e);
+          }
+        }
+      }
+
       formData.append("reasoning", "low"); // Enable reasoning for better quality
 
       const response = await fetch("/api/templates/generate", {
@@ -557,6 +586,10 @@ export function TemplateEditorModal({
                 }
                 setGenerationTraces((prev) => [...prev, parsed]);
               } else if (currentEventType === "result") {
+                // Always save conversation history for potential resume
+                if (parsed.conversationHistory) {
+                  setConversationHistory(parsed.conversationHistory);
+                }
                 if (parsed.success && parsed.templateJson && parsed.templateCode) {
                   setJsonText(JSON.stringify(parsed.templateJson, null, 2));
                   setCode(parsed.templateCode);
@@ -626,14 +659,54 @@ export function TemplateEditorModal({
   // Calculate progress percentage (capped at 95% until complete)
   const progressPercent = Math.min(95, (elapsedTime / EXPECTED_DURATION) * 100);
 
+  // Handle image file selection
+  const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (files) {
+      setSelectedImages(prev => [...prev, ...Array.from(files)]);
+    }
+  };
+
+  // Remove an image
+  const removeImage = (index: number) => {
+    setSelectedImages(prev => prev.filter((_, i) => i !== index));
+  };
+
+  // Remove an asset
+  const removeAsset = (id: string) => {
+    setSelectedAssets(prev => prev.filter(a => a.id !== id));
+  };
+
+  // Combined file selector (PDF or images)
+  const handleAllSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    for (const file of files) {
+      if (file.type === "application/pdf") {
+        if (pdfPreviewUrl) {
+          URL.revokeObjectURL(pdfPreviewUrl);
+        }
+        setSelectedPdf(file);
+        setPdfPreviewUrl(URL.createObjectURL(file));
+      } else if (file.type.startsWith("image/")) {
+        setSelectedImages(prev => [...prev, file]);
+      }
+    }
+    if (e.target) {
+      (e.target as HTMLInputElement).value = "";
+    }
+  };
+
   // Render content based on creation vs editing mode
   const renderContent = () => {
     // CREATING MODE
     if (isCreating) {
-      // Step 1: No PDF selected - show upload area
-      if (!selectedPdf) {
+      // Step 1: No input yet - show the combined input area
+      const hasStartedGeneration = versions.length > 0 || isGenerating;
+
+      if (!hasStartedGeneration) {
         return (
-          <div className="h-[600px] p-6">
+          <div className="h-[600px] p-6 flex flex-col">
+            {/* Hidden file inputs */}
             <input
               ref={fileInputRef}
               type="file"
@@ -641,26 +714,190 @@ export function TemplateEditorModal({
               onChange={handlePdfSelect}
               className="hidden"
             />
-            <div
-              onClick={() => fileInputRef.current?.click()}
-              className="h-full flex flex-col items-center justify-center border-2 border-dashed border-[#d2d2d7] rounded-xl cursor-pointer hover:border-[#86868b] hover:bg-[#f5f5f7] transition-colors"
-            >
-              <svg className="w-16 h-16 text-[#86868b] mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-              </svg>
-              <p className="text-[15px] font-medium text-[#1d1d1f] mb-1">Upload PDF</p>
-              <p className="text-[13px] text-[#86868b]">
-                Drop a PDF or click to browse
-              </p>
-              <p className="text-[11px] text-[#86868b] mt-4 max-w-[300px] text-center">
-                AI will analyze the PDF and generate a matching template
-              </p>
+            <input
+              ref={imageInputRef}
+              type="file"
+              accept="image/*"
+              multiple
+              onChange={handleImageSelect}
+              className="hidden"
+            />
+
+            {/* Main input area: drop zone at top; compact bar at bottom */}
+            <div className="flex-1 flex flex-col">
+              {/* Combined hidden input (PDF + images) */}
+              <input
+                ref={allInputRef}
+                type="file"
+                multiple
+                accept=".pdf,image/*"
+                onChange={handleAllSelect}
+                className="hidden"
+              />
+              {/* Hidden header, minimal text */}
+              <div className="hidden" />
+
+              {/* Drop zone */}
+              <div
+                className="flex-1 mb-4 rounded-2xl border-2 border-dashed border-[#d2d2d7] bg-[#fafafa] hover:border-[#1d1d1f] transition-colors flex items-center justify-center cursor-pointer overflow-hidden relative"
+                onClick={() => !pdfPreviewUrl && allInputRef.current?.click()}
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  const files = Array.from(e.dataTransfer.files || []);
+                  for (const file of files) {
+                    if (file.type === "application/pdf") {
+                      if (pdfPreviewUrl) URL.revokeObjectURL(pdfPreviewUrl);
+                      setSelectedPdf(file);
+                      setPdfPreviewUrl(URL.createObjectURL(file));
+                    } else if (file.type.startsWith("image/")) {
+                      setSelectedImages((prev) => [...prev, file]);
+                    }
+                  }
+                }}
+              >
+                {pdfPreviewUrl ? (
+                  /* PDF Preview inside drop zone */
+                  <div className="w-full h-full relative">
+                    <iframe
+                      src={pdfPreviewUrl}
+                      className="w-full h-full rounded-xl"
+                      title="PDF to mimic"
+                    />
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSelectedPdf(null);
+                        if (pdfPreviewUrl) URL.revokeObjectURL(pdfPreviewUrl);
+                        setPdfPreviewUrl(null);
+                      }}
+                      className="absolute top-3 right-3 w-7 h-7 rounded-full bg-white/90 shadow-md flex items-center justify-center hover:bg-white transition-colors"
+                    >
+                      <svg className="w-4 h-4 text-[#1d1d1f]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                    <div className="absolute bottom-3 left-3 px-2 py-1 bg-white/90 rounded-md shadow-sm">
+                      <p className="text-[11px] text-[#1d1d1f] font-medium">PDF to mimic</p>
+                    </div>
+                  </div>
+                ) : (
+                  /* Empty state */
+                  <div className="text-center text-[#1d1d1f]">
+                    <svg className="w-8 h-8 mx-auto mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 16V4m0 0l-4 4m4-4l4 4M4 16h16" />
+                    </svg>
+                    <p className="text-[13px] font-medium">Drop PDF to mimic</p>
+                    <p className="text-[11px] text-[#86868b] mt-1">or click to browse</p>
+                  </div>
+                )}
+              </div>
+
+              {/* Compact bar */}
+              <div className="flex items-center gap-2 px-3 pb-3">
+                <input
+                  type="text"
+                  value={userPrompt}
+                  onChange={(e) => setUserPrompt(e.target.value)}
+                  placeholder="Describe the template..."
+                  className="flex-1 px-3 py-2 bg-[#f5f5f7] rounded-lg text-[14px] text-[#1d1d1f] placeholder-[#86868b] border-0 focus:outline-none focus:ring-2 focus:ring-[#1d1d1f] focus:ring-offset-1"
+                />
+                <button
+                  type="button"
+                  onClick={() => allInputRef.current?.click()}
+                  className="h-8 px-2.5 flex items-center gap-1.5 rounded-lg text-[12px] font-medium text-[#86868b] hover:bg-white hover:text-[#1d1d1f] transition-all"
+                  title="Attach files"
+                >
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M18.375 12.739l-7.693 7.693a4.5 4.5 0 01-6.364-6.364l10.94-10.94A3 3 0 1119.5 7.372L8.552 18.32m.009-.01l-.01.01m5.699-9.941l-7.81 7.81a1.5 1.5 0 002.112 2.13" />
+                  </svg>
+                  Attach
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowAssetModal(true)}
+                  className="h-8 px-2.5 flex items-center gap-1.5 rounded-lg text-[12px] font-medium text-[#86868b] hover:bg-white hover:text-[#1d1d1f] transition-all"
+                  title="Select from Asset Bank"
+                >
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
+                  </svg>
+                  Asset Bank
+                </button>
+                <button
+                  type="button"
+                  onClick={handleGenerate}
+                  disabled={!canGenerate || isGenerating}
+                  className="w-8 h-8 flex items-center justify-center rounded-lg bg-[#1d1d1f] text-white hover:bg-[#424245] active:scale-[0.95] disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+                  title="Send"
+                >
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 12h14M12 5l7 7-7 7" />
+                  </svg>
+                </button>
+              </div>
+
+              {/* Attachments preview - only show images and assets (PDF is shown in drop zone) */}
+              {(selectedImages.length > 0 || selectedAssets.length > 0) && (
+                <div className="flex-1 overflow-auto">
+                  <div className="flex flex-wrap gap-3">
+                    {/* Images */}
+                    {selectedImages.map((image, index) => (
+                      <div key={`image-${index}`} className="relative group">
+                        <img
+                          src={URL.createObjectURL(image)}
+                          alt={image.name}
+                          className="w-24 h-24 rounded-lg object-cover border border-[#d2d2d7]"
+                        />
+                        <button
+                          onClick={() => removeImage(index)}
+                          className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-[#1d1d1f] text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                        >
+                          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        </button>
+                      </div>
+                    ))}
+
+                    {/* Asset bank */}
+                    {selectedAssets.map((asset) => (
+                      <div key={`asset-${asset.id}`} className="relative group">
+                        {asset.type === "image" ? (
+                          <img
+                            src={`/api/assets/${asset.id}`}
+                            alt={asset.filename}
+                            className="w-24 h-24 rounded-lg object-cover border border-[#d2d2d7]"
+                          />
+                        ) : (
+                          <div className="w-24 h-24 rounded-lg bg-white border border-[#d2d2d7] flex flex-col items-center justify-center">
+                            <svg className="w-8 h-8 text-[#86868b] mb-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                            </svg>
+                            <span className="text-[10px] text-[#86868b] truncate max-w-[80px]">{asset.filename}</span>
+                          </div>
+                        )}
+                        <button
+                          onClick={() => removeAsset(asset.id)}
+                          className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-[#1d1d1f] text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                        >
+                          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Empty state removed per request */}
             </div>
           </div>
         );
       }
 
-      // Step 2 & 3: PDF selected - unified two-pane layout
+      // Step 2 & 3: Generation in progress or complete - unified two-pane layout
       // Left: Tabs (Source | V1 PDF | V1 Fields | V2 PDF | V2 Fields | ...)
       // Right: Always shows logs/reasoning
       // selectedVersion: 0 = source, integer = PDF view, X.5 = Fields view
@@ -996,20 +1233,31 @@ export function TemplateEditorModal({
               {/* Chat input - always visible at bottom during/after generation */}
               {(isGenerating || generationComplete || generationStatus) && (
                 <div className="border-t border-[#e8e8ed] p-3 flex-shrink-0">
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
+                  <div className="flex gap-2 items-end">
+                    <textarea
                       value={feedbackInput}
                       onChange={(e) => setFeedbackInput(e.target.value)}
-                      onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && handleSendFeedback()}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && !e.shiftKey) {
+                          e.preventDefault();
+                          handleSendFeedback();
+                        }
+                      }}
                       placeholder="Add feedback to guide generation..."
-                      className="flex-1 px-3 py-2 text-[12px] bg-[#f5f5f7] border-0 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#424245]"
+                      className="flex-1 px-3 py-2 text-[12px] bg-[#f5f5f7] border-0 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#424245] resize-none min-h-[36px] max-h-[120px]"
                       disabled={isRefining}
+                      rows={1}
+                      style={{ height: 'auto', overflow: 'hidden' }}
+                      onInput={(e) => {
+                        const target = e.target as HTMLTextAreaElement;
+                        target.style.height = 'auto';
+                        target.style.height = Math.min(target.scrollHeight, 120) + 'px';
+                      }}
                     />
                     <button
                       onClick={handleSendFeedback}
                       disabled={!feedbackInput.trim() || isRefining}
-                      className="px-3 py-2 text-[11px] font-medium text-white bg-[#1d1d1f] rounded-lg hover:bg-[#424245] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                      className="px-3 py-2 text-[11px] font-medium text-white bg-[#1d1d1f] rounded-lg hover:bg-[#424245] disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex-shrink-0"
                     >
                       Send
                     </button>
@@ -1022,7 +1270,7 @@ export function TemplateEditorModal({
       );
     }
 
-    // EDITING MODE - Keep tabs (JSON, Code, Preview)
+    // EDITING MODE - Tabs: Fields, Code, Preview
     return (
       <>
         {/* Tabs */}
@@ -1035,7 +1283,7 @@ export function TemplateEditorModal({
                 : "text-[#86868b] hover:text-[#1d1d1f]"
             }`}
           >
-            JSON
+            Fields
           </button>
           <button
             onClick={() => setActiveTab("code")}
@@ -1067,27 +1315,140 @@ export function TemplateEditorModal({
         {/* Content */}
         <div className="h-[450px] overflow-y-auto p-6">
           {activeTab === "json" && (
-            <div className="h-[400px] flex flex-col">
-              {jsonError && (
-                <div className="mb-2 px-3 py-2 bg-red-50 text-red-600 text-[12px] rounded-lg">
-                  {jsonError}
+            <div className="space-y-6">
+              {/* Template Info */}
+              <div className="space-y-3">
+                <h3 className="text-[14px] font-semibold text-[#1d1d1f]">Template Info</h3>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-[11px] font-medium text-[#86868b] mb-1">Name</label>
+                    <input
+                      type="text"
+                      value={parsedTemplate?.name || ""}
+                      onChange={(e) => {
+                        try {
+                          const parsed = JSON.parse(jsonText);
+                          parsed.name = e.target.value;
+                          setJsonText(JSON.stringify(parsed, null, 2));
+                        } catch { /* ignore */ }
+                      }}
+                      className="w-full px-3 py-2 text-[13px] bg-[#f5f5f7] border-0 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1d1d1f]"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-medium text-[#86868b] mb-1">ID</label>
+                    <input
+                      type="text"
+                      value={parsedTemplate?.id || ""}
+                      onChange={(e) => {
+                        try {
+                          const parsed = JSON.parse(jsonText);
+                          parsed.id = e.target.value;
+                          setJsonText(JSON.stringify(parsed, null, 2));
+                        } catch { /* ignore */ }
+                      }}
+                      className="w-full px-3 py-2 text-[13px] bg-[#f5f5f7] border-0 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1d1d1f]"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Asset Slots */}
+              {parsedTemplate?.assetSlots && parsedTemplate.assetSlots.length > 0 && (
+                <div className="space-y-3">
+                  <h3 className="text-[14px] font-semibold text-[#1d1d1f]">Asset Slots</h3>
+                  <div className="space-y-2">
+                    {parsedTemplate.assetSlots.map((slot, index) => (
+                      <div key={slot.name} className="p-3 bg-[#f5f5f7] rounded-lg">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className="text-[13px] font-medium text-[#1d1d1f]">{slot.name}</span>
+                              <span className="px-1.5 py-0.5 text-[10px] font-medium text-[#6e6e73] bg-white rounded">
+                                {slot.kind}
+                              </span>
+                            </div>
+                            <input
+                              type="text"
+                              value={slot.description}
+                              onChange={(e) => {
+                                try {
+                                  const parsed = JSON.parse(jsonText);
+                                  if (parsed.assetSlots?.[index]) {
+                                    parsed.assetSlots[index].description = e.target.value;
+                                    setJsonText(JSON.stringify(parsed, null, 2));
+                                  }
+                                } catch { /* ignore */ }
+                              }}
+                              placeholder="Description..."
+                              className="w-full px-2 py-1 text-[12px] bg-white border-0 rounded focus:outline-none focus:ring-1 focus:ring-[#1d1d1f]"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
-              <textarea
-                value={jsonText}
-                onChange={(e) => handleJsonChange(e.target.value)}
-                className="w-full flex-1 px-4 py-3 bg-[#1d1d1f] text-[#e8e8ed] font-mono text-[13px]
-                          rounded-xl resize-none focus:outline-none focus:ring-2 focus:ring-[#424245]"
-                placeholder='{"id": "my-template", "name": "My Template", ...}'
-                spellCheck={false}
-              />
+
+              {/* Fields */}
+              {parsedTemplate?.fields && parsedTemplate.fields.length > 0 && (
+                <div className="space-y-3">
+                  <h3 className="text-[14px] font-semibold text-[#1d1d1f]">Fields</h3>
+                  <div className="space-y-2">
+                    {parsedTemplate.fields.map((field, index) => (
+                      <div key={field.name} className="p-3 bg-[#f5f5f7] rounded-lg">
+                        <div className="flex items-start gap-3">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className="text-[13px] font-medium text-[#1d1d1f]">{field.name}</span>
+                              <span className="px-1.5 py-0.5 text-[10px] font-medium text-[#6e6e73] bg-white rounded">
+                                {field.type}
+                              </span>
+                            </div>
+                            <input
+                              type="text"
+                              value={field.description}
+                              onChange={(e) => {
+                                try {
+                                  const parsed = JSON.parse(jsonText);
+                                  if (parsed.fields?.[index]) {
+                                    parsed.fields[index].description = e.target.value;
+                                    setJsonText(JSON.stringify(parsed, null, 2));
+                                  }
+                                } catch { /* ignore */ }
+                              }}
+                              placeholder="Description..."
+                              className="w-full px-2 py-1 text-[12px] bg-white border-0 rounded focus:outline-none focus:ring-1 focus:ring-[#1d1d1f] mb-1"
+                            />
+                            {field.example !== undefined && (
+                              <p className="text-[10px] text-[#86868b] italic">
+                                Example: {typeof field.example === "object" ? JSON.stringify(field.example) : String(field.example)}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Empty state */}
+              {(!parsedTemplate?.fields || parsedTemplate.fields.length === 0) &&
+               (!parsedTemplate?.assetSlots || parsedTemplate.assetSlots.length === 0) && (
+                <div className="text-center py-8 text-[#86868b]">
+                  <p className="text-[13px]">No fields or assets defined</p>
+                  <p className="text-[11px] mt-1">Edit the Code tab to add template fields</p>
+                </div>
+              )}
             </div>
           )}
 
           {activeTab === "code" && (
             <div className="h-[400px] flex flex-col gap-2">
               <p className="text-[11px] text-[#86868b]">
-                @react-pdf/renderer template code
+                SVG template code
               </p>
               <textarea
                 value={code}

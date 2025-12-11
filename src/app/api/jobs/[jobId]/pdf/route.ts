@@ -20,7 +20,8 @@ export async function GET(
       headers: {
         "Content-Type": "application/pdf",
         "Content-Disposition": `inline; filename="output.pdf"`,
-        "Cache-Control": "no-cache",
+        // Prevent any caching issues in embedded preview
+        "Cache-Control": "no-store, must-revalidate",
       },
     });
   } catch (error) {

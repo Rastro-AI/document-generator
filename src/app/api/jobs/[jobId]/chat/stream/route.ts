@@ -6,6 +6,7 @@ import {
   addJobHistoryEntry,
   getAgentHistory,
   updateAgentHistory,
+  getJobSvgContent,
 } from "@/lib/fs-utils";
 import { runTemplateAgent, AgentTrace } from "@/lib/agents/template-agent";
 import { createTimingLogger } from "@/lib/timing-logger";
@@ -79,7 +80,14 @@ export async function POST(
     try {
       timing.start("add_history_entry");
       // Save current state to history before any changes
-      await addJobHistoryEntry(jobId, mode === "auto" ? "AI edit" : "Design edit");
+      // Skip the expensive preview generation - just save the SVG snapshot
+      let svgSnapshot: string | undefined;
+      try {
+        svgSnapshot = await getJobSvgContent(jobId) || undefined;
+      } catch (e) {
+        console.error("Failed to capture SVG snapshot:", e);
+      }
+      await addJobHistoryEntry(jobId, mode === "auto" ? "AI edit" : "Design edit", svgSnapshot);
       timing.end();
 
       timing.start("get_agent_history");
@@ -114,20 +122,32 @@ export async function POST(
 
       // Handle field updates if any
       let updatedFields = job.fields;
+      console.log(`[Chat] Job ${jobId} - Agent result mode: ${agentResult.mode}`);
+      console.log(`[Chat] Job ${jobId} - Agent fieldUpdates:`, JSON.stringify(agentResult.fieldUpdates));
+
       if (agentResult.fieldUpdates && Object.keys(agentResult.fieldUpdates).length > 0) {
         timing.start("update_job_fields");
         updatedFields = { ...job.fields };
         for (const [key, value] of Object.entries(agentResult.fieldUpdates)) {
           if (key in job.fields) {
             updatedFields[key] = value;
+            console.log(`[Chat] Job ${jobId} - Setting field ${key} = ${value}`);
+          } else {
+            console.log(`[Chat] Job ${jobId} - Field ${key} NOT in job.fields, skipping`);
           }
         }
         await updateJobFields(jobId, updatedFields);
+        console.log(`[Chat] Job ${jobId} - Fields saved to DB`);
         timing.end();
+      } else {
+        console.log(`[Chat] Job ${jobId} - No field updates from agent`);
       }
 
       // Save stream timing log
       await timing.save();
+
+      // Log what we're sending back to the client
+      console.log(`[Chat] Job ${jobId} - Sending result: mode=${agentResult.mode}, templateChanged=${agentResult.templateChanged}`);
 
       // Send final result
       sendEvent("result", {

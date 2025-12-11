@@ -2,9 +2,25 @@ import OpenAI from "openai";
 import { Template } from "./types";
 import fs from "fs";
 import path from "path";
+import os from "os";
 import * as XLSX from "xlsx";
+import { downloadFile, BUCKETS, isSupabaseConfigured } from "./supabase";
 
 export type ExtractionEventCallback = (event: { type: string; content: string }) => void;
+
+// Convert image buffer to base64 data URL for vision API
+function imageToDataUrl(buffer: Buffer, filename: string): string {
+  const ext = filename.split(".").pop()?.toLowerCase() || "png";
+  const mimeTypes: Record<string, string> = {
+    png: "image/png",
+    jpg: "image/jpeg",
+    jpeg: "image/jpeg",
+    gif: "image/gif",
+    webp: "image/webp",
+  };
+  const mimeType = mimeTypes[ext] || "image/png";
+  return `data:${mimeType};base64,${buffer.toString("base64")}`;
+}
 
 // Lazy-load the OpenAI client to avoid build-time errors
 let openaiClient: OpenAI | null = null;
@@ -232,16 +248,42 @@ export async function extractFieldsAndAssetsFromFiles(
       containerId = container.id;
       console.log("Container created:", container.id);
 
+      // Track temp files to clean up
+      const tempFilesToCleanup: string[] = [];
+
       // Upload all document files to container
       for (const doc of documentFiles) {
         let actualFilePath = doc.path;
-        const ext = path.extname(doc.path).toLowerCase();
+        const ext = path.extname(doc.filename).toLowerCase();
+
+        // If the path is a Supabase storage path (contains jobId/), download to temp first
+        if (isSupabaseConfigured() && doc.path.includes("/")) {
+          onEvent?.({ type: "status", content: `Downloading ${doc.filename}...` });
+          console.log(`Downloading ${doc.filename} from Supabase...`);
+          try {
+            // Download from Supabase jobs bucket
+            const buffer = await downloadFile(BUCKETS.JOBS, doc.path);
+            // Write to temp directory (works on Vercel)
+            const tempDir = os.tmpdir();
+            actualFilePath = path.join(tempDir, `${Date.now()}-${doc.filename}`);
+            fs.writeFileSync(actualFilePath, buffer);
+            tempFilesToCleanup.push(actualFilePath);
+            console.log(`Downloaded to temp: ${actualFilePath}`);
+          } catch (downloadErr) {
+            console.error(`Failed to download ${doc.filename}:`, downloadErr);
+            throw downloadErr;
+          }
+        }
 
         // Convert .xlsm to .xlsx first (removes macros)
         if (ext === ".xlsm") {
           onEvent?.({ type: "status", content: `Converting ${doc.filename} to xlsx...` });
           console.log("Converting .xlsm to .xlsx...");
-          actualFilePath = convertXlsmToXlsx(doc.path);
+          const convertedPath = convertXlsmToXlsx(actualFilePath);
+          if (convertedPath !== actualFilePath) {
+            tempFilesToCleanup.push(convertedPath);
+          }
+          actualFilePath = convertedPath;
         }
 
         onEvent?.({ type: "status", content: `Uploading ${doc.filename}...` });
@@ -251,10 +293,16 @@ export async function extractFieldsAndAssetsFromFiles(
           file: fileStream,
         });
         uploadedFiles.push(path.basename(actualFilePath));
+      }
 
-        // Clean up converted file if we created one
-        if (actualFilePath !== doc.path && fs.existsSync(actualFilePath)) {
-          fs.unlinkSync(actualFilePath);
+      // Clean up temp files
+      for (const tempFile of tempFilesToCleanup) {
+        try {
+          if (fs.existsSync(tempFile)) {
+            fs.unlinkSync(tempFile);
+          }
+        } catch {
+          // Ignore cleanup errors
         }
       }
     }
@@ -277,18 +325,19 @@ ${imageList}
 ASSET SLOTS TO FILL:
 ${assetDescriptions}
 
-IMPORTANT - ASSET BANK LOGOS:
-The available images include certification logos from the asset bank. If you need logos for:
-- UL certification: look for "ul-logo.png"
-- ETL listing: look for "etl-listed-us-mark.png"
-- Energy Star: look for "energy-star-logo.png"
-- FCC compliance: look for "fcc-logo.png"
-These certification logos should be assigned to any certification-related asset slots.
+IMAGE ASSIGNMENT INSTRUCTIONS:
+You can see ${imageFiles.length} image(s) below this text. The images are shown in the same order as listed above.
+${imageFiles.map((f, i) => `Image ${i + 1}: "${f.filename}"`).join("\n")}
 
-Based on the image filenames, assign each image to the most appropriate asset slot.
-For example, if there's an image named "product.jpg" and an asset slot "PRODUCT_IMAGE", assign it.
-If an image filename contains "polar" or "distribution", it likely belongs to POLAR_GRAPH.
-If an image shows a table or chart with distances, it belongs to DISTANCE_TABLE.`
+For EACH image you see, determine which asset slot it should fill:
+- Photos of products (bulbs, lamps, devices) → PRODUCT_IMAGE
+- Company logos, certification marks → COMPANY_LOGO, UL_LOGO, etc.
+- Charts, graphs, polar diagrams → appropriate chart slots
+- If an image is a product photo and PRODUCT_IMAGE slot exists, assign it
+
+IMPORTANT: You MUST assign at least one image if any image looks like a product photo.
+Use the EXACT filename from the list above as the value (e.g., "${imageFiles[0]?.filename || "image.jpg"}").
+If an image doesn't fit any slot, use null for that slot.`
       : "";
 
     const prompt = `${documentSection}
@@ -331,10 +380,35 @@ Example:
       ? [{ type: "code_interpreter", container: containerId }]
       : [];
 
+    // Build input with visual images if available
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const inputContent: any[] = [{ type: "input_text", text: prompt }];
+
+    // Load images from storage and add them visually
+    if (imageFiles.length > 0) {
+      onEvent?.({ type: "status", content: "Loading images for visual analysis..." });
+      for (const img of imageFiles) {
+        try {
+          // Download image from Supabase storage
+          const imageBuffer = await downloadFile(BUCKETS.JOBS, img.path);
+          if (imageBuffer) {
+            const dataUrl = imageToDataUrl(imageBuffer, img.filename);
+            inputContent.push({
+              type: "input_image",
+              image_url: dataUrl,
+            });
+            console.log(`Added image ${img.filename} for visual analysis`);
+          }
+        } catch (err) {
+          console.warn(`Failed to load image ${img.filename} for visual analysis:`, err);
+        }
+      }
+    }
+
     const response = await openai.responses.create({
       model: "gpt-5.1",
       reasoning: { effort: reasoning },
-      input: prompt,
+      input: [{ role: "user", content: inputContent }],
       tools: tools.length > 0 ? tools : undefined,
     });
 
