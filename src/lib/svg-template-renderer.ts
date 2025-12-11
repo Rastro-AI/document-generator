@@ -676,8 +676,8 @@ export function convertForeignObjectToText(svgContent: string): string {
     const avgCharWidth = fontSize * 0.55;
     const charsPerLine = Math.floor(width / avgCharWidth);
 
-    // Word-wrap the text into lines
-    const lines = wrapText(textContent, charsPerLine);
+    // Word-wrap the text into lines, preserving placeholders intact
+    const lines = wrapTextPreservingPlaceholders(textContent, charsPerLine);
 
     // Calculate line spacing in pixels
     const lineSpacing = fontSize * lineHeight;
@@ -699,23 +699,61 @@ export function convertForeignObjectToText(svgContent: string): string {
 
 /**
  * Word-wrap text to fit within a character limit per line
- * Tries to break at word boundaries
+ * Preserves {{PLACEHOLDER}} tokens intact (never splits them across lines)
  */
-function wrapText(text: string, charsPerLine: number): string[] {
+function wrapTextPreservingPlaceholders(text: string, charsPerLine: number): string[] {
   if (charsPerLine <= 0) return [text];
 
-  const words = text.split(/\s+/);
+  // Tokenize: split into words and placeholders
+  // Placeholders like {{FOO:bar baz}} should be treated as single tokens
+  const tokens: string[] = [];
+  let remaining = text;
+
+  while (remaining.length > 0) {
+    // Check if we're at a placeholder
+    const placeholderMatch = remaining.match(/^\{\{[^}]+\}\}/);
+    if (placeholderMatch) {
+      tokens.push(placeholderMatch[0]);
+      remaining = remaining.slice(placeholderMatch[0].length).trimStart();
+    } else {
+      // Get the next word (up to whitespace or placeholder)
+      const wordMatch = remaining.match(/^[^\s{]+/);
+      if (wordMatch) {
+        tokens.push(wordMatch[0]);
+        remaining = remaining.slice(wordMatch[0].length).trimStart();
+      } else if (remaining.startsWith('{') && !remaining.startsWith('{{')) {
+        // Single brace, treat as word
+        const braceWord = remaining.match(/^[^\s]+/);
+        if (braceWord) {
+          tokens.push(braceWord[0]);
+          remaining = remaining.slice(braceWord[0].length).trimStart();
+        } else {
+          break;
+        }
+      } else {
+        // Skip whitespace
+        remaining = remaining.trimStart();
+        if (remaining.length === 0) break;
+        // Safety: if nothing matches, take one character
+        if (remaining === text) {
+          tokens.push(remaining[0]);
+          remaining = remaining.slice(1);
+        }
+      }
+    }
+  }
+
   const lines: string[] = [];
   let currentLine = "";
 
-  for (const word of words) {
+  for (const token of tokens) {
     if (currentLine.length === 0) {
-      currentLine = word;
-    } else if (currentLine.length + 1 + word.length <= charsPerLine) {
-      currentLine += " " + word;
+      currentLine = token;
+    } else if (currentLine.length + 1 + token.length <= charsPerLine) {
+      currentLine += " " + token;
     } else {
       lines.push(currentLine);
-      currentLine = word;
+      currentLine = token;
     }
   }
 
@@ -786,8 +824,11 @@ export function convertCssClassesToInline(svgContent: string): string {
     return `${before} style="${inlineStyle}"${after}`;
   });
 
-  // Optionally remove the style block from defs (since styles are now inline)
-  // Keep it for now in case some elements weren't converted
+  // Remove the <style> block since styles are now inline
+  result = result.replace(/<style[^>]*>[\s\S]*?<\/style>\s*/gi, "");
+
+  // Remove empty <defs> block if it only contained the style
+  result = result.replace(/<defs>\s*<\/defs>\s*/gi, "");
 
   return result;
 }
