@@ -20,13 +20,21 @@ const CHROMIUM_PACK_URL = "https://github.com/Sparticuz/chromium/releases/downlo
 // Helper to launch Puppeteer with correct Chrome for environment
 async function launchBrowser() {
   const isServerless = process.env.VERCEL === "1" || process.env.AWS_LAMBDA_FUNCTION_NAME;
+
+  if (isServerless) {
+    return puppeteer.launch({
+      args: chromium.args,
+      executablePath: await chromium.executablePath(CHROMIUM_PACK_URL),
+      headless: true,
+    });
+  }
+
+  // Local development
   return puppeteer.launch({
-    args: isServerless ? chromium.args : ["--no-sandbox", "--disable-setuid-sandbox"],
-    executablePath: isServerless
-      ? await chromium.executablePath(CHROMIUM_PACK_URL)
-      : process.platform === "darwin"
-        ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-        : "/usr/bin/google-chrome",
+    args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    executablePath: process.platform === "darwin"
+      ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+      : "/usr/bin/google-chrome",
     headless: true,
   });
 }

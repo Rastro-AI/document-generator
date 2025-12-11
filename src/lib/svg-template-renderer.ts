@@ -347,15 +347,22 @@ export async function svgToPdf(svgContent: string): Promise<Buffer> {
     // Use @sparticuz/chromium-min for serverless, local Chrome for dev
     const isServerless = process.env.VERCEL === "1" || process.env.AWS_LAMBDA_FUNCTION_NAME;
 
-    const browser = await puppeteer.launch({
-      args: isServerless ? chromium.args : ["--no-sandbox", "--disable-setuid-sandbox"],
-      executablePath: isServerless
-        ? await chromium.executablePath(CHROMIUM_PACK_URL)
-        : process.platform === "darwin"
+    let browser;
+    if (isServerless) {
+      browser = await puppeteer.launch({
+        args: chromium.args,
+        executablePath: await chromium.executablePath(CHROMIUM_PACK_URL),
+        headless: true,
+      });
+    } else {
+      browser = await puppeteer.launch({
+        args: ["--no-sandbox", "--disable-setuid-sandbox"],
+        executablePath: process.platform === "darwin"
           ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
           : "/usr/bin/google-chrome",
-      headless: true,
-    });
+        headless: true,
+      });
+    }
 
     try {
       const page = await browser.newPage();
