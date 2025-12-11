@@ -10,9 +10,15 @@ import {
   copySvgTemplateToJob,
   listAssetBankFiles,
   getAssetBankFile,
+  markJobRendered,
+  getJobSvgContent,
+  saveJobOutputPdf,
+  updateJobFields as updateJobFieldsInDb,
 } from "@/lib/fs-utils";
 import { Job, UploadedFile } from "@/lib/types";
 import { runTemplateAgent } from "@/lib/agents/template-agent";
+import { renderSVGTemplate, prepareAssets, svgToPdf } from "@/lib/svg-template-renderer";
+import { getAssetFile, getAssetBankFile as getAssetBankFileBuffer } from "@/lib/fs-utils";
 
 export const runtime = "nodejs";
 
@@ -203,11 +209,50 @@ export async function POST(request: NextRequest) {
       );
 
       // Re-fetch the updated job
-      const finalJob = await getJob(jobId);
+      let finalJob = await getJob(jobId);
 
       // Update initialMessage
       if (finalJob) {
         finalJob.initialMessage = agentResult.message || "Document is ready for review.";
+      }
+
+      // Render the final PDF so it's ready immediately
+      sendEvent("trace", { type: "status", content: "Generating PDF..." });
+      try {
+        const svgContent = await getJobSvgContent(jobId);
+        if (svgContent && finalJob) {
+          // Prepare assets as data URLs
+          const assetDataUrls: Record<string, string | null> = {};
+          for (const [key, value] of Object.entries(finalJob.assets || {})) {
+            if (value) {
+              try {
+                const assetFilename = value.includes("/") ? value.split("/").pop()! : value;
+                let imageBuffer: Buffer | null = await getAssetFile(jobId, assetFilename);
+                if (!imageBuffer) imageBuffer = await getAssetBankFileBuffer(assetFilename);
+                if (imageBuffer) {
+                  const ext = assetFilename.split(".").pop()?.toLowerCase() || "png";
+                  const mimeTypes: Record<string, string> = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", svg: "image/svg+xml" };
+                  assetDataUrls[key] = `data:${mimeTypes[ext] || "application/octet-stream"};base64,${imageBuffer.toString("base64")}`;
+                } else {
+                  assetDataUrls[key] = null;
+                }
+              } catch {
+                assetDataUrls[key] = null;
+              }
+            } else {
+              assetDataUrls[key] = null;
+            }
+          }
+
+          const preparedAssets = await prepareAssets(assetDataUrls);
+          const renderedSvg = renderSVGTemplate(svgContent, finalJob.fields, preparedAssets);
+          const pdfBuffer = await svgToPdf(renderedSvg);
+          await saveJobOutputPdf(jobId, pdfBuffer);
+          finalJob = await markJobRendered(jobId) || finalJob;
+          console.log(`[JobStream] PDF rendered for job ${jobId}, renderedAt: ${finalJob?.renderedAt}`);
+        }
+      } catch (err) {
+        console.error("[JobStream] Failed to render PDF:", err);
       }
 
       sendEvent("result", { jobId, job: finalJob });
