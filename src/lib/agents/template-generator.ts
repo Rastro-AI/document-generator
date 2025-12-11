@@ -214,30 +214,32 @@ Create an SVG template that:
 1. Matches the PDF layout (colors, positions, fonts, spacing)
 2. Has {{PLACEHOLDER}} fields for dynamic content
 3. Has {{ASSET_NAME}} references for images
-4. Is compatible with Figma import
 
-## FIGMA COMPATIBILITY - CRITICAL
-Your SVG MUST be importable into Figma. Follow these rules strictly:
+## TEXT WRAPPING
+For multiline text that needs to wrap, you have TWO options:
 
-### DO NOT USE:
-- <foreignObject> - Figma ignores it completely
-- CSS classes with <style> in <defs> - Figma has poor support
+### Option 1: foreignObject (RECOMMENDED for wrapping text)
+Use for paragraphs or text that needs automatic wrapping:
+<foreignObject x="48" y="120" width="252" height="60">
+  <div xmlns="http://www.w3.org/1999/xhtml"
+       style="font-family: Arial, sans-serif; font-size: 14px; color: #000;">
+    {{DESCRIPTION:This is a long description that will wrap automatically within the width.}}
+  </div>
+</foreignObject>
 
-### MUST USE:
-- Inline styles on every element: style="font-family: Arial, sans-serif; font-size: 16px; fill: #000;"
-- <tspan> for multiline text - SVG has NO auto text wrapping, you must manually break lines:
-  <text x="48" y="140" style="font-family: Arial, sans-serif; font-size: 24px; font-weight: 700; fill: #000;">
-    <tspan x="48" dy="0">First line of text</tspan>
-    <tspan x="48" dy="28">Second line of text</tspan>
-    <tspan x="48" dy="28">Third line if needed</tspan>
-  </text>
+### Option 2: Native SVG text with tspan (for short/single-line text)
+Use for headings, labels, or when you need precise positioning:
+<text x="48" y="140" style="font-family: Arial, sans-serif; font-size: 24px; font-weight: 700; fill: #000;">
+  {{TITLE:Product Name}}
+</text>
 
-### TEXT WRAPPING STRATEGY:
-Since SVG cannot auto-wrap text, you must:
-1. Estimate ~10-12 characters per 100px width at 10px font size
-2. Break placeholder text at logical points using multiple <tspan> elements
-3. Use dy="1.2em" or a fixed pixel value for line spacing
-4. For long descriptions, split into 3-5 tspan lines
+Or for manually broken lines:
+<text x="48" y="140" style="font-family: Arial, sans-serif; font-size: 14px; fill: #000;">
+  <tspan x="48" dy="0">First line</tspan>
+  <tspan x="48" dy="18">Second line</tspan>
+</text>
+
+NOTE: Our system automatically converts foreignObject to native SVG text when exporting for Figma.
 
 ## PLACEHOLDER SYNTAX
 - Text fields: {{FIELD_NAME}} or {{FIELD_NAME:Default Text}}
@@ -247,7 +249,7 @@ Since SVG cannot auto-wrap text, you must:
 
 ## SVG BASICS
 - US Letter = 612x792 points, A4 = 595x842 points
-- Always use inline styles, NOT CSS classes
+- Use inline styles for best compatibility
 - Common fonts: Arial, Helvetica, sans-serif
 
 ## TOOLS
@@ -269,7 +271,6 @@ Since SVG cannot auto-wrap text, you must:
 7. mark_complete
 
 CRITICAL:
-- Do NOT use foreignObject or CSS classes - Figma won't import them
 - Do NOT call mark_complete until you've done at least 3 iterations
 - Compare carefully with the original on each iteration`;
 

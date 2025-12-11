@@ -2,8 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import fs from "fs/promises";
 import { getTemplateSvgPath, getTemplateDir } from "@/lib/paths";
 import { pathExists } from "@/lib/fs-utils";
+import { exportFigmaCompatibleSvg } from "@/lib/svg-template-renderer";
 
 // GET - Get template SVG code
+// Query params:
+//   ?format=figma - Convert foreignObject to native SVG text for Figma compatibility
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -16,7 +19,14 @@ export async function GET(
       return new NextResponse("Template SVG not found", { status: 404 });
     }
 
-    const code = await fs.readFile(codePath, "utf-8");
+    let code = await fs.readFile(codePath, "utf-8");
+
+    // Check if Figma-compatible format is requested
+    const format = request.nextUrl.searchParams.get("format");
+    if (format === "figma") {
+      code = exportFigmaCompatibleSvg(code);
+    }
+
     return new NextResponse(code, {
       headers: { "Content-Type": "image/svg+xml" },
     });

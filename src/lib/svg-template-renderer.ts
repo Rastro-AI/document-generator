@@ -623,3 +623,187 @@ export async function generateThumbnail(svgContent: string, maxWidth: number = 8
   const thumbnailWidth = maxWidth * 2;
   return await svgToPng(svgContent, thumbnailWidth);
 }
+
+/**
+ * Convert foreignObject elements to native SVG text elements
+ * This makes the SVG compatible with Figma and other tools that don't support foreignObject
+ *
+ * Parses the HTML content inside foreignObject and converts it to <text> with <tspan> elements
+ */
+export function convertForeignObjectToText(svgContent: string): string {
+  // Match foreignObject elements with their content
+  const foreignObjectRegex = /<foreignObject([^>]*)>([\s\S]*?)<\/foreignObject>/gi;
+
+  return svgContent.replace(foreignObjectRegex, (match, attrs, innerContent) => {
+    // Extract position and dimensions from foreignObject attributes
+    const xMatch = attrs.match(/x=["']([^"']+)["']/);
+    const yMatch = attrs.match(/y=["']([^"']+)["']/);
+    const widthMatch = attrs.match(/width=["']([^"']+)["']/);
+
+    const x = xMatch ? parseFloat(xMatch[1]) : 0;
+    const y = yMatch ? parseFloat(yMatch[1]) : 0;
+    const width = widthMatch ? parseFloat(widthMatch[1]) : 200;
+
+    // Extract style from the inner div
+    const divStyleMatch = innerContent.match(/style=["']([^"']+)["']/);
+    const divStyle = divStyleMatch ? divStyleMatch[1] : "";
+
+    // Parse style properties
+    const fontFamilyMatch = divStyle.match(/font-family:\s*([^;]+)/i);
+    const fontSizeMatch = divStyle.match(/font-size:\s*(\d+)px/i);
+    const fontWeightMatch = divStyle.match(/font-weight:\s*(\d+|bold|normal)/i);
+    const colorMatch = divStyle.match(/color:\s*([^;]+)/i);
+    const lineHeightMatch = divStyle.match(/line-height:\s*([^;]+)/i);
+
+    const fontFamily = fontFamilyMatch ? fontFamilyMatch[1].trim() : "Arial, sans-serif";
+    const fontSize = fontSizeMatch ? parseInt(fontSizeMatch[1]) : 14;
+    const fontWeight = fontWeightMatch ? fontWeightMatch[1] : "normal";
+    const fill = colorMatch ? colorMatch[1].trim() : "#000";
+    const lineHeight = lineHeightMatch ? parseFloat(lineHeightMatch[1]) : 1.4;
+
+    // Extract text content (strip HTML tags but preserve the text)
+    let textContent = innerContent
+      .replace(/<[^>]*>/g, "") // Remove HTML tags
+      .replace(/&nbsp;/g, " ")
+      .replace(/&amp;/g, "&")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"')
+      .trim();
+
+    // Calculate approximate characters per line based on font size and width
+    // Rough estimate: average character width is about 0.5-0.6 of font size for most fonts
+    const avgCharWidth = fontSize * 0.55;
+    const charsPerLine = Math.floor(width / avgCharWidth);
+
+    // Word-wrap the text into lines
+    const lines = wrapText(textContent, charsPerLine);
+
+    // Calculate line spacing in pixels
+    const lineSpacing = fontSize * lineHeight;
+
+    // Build the text element with tspan children
+    // First tspan uses dy="0" (or the font size to account for baseline), subsequent use line spacing
+    const tspans = lines.map((line, index) => {
+      const dy = index === 0 ? fontSize : lineSpacing;
+      return `<tspan x="${x}" dy="${dy}">${escapeXml(line)}</tspan>`;
+    }).join("\n    ");
+
+    const style = `font-family: ${fontFamily}; font-size: ${fontSize}px; font-weight: ${fontWeight}; fill: ${fill};`;
+
+    return `<text x="${x}" y="${y}" style="${style}">
+    ${tspans}
+  </text>`;
+  });
+}
+
+/**
+ * Word-wrap text to fit within a character limit per line
+ * Tries to break at word boundaries
+ */
+function wrapText(text: string, charsPerLine: number): string[] {
+  if (charsPerLine <= 0) return [text];
+
+  const words = text.split(/\s+/);
+  const lines: string[] = [];
+  let currentLine = "";
+
+  for (const word of words) {
+    if (currentLine.length === 0) {
+      currentLine = word;
+    } else if (currentLine.length + 1 + word.length <= charsPerLine) {
+      currentLine += " " + word;
+    } else {
+      lines.push(currentLine);
+      currentLine = word;
+    }
+  }
+
+  if (currentLine.length > 0) {
+    lines.push(currentLine);
+  }
+
+  return lines.length > 0 ? lines : [""];
+}
+
+/**
+ * Convert CSS class-based styles to inline styles for Figma compatibility
+ * Extracts styles from <defs><style> and applies them inline
+ */
+export function convertCssClassesToInline(svgContent: string): string {
+  // Extract style definitions from <defs><style>
+  const styleBlockMatch = svgContent.match(/<style[^>]*>([\s\S]*?)<\/style>/i);
+  if (!styleBlockMatch) return svgContent;
+
+  const styleContent = styleBlockMatch[1];
+
+  // Parse CSS rules into a map
+  const styleMap: Record<string, string> = {};
+  const ruleRegex = /\.([a-zA-Z0-9_-]+)\s*\{([^}]+)\}/g;
+  let ruleMatch;
+
+  while ((ruleMatch = ruleRegex.exec(styleContent)) !== null) {
+    const className = ruleMatch[1];
+    const properties = ruleMatch[2]
+      .trim()
+      .replace(/\n/g, " ")
+      .replace(/\s+/g, " ");
+    styleMap[className] = properties;
+  }
+
+  // Apply inline styles to elements with class attributes
+  let result = svgContent;
+
+  // Find all elements with class attributes
+  const classAttrRegex = /(<\w+[^>]*)\sclass=["']([^"']+)["']([^>]*>)/g;
+
+  result = result.replace(classAttrRegex, (match, before, classes, after) => {
+    const classNames = classes.split(/\s+/);
+    const combinedStyles: string[] = [];
+
+    for (const className of classNames) {
+      if (styleMap[className]) {
+        combinedStyles.push(styleMap[className]);
+      }
+    }
+
+    if (combinedStyles.length === 0) {
+      return match; // No matching styles found, keep original
+    }
+
+    const inlineStyle = combinedStyles.join(" ").trim();
+
+    // Check if element already has a style attribute
+    const existingStyleMatch = (before + after).match(/style=["']([^"']+)["']/);
+    if (existingStyleMatch) {
+      // Merge with existing style
+      const mergedStyle = existingStyleMatch[1] + " " + inlineStyle;
+      const withoutOldStyle = (before + after).replace(/\s*style=["'][^"']+["']/, "");
+      return `${withoutOldStyle.slice(0, -1)} style="${mergedStyle}">`;
+    }
+
+    // Add new style attribute (remove class attribute)
+    return `${before} style="${inlineStyle}"${after}`;
+  });
+
+  // Optionally remove the style block from defs (since styles are now inline)
+  // Keep it for now in case some elements weren't converted
+
+  return result;
+}
+
+/**
+ * Export SVG in Figma-compatible format
+ * Converts foreignObject to native text and CSS classes to inline styles
+ */
+export function exportFigmaCompatibleSvg(svgContent: string): string {
+  let result = svgContent;
+
+  // First convert CSS classes to inline styles
+  result = convertCssClassesToInline(result);
+
+  // Then convert foreignObject elements to native text
+  result = convertForeignObjectToText(result);
+
+  return result;
+}
