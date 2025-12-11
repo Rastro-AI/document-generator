@@ -12,6 +12,7 @@ import { runTemplateAgent, AgentTrace } from "@/lib/agents/template-agent";
 import { createTimingLogger } from "@/lib/timing-logger";
 
 export const runtime = "nodejs";
+export const maxDuration = 300; // 5 minutes for long-running agent tasks
 
 export async function POST(
   request: NextRequest,

@@ -10,6 +10,8 @@ import {
 } from "@/lib/fs-utils";
 import { runTemplateAgent } from "@/lib/agents/template-agent";
 
+export const maxDuration = 300; // 5 minutes for long-running agent tasks
+
 // Lazy-load OpenAI client
 let openaiClient: OpenAI | null = null;
 

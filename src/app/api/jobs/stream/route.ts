@@ -22,6 +22,7 @@ import { renderSVGTemplate, prepareAssets, svgToPdf } from "@/lib/svg-template-r
 import { getAssetFile, getAssetBankFile as getAssetBankFileBuffer } from "@/lib/fs-utils";
 
 export const runtime = "nodejs";
+export const maxDuration = 300; // 5 minutes for long-running agent tasks
 
 function isImageFile(filename: string): boolean {
   const imageExtensions = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"];

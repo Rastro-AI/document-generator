@@ -12,6 +12,8 @@ import {
 } from "@/lib/fs-utils";
 import { renderSVGTemplate, prepareAssets, svgToPdf } from "@/lib/svg-template-renderer";
 
+export const maxDuration = 120; // 2 minutes for rendering
+
 export async function POST(
   _request: NextRequest,
   { params }: { params: Promise<{ jobId: string }> }
