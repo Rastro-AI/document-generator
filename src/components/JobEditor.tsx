@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useJob, useUpdateJobFields, useUpdateJobAssets, useUploadJobAsset, useRenderJob, streamCreateJob } from "@/hooks/useJobs";
 import { useTemplate } from "@/hooks/useTemplates";
 import { FieldsEditor } from "./FieldsEditor";
@@ -20,6 +21,7 @@ interface JobEditorProps {
 }
 
 export function JobEditor({ jobId, templateId, onBack, initialPrompt, initialFiles, initialAssetIds, initialReasoningMode }: JobEditorProps) {
+  const queryClient = useQueryClient();
   const { data: job, isLoading: jobLoading, error: jobError, refetch } = useJob(jobId);
   const { data: template, isLoading: templateLoading } = useTemplate(
     job?.templateId || templateId || null
@@ -103,11 +105,17 @@ export function JobEditor({ jobId, templateId, onBack, initialPrompt, initialFil
       // onResult
       (result) => {
         setIsCreating(false);
+        console.log("[JobEditor] Creation complete, job:", result.job?.id, "initialMessage:", result.job?.initialMessage);
         // Use the returned job's renderedAt immediately to update preview
         if (result.job?.renderedAt) {
           console.log("[JobEditor] Creation complete, renderedAt:", result.job.renderedAt);
           setPreviewRenderedAt(result.job.renderedAt);
           setPdfKey(k => k + 1);
+        }
+        // Update the query cache directly with the returned job data
+        // This ensures initialMessage is updated immediately without waiting for refetch
+        if (result.job) {
+          queryClient.setQueryData(["job", jobId], result.job);
         }
         refetch();
       },
