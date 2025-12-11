@@ -101,8 +101,14 @@ export function JobEditor({ jobId, templateId, onBack, initialPrompt, initialFil
         setCreationTraces(prev => [...prev, trace as { type: "reasoning" | "tool_call" | "tool_result" | "status"; content: string; toolName?: string }]);
       },
       // onResult
-      () => {
+      (result) => {
         setIsCreating(false);
+        // Use the returned job's renderedAt immediately to update preview
+        if (result.job?.renderedAt) {
+          console.log("[JobEditor] Creation complete, renderedAt:", result.job.renderedAt);
+          setPreviewRenderedAt(result.job.renderedAt);
+          setPdfKey(k => k + 1);
+        }
         refetch();
       },
       // onError
