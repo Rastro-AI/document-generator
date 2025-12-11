@@ -1,7 +1,7 @@
 /**
- * SVG Template Editing Agent
- * Uses OpenAI Agents SDK to edit SVG templates
- * Optimized for speed - diff-based edits, template in context
+ * Unified Template Agent
+ * Single agent that handles everything: file extraction, template editing, visual verification
+ * Uses code_interpreter for Excel/PDF parsing, apply_patch for SVG editing
  */
 
 import {
@@ -13,26 +13,31 @@ import {
   applyDiff,
 } from "@openai/agents-core";
 import type { Editor, ApplyPatchResult } from "@openai/agents-core";
-
-// Local types for apply_patch operations
-type CreateFileOperation = { type: "create_file"; path: string; diff: string };
-type UpdateFileOperation = { type: "update_file"; path: string; diff: string };
-type DeleteFileOperation = { type: "delete_file"; path: string };
-import { OpenAIProvider } from "@openai/agents-openai";
+import { OpenAIProvider, codeInterpreterTool } from "@openai/agents-openai";
+import OpenAI from "openai";
 import { z } from "zod";
+import path from "path";
+import os from "os";
+import fsSync from "fs";
+import fs from "fs/promises";
 import { getTemplateSvgPath } from "@/lib/paths";
-import { TimingLogger } from "@/lib/timing-logger";
 import {
   getJobSvgContent,
   updateJobSvgContent,
   getTemplateSvgContent,
   updateJobAssets,
+  updateJobFields,
   getJob,
   getAssetFile,
   getAssetBankFile,
+  getUploadedFile,
 } from "@/lib/fs-utils";
 import { renderSVGTemplate, prepareAssets, svgToPng } from "@/lib/svg-template-renderer";
-import fs from "fs/promises";
+
+// Local types for apply_patch operations
+type CreateFileOperation = { type: "create_file"; path: string; diff: string };
+type UpdateFileOperation = { type: "update_file"; path: string; diff: string };
+type DeleteFileOperation = { type: "delete_file"; path: string };
 
 // Initialize the OpenAI provider
 let providerInitialized = false;
@@ -46,53 +51,72 @@ function ensureProvider() {
   }
 }
 
+// Lazy-load the OpenAI client for container operations
+let openaiClient: OpenAI | null = null;
+function getOpenAI(): OpenAI {
+  if (!openaiClient) {
+    openaiClient = new OpenAI({
+      apiKey: process.env.OPENAI_API_KEY,
+    });
+  }
+  return openaiClient;
+}
+
 /**
- * Instructions for the SVG template editing agent
+ * Instructions for the unified template agent
  */
-const TEMPLATE_AGENT_INSTRUCTIONS = `
-You edit SVG templates. Always help the user.
+const AGENT_INSTRUCTIONS = `
+You are a document generation assistant. You help users create spec sheets by:
+1. Extracting data from uploaded files (Excel, PDF, images)
+2. Filling in template fields with extracted data
+3. Assigning images to the correct asset slots
+4. Editing the SVG template if needed
+5. Verifying the output looks correct visually
 
-ENVIRONMENT:
-- SVG templates with {{FIELD_NAME}} placeholders for text, {{ASSET_NAME}} in href for images
-- PDF rendered via Puppeteer (full browser rendering, supports all CSS/HTML)
-- Preview rendered via resvg
-
-TOOLS:
-- update_fields: Change text content. Pass JSON {"FIELD_NAME": "value"}.
+## TOOLS
+- code_interpreter: Use Python to read Excel/PDF files uploaded to /mnt/user/. Use pandas for Excel, PyMuPDF for PDFs.
+- update_fields: Set field values. Pass JSON {"FIELD_NAME": "value"}.
 - update_assets: Assign images to slots. Pass JSON {"SLOT_NAME": "filename.jpg"}.
-- apply_patch: Edit SVG design via V4A unified diff format. Target file is always "template.svg".
-- render_preview: Render and view current state. Use after design changes to verify.
+- apply_patch: Edit SVG template via unified diff. Target file is always "template.svg".
+- render_preview: Render and view the current document. ALWAYS use this to verify your work.
 
-WORKFLOW:
-After filling in fields or making changes, ALWAYS call render_preview to check the result visually.
-Look for and fix common issues:
-- Text overflowing containers or getting cut off
-- Text not wrapping properly (too long for the space)
-- Misaligned elements
-- Missing or broken images
-- Generally ugly or unpolished appearance
+## WORKFLOW
+1. If files are uploaded, use code_interpreter to extract data from documents in /mnt/user/
+2. Use update_fields to fill in all template fields with extracted data
+3. Use update_assets to assign uploaded images to the appropriate slots (PRODUCT_IMAGE, LOGO_IMAGE, etc.)
+4. Call render_preview to see the result
+5. If there are visual issues (text overflow, misalignment, ugly layout), use apply_patch to fix the SVG
+6. Call render_preview again to verify fixes
+7. Only respond to the user when the document looks clean and professional
 
-If you see any issues, use apply_patch to fix them (adjust font sizes, text wrapping, spacing, etc.) and render_preview again to verify.
-Only return to the user when the document looks clean and professional.
+## IMPORTANT
+- ALWAYS call render_preview at least once before responding to verify the output
+- Fix visual issues before returning - don't leave text overflowing or layouts broken
+- Match images to slots by analyzing their content (product photos → PRODUCT_IMAGE, logos → LOGO_IMAGE, etc.)
 `.trim();
 
 /**
- * Get SVG template content for a job (from Supabase Storage)
+ * Virtual file path for the SVG template
+ */
+const SVG_TEMPLATE_PATH = "template.svg";
+
+/**
+ * Track state during agent execution
+ */
+let currentSvgContent = "";
+let sessionTemplateChanged = false;
+let sessionAssetsChanged = false;
+
+/**
+ * Get SVG template content for a job
  */
 async function getSvgTemplateContentForJob(jobId: string, templateId: string): Promise<string> {
-  // First try job-specific SVG from Supabase
   const jobSvg = await getJobSvgContent(jobId);
-  if (jobSvg) {
-    return jobSvg;
-  }
+  if (jobSvg) return jobSvg;
 
-  // Fall back to template SVG from Supabase or local
   const templateSvg = await getTemplateSvgContent(templateId);
-  if (templateSvg) {
-    return templateSvg;
-  }
+  if (templateSvg) return templateSvg;
 
-  // Last resort: try local file
   const templateSvgPath = getTemplateSvgPath(templateId);
   try {
     return await fs.readFile(templateSvgPath, "utf8");
@@ -102,48 +126,23 @@ async function getSvgTemplateContentForJob(jobId: string, templateId: string): P
 }
 
 /**
- * Track template changes for this session
+ * Create SVG editor for apply_patch tool
  */
-let sessionTemplateChanged = false;
-let sessionAssetsChanged = false;
-let currentSvgContent = "";
-
-/**
- * Virtual file path for the SVG template in apply_patch operations
- */
-const SVG_TEMPLATE_PATH = "template.svg";
-
-/**
- * Create an in-memory SVG editor for the apply_patch tool
- * This implements the Editor interface from @openai/agents-core
- */
-function createSvgEditor(
-  jobId: string,
-  onEvent?: AgentEventCallback
-): Editor {
+function createSvgEditor(jobId: string, onEvent?: AgentEventCallback): Editor {
   return {
     async createFile(operation: CreateFileOperation): Promise<ApplyPatchResult> {
-      // For SVG editing, we treat "create" as setting the initial content
       if (operation.path !== SVG_TEMPLATE_PATH) {
         return { status: "failed", output: `Only ${SVG_TEMPLATE_PATH} can be edited` };
       }
-
       onEvent?.({ type: "status", content: "Creating SVG template..." });
       try {
         const newContent = applyDiff("", operation.diff, "create");
-
-        // Basic validation
         if (!newContent.includes("<svg") || !newContent.includes("</svg>")) {
           return { status: "failed", output: "Invalid SVG: must contain <svg> tags" };
         }
-
         await updateJobSvgContent(jobId, newContent);
         currentSvgContent = newContent;
         sessionTemplateChanged = true;
-
-        console.log(`[apply_patch:create] Job ${jobId} - Created SVG (${newContent.length} chars)`);
-        onEvent?.({ type: "status", content: "SVG template created" });
-
         return { status: "completed", output: `Created ${SVG_TEMPLATE_PATH}` };
       } catch (error) {
         return { status: "failed", output: String(error) };
@@ -154,18 +153,12 @@ function createSvgEditor(
       if (operation.path !== SVG_TEMPLATE_PATH) {
         return { status: "failed", output: `Only ${SVG_TEMPLATE_PATH} can be edited` };
       }
-
       onEvent?.({ type: "status", content: "Updating SVG template..." });
       try {
         const newContent = applyDiff(currentSvgContent, operation.diff);
-
         await updateJobSvgContent(jobId, newContent);
         currentSvgContent = newContent;
         sessionTemplateChanged = true;
-
-        console.log(`[apply_patch:update] Job ${jobId} - Updated SVG (${newContent.length} chars)`);
-        onEvent?.({ type: "status", content: "SVG template updated" });
-
         return { status: "completed", output: `Updated ${SVG_TEMPLATE_PATH}` };
       } catch (error) {
         return { status: "failed", output: String(error) };
@@ -173,7 +166,6 @@ function createSvgEditor(
     },
 
     async deleteFile(operation: DeleteFileOperation): Promise<ApplyPatchResult> {
-      // We don't support deleting the SVG template
       return { status: "failed", output: `Cannot delete ${operation.path}` };
     },
   };
@@ -183,6 +175,7 @@ function createSvgEditor(
  * Create update_fields tool
  */
 function createUpdateFieldsTool(
+  jobId: string,
   currentFields: Record<string, string | number | null>,
   templateFields: Array<{ name: string; description: string }>,
   onEvent?: AgentEventCallback
@@ -191,7 +184,7 @@ function createUpdateFieldsTool(
 
   return tool({
     name: "update_fields",
-    description: `Update field values. Fields: ${fieldList}`,
+    description: `Update field values. Available fields: ${fieldList}`,
     parameters: z.object({
       updates_json: z.string().describe('JSON object: {"FIELD": "value"}'),
     }),
@@ -199,22 +192,25 @@ function createUpdateFieldsTool(
       onEvent?.({ type: "status", content: "Updating field values..." });
       try {
         const updates = JSON.parse(updates_json);
-        const validUpdates: Record<string, string> = {};
+        const validUpdates: Record<string, string | number | null> = {};
         for (const [key, value] of Object.entries(updates)) {
           if (key in currentFields) {
-            validUpdates[key] = String(value);
+            validUpdates[key] = value as string | number | null;
+            currentFields[key] = value as string | number | null;
           }
         }
-        return JSON.stringify(validUpdates);
-      } catch {
-        return JSON.stringify({ error: "Invalid JSON" });
+        // Save to database
+        await updateJobFields(jobId, validUpdates);
+        return JSON.stringify({ success: true, updated: Object.keys(validUpdates) });
+      } catch (error) {
+        return JSON.stringify({ error: String(error) });
       }
     },
   });
 }
 
 /**
- * Create update_assets tool - assign images to asset slots
+ * Create update_assets tool
  */
 function createUpdateAssetsTool(
   jobId: string,
@@ -230,15 +226,14 @@ function createUpdateAssetsTool(
 
   return tool({
     name: "update_assets",
-    description: `Assign images to asset slots. Available slots: ${assetSlots}. Available uploaded images: ${availableImages || "none"}. Use the filename of an uploaded image to assign it to a slot.`,
+    description: `Assign images to asset slots. Slots: ${assetSlots}. Available images: ${availableImages || "none"}.`,
     parameters: z.object({
-      updates_json: z.string().describe('JSON object: {"SLOT_NAME": "filename.jpg"} - use null to clear a slot'),
+      updates_json: z.string().describe('JSON object: {"SLOT_NAME": "filename.jpg"}'),
     }),
     execute: async ({ updates_json }) => {
       onEvent?.({ type: "status", content: "Updating assets..." });
       try {
         const updates = JSON.parse(updates_json);
-        const newAssets = { ...currentAssets };
         const results: string[] = [];
 
         for (const [slotName, filename] of Object.entries(updates)) {
@@ -246,15 +241,13 @@ function createUpdateAssetsTool(
             results.push(`Unknown slot: ${slotName}`);
             continue;
           }
-
           if (filename === null) {
-            newAssets[slotName] = null;
+            currentAssets[slotName] = null;
             results.push(`Cleared ${slotName}`);
           } else {
-            // Check if the file exists in uploaded files
             const file = uploadedFiles.find(f => f.filename === filename);
             if (file) {
-              newAssets[slotName] = file.filename;
+              currentAssets[slotName] = file.path;
               results.push(`Set ${slotName} = ${filename}`);
             } else {
               results.push(`File not found: ${filename}`);
@@ -262,11 +255,9 @@ function createUpdateAssetsTool(
           }
         }
 
-        // Save to database
-        await updateJobAssets(jobId, newAssets);
+        await updateJobAssets(jobId, currentAssets);
         sessionAssetsChanged = true;
-
-        return JSON.stringify({ success: true, results, updatedAssets: newAssets });
+        return JSON.stringify({ success: true, results });
       } catch (error) {
         return JSON.stringify({ error: String(error) });
       }
@@ -275,7 +266,7 @@ function createUpdateAssetsTool(
 }
 
 /**
- * Create render_preview tool - renders current template and returns image for visual feedback
+ * Create render_preview tool
  */
 function createRenderPreviewTool(
   jobId: string,
@@ -285,9 +276,9 @@ function createRenderPreviewTool(
 ) {
   return tool({
     name: "render_preview",
-    description: "Render the current template with current field values and assets, and see the result as an image. Use this after making changes to verify they look correct.",
+    description: "Render the document and see it as an image. Use this to verify your changes look correct.",
     parameters: z.object({
-      reason: z.string().describe("Brief reason for checking the preview (e.g., 'verify layout changes', 'check text wrapping')"),
+      reason: z.string().describe("Brief reason for rendering (e.g., 'verify field updates')"),
     }),
     execute: async ({ reason }) => {
       onEvent?.({ type: "status", content: `Rendering preview: ${reason}` });
@@ -295,19 +286,14 @@ function createRenderPreviewTool(
         const fields = getCurrentFields();
         const rawAssets = getCurrentAssets();
 
-        // Prepare assets - convert image paths to data URLs
+        // Prepare assets as data URLs
         const assets: Record<string, string | null> = {};
         for (const [key, value] of Object.entries(rawAssets)) {
           if (value) {
             try {
               const assetFilename = value.includes("/") ? value.split("/").pop()! : value;
-              let imageBuffer: Buffer | null = null;
-
-              // Try job assets first, then asset bank
-              imageBuffer = await getAssetFile(jobId, assetFilename);
-              if (!imageBuffer) {
-                imageBuffer = await getAssetBankFile(assetFilename);
-              }
+              let imageBuffer: Buffer | null = await getAssetFile(jobId, assetFilename);
+              if (!imageBuffer) imageBuffer = await getAssetBankFile(assetFilename);
 
               if (imageBuffer) {
                 const ext = assetFilename.split(".").pop()?.toLowerCase() || "png";
@@ -315,8 +301,7 @@ function createRenderPreviewTool(
                   png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg",
                   gif: "image/gif", webp: "image/webp", svg: "image/svg+xml",
                 };
-                const mimeType = mimeTypes[ext] || "application/octet-stream";
-                assets[key] = `data:${mimeType};base64,${imageBuffer.toString("base64")}`;
+                assets[key] = `data:${mimeTypes[ext] || "application/octet-stream"};base64,${imageBuffer.toString("base64")}`;
               } else {
                 assets[key] = null;
               }
@@ -330,30 +315,20 @@ function createRenderPreviewTool(
 
         const preparedAssets = await prepareAssets(assets);
         const renderedSvg = renderSVGTemplate(currentSvgContent, fields, preparedAssets);
-
-        // Generate PNG preview (smaller size for speed)
         const pngBuffer = await svgToPng(renderedSvg, 800);
-        const base64Image = pngBuffer.toString("base64");
 
-        onEvent?.({ type: "status", content: "Preview rendered" });
-
-        // Return image in OpenAI-compatible format for the model to see
-        // The agents SDK should convert this to proper content blocks
         return [
           {
             type: "image_url",
-            image_url: {
-              url: `data:image/png;base64,${base64Image}`,
-              detail: "high",
-            },
+            image_url: { url: `data:image/png;base64,${pngBuffer.toString("base64")}`, detail: "high" },
           },
           {
             type: "text",
-            text: "Preview rendered. Examine the image above to verify your changes look correct. If something looks wrong (text overflow, misalignment, broken layout), make additional edits and render again.",
+            text: "Preview rendered. Check for issues: text overflow, misalignment, broken images. Fix with apply_patch if needed.",
           },
         ];
       } catch (error) {
-        return JSON.stringify({ error: `Failed to render preview: ${String(error)}` });
+        return JSON.stringify({ error: `Render failed: ${String(error)}` });
       }
     },
   });
@@ -367,35 +342,6 @@ export interface AgentTrace {
 
 export type AgentEventCallback = (event: AgentTrace) => void;
 
-/**
- * Extract reasoning text from a reasoning item
- */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function extractReasoningText(item: any): string | null {
-  if (item.content && Array.isArray(item.content)) {
-    const texts = item.content
-      .filter((c: { type: string; text?: string }) => c.type === "input_text" || c.type === "reasoning_text" || c.type === "text")
-      .map((c: { text: string }) => c.text)
-      .filter(Boolean);
-    if (texts.length > 0) return texts.join("\n");
-  }
-  if (item.rawContent && Array.isArray(item.rawContent)) {
-    const texts = item.rawContent
-      .filter((c: { type: string; text?: string }) => c.type === "reasoning_text" || c.type === "text")
-      .map((c: { text: string }) => c.text)
-      .filter(Boolean);
-    if (texts.length > 0) return texts.join("\n");
-  }
-  if (item.summary && Array.isArray(item.summary)) {
-    const texts = item.summary
-      .map((s: { text?: string }) => s.text)
-      .filter(Boolean);
-    if (texts.length > 0) return texts.join("\n");
-  }
-  if (typeof item.text === "string") return item.text;
-  return null;
-}
-
 export interface TemplateAgentResult {
   success: boolean;
   mode: "fields" | "template" | "both" | "none";
@@ -405,18 +351,10 @@ export interface TemplateAgentResult {
   traces?: AgentTrace[];
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   history?: any[];
-  timingLogPath?: string;
-}
-
-export interface CodeTweakResult {
-  success: boolean;
-  code?: string;
-  message: string;
-  traces?: AgentTrace[];
 }
 
 /**
- * Run the SVG template editing agent
+ * Run the unified template agent
  */
 export async function runTemplateAgent(
   jobId: string,
@@ -429,278 +367,216 @@ export async function runTemplateAgent(
   onEvent?: AgentEventCallback,
   reasoning: "none" | "low" = "none"
 ): Promise<TemplateAgentResult> {
-  const timing = new TimingLogger(`agent_${jobId}`);
-
-  timing.start("provider_init");
   ensureProvider();
-  timing.end();
+  const openai = getOpenAI();
 
-  onEvent?.({ type: "status", content: "Thinking..." });
+  onEvent?.({ type: "status", content: "Starting..." });
 
-  // Reset session tracking
+  // Reset session state
   sessionTemplateChanged = false;
   sessionAssetsChanged = false;
-  let fieldUpdates: Record<string, string> | undefined;
 
-  // Get job data for assets and uploaded files
+  // Get job data
   const job = await getJob(jobId);
-  let liveAssets = { ...(job?.assets || {}) };
+  const liveAssets = { ...(job?.assets || {}) };
   const uploadedFiles = job?.uploadedFiles || [];
+  const liveFields = { ...currentFields };
 
-  // Track live field values (updated by tools)
-  let liveFields = { ...currentFields };
-
-  timing.start("load_template");
+  // Load SVG template
   currentSvgContent = await getSvgTemplateContentForJob(jobId, templateId);
-  timing.end();
 
-  // Render initial screenshot for visual context
-  timing.start("render_initial_screenshot");
-  let initialScreenshotBase64: string | null = null;
-  try {
-    // Prepare assets for rendering
-    const initialAssets: Record<string, string | null> = {};
-    for (const [key, value] of Object.entries(liveAssets)) {
-      if (value) {
-        try {
-          const assetFilename = value.includes("/") ? value.split("/").pop()! : value;
-          let imageBuffer: Buffer | null = null;
-          imageBuffer = await getAssetFile(jobId, assetFilename);
-          if (!imageBuffer) {
-            imageBuffer = await getAssetBankFile(assetFilename);
-          }
-          if (imageBuffer) {
-            const ext = assetFilename.split(".").pop()?.toLowerCase() || "png";
-            const mimeTypes: Record<string, string> = {
-              png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg",
-              gif: "image/gif", webp: "image/webp", svg: "image/svg+xml",
-            };
-            const mimeType = mimeTypes[ext] || "application/octet-stream";
-            initialAssets[key] = `data:${mimeType};base64,${imageBuffer.toString("base64")}`;
-          } else {
-            initialAssets[key] = null;
-          }
-        } catch {
-          initialAssets[key] = null;
+  // Create container for code_interpreter if there are document files
+  let containerId: string | null = null;
+  const documentFiles = uploadedFiles.filter(f => f.type === "document");
+  const imageFiles = uploadedFiles.filter(f => f.type === "image");
+
+  if (documentFiles.length > 0) {
+    onEvent?.({ type: "status", content: "Setting up file analysis..." });
+    const container = await openai.containers.create({ name: `template-agent-${Date.now()}` });
+    containerId = container.id;
+
+    // Upload document files to container
+    for (const file of documentFiles) {
+      try {
+        const buffer = await getUploadedFile(jobId, file.filename);
+        if (buffer) {
+          const tmpPath = path.join(os.tmpdir(), file.filename);
+          fsSync.writeFileSync(tmpPath, buffer);
+          const stream = fsSync.createReadStream(tmpPath);
+          await openai.containers.files.create(containerId, { file: stream });
+          fsSync.unlinkSync(tmpPath);
+          console.log(`[Agent] Uploaded ${file.filename} to container`);
         }
-      } else {
-        initialAssets[key] = null;
+      } catch (err) {
+        console.error(`[Agent] Failed to upload ${file.filename}:`, err);
       }
     }
-    const preparedInitialAssets = await prepareAssets(initialAssets);
-    const renderedSvg = renderSVGTemplate(currentSvgContent, currentFields, preparedInitialAssets);
-    const pngBuffer = await svgToPng(renderedSvg, 1200);
-    initialScreenshotBase64 = pngBuffer.toString("base64");
-  } catch (err) {
-    console.error("Failed to render initial screenshot:", err);
   }
-  timing.end();
 
-  timing.start("create_tools");
-  const updateFieldsTool = createUpdateFieldsTool(currentFields, templateFields, onEvent);
-  const updateAssetsTool = createUpdateAssetsTool(jobId, liveAssets, uploadedFiles, onEvent);
-  const svgEditor = createSvgEditor(jobId, onEvent);
-  const renderPreviewTool = createRenderPreviewTool(
-    jobId,
-    () => liveFields,
-    () => liveAssets,
-    onEvent
-  );
-  timing.end();
+  // Create tools - use explicit any[] type to allow mixing tool types
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const tools: any[] = [
+    createUpdateFieldsTool(jobId, liveFields, templateFields, onEvent),
+    createUpdateAssetsTool(jobId, liveAssets, uploadedFiles, onEvent),
+    applyPatchTool({ editor: createSvgEditor(jobId, onEvent) }),
+    createRenderPreviewTool(jobId, () => liveFields, () => liveAssets, onEvent),
+  ];
 
-  timing.start("create_agent");
+  // Add code_interpreter if we have a container
+  if (containerId) {
+    tools.unshift(codeInterpreterTool({ container: containerId }));
+  }
+
+  // Create agent
   const agent = new Agent({
-    name: "SVGTemplateEditor",
-    instructions: TEMPLATE_AGENT_INSTRUCTIONS,
+    name: "TemplateAgent",
+    instructions: AGENT_INSTRUCTIONS,
     model: "gpt-5.1",
-    modelSettings: {
-      reasoning: { effort: reasoning },
-    },
-    tools: [updateFieldsTool, updateAssetsTool, applyPatchTool({ editor: svgEditor }), renderPreviewTool],
+    modelSettings: { reasoning: { effort: reasoning } },
+    tools,
   });
 
-  // Create a Runner with lifecycle hooks for real-time tool call updates
+  // Create runner with hooks
   const runner = new Runner();
   const traces: AgentTrace[] = [];
 
-  // Hook: Tool execution started - emit event immediately
-  runner.on("agent_tool_start", (_context, _agent, toolDef, _details) => {
+  runner.on("agent_tool_start", (_ctx, _agent, toolDef) => {
     const toolName = toolDef.name || "unknown";
-    console.log(`[TOOL START] ${toolName}`);
     traces.push({ type: "tool_call", content: `Calling ${toolName}...`, toolName });
     onEvent?.({ type: "tool_call", content: `Calling ${toolName}...`, toolName });
   });
 
-  // Hook: Tool execution ended - emit result
-  runner.on("agent_tool_end", (_context, _agent, toolDef, result, _details) => {
+  runner.on("agent_tool_end", (_ctx, _agent, toolDef, result) => {
     const toolName = toolDef.name || "unknown";
-    // Result is always a string in the SDK
-    const output = result.length > 200 ? result.substring(0, 200) + "..." : result;
-    console.log(`[TOOL END] ${toolName}: ${output.substring(0, 100)}`);
+    const output = typeof result === "string" && result.length > 200 ? result.substring(0, 200) + "..." : String(result);
     traces.push({ type: "tool_result", content: output, toolName });
     onEvent?.({ type: "tool_result", content: output, toolName });
   });
-  timing.end();
 
   try {
-    timing.start("build_input");
-    const imageFiles = uploadedFiles.filter(f => f.type === "image").map(f => f.filename);
-    const contextText = `Current fields: ${JSON.stringify(currentFields)}
+    // Build context
+    const fileList = documentFiles.length > 0
+      ? `\nFiles in /mnt/user/: ${documentFiles.map(f => f.filename).join(", ")}`
+      : "";
+    const imageList = imageFiles.length > 0
+      ? `\nAvailable images: ${imageFiles.map(f => f.filename).join(", ")}`
+      : "";
 
-Current assets: ${JSON.stringify(liveAssets)}
+    const contextText = `Current fields: ${JSON.stringify(liveFields)}
+Current assets: ${JSON.stringify(liveAssets)}${fileList}${imageList}
 
-Uploaded images available: ${imageFiles.length > 0 ? imageFiles.join(", ") : "none"}
-
-CURRENT SVG TEMPLATE:
+SVG TEMPLATE:
 \`\`\`svg
 ${currentSvgContent}
 \`\`\`
 
 Request: ${userMessage}`;
 
-    // Build message content with screenshot if available
-    // Only include screenshot on first message (no history) to avoid format conflicts
+    // Build input with optional initial screenshot
+    let initialScreenshotBase64: string | null = null;
+    if (previousHistory.length === 0) {
+      try {
+        const initialAssets: Record<string, string | null> = {};
+        for (const [key, value] of Object.entries(liveAssets)) {
+          if (value) {
+            const assetFilename = value.includes("/") ? value.split("/").pop()! : value;
+            let buffer = await getAssetFile(jobId, assetFilename);
+            if (!buffer) buffer = await getAssetBankFile(assetFilename);
+            if (buffer) {
+              const ext = assetFilename.split(".").pop()?.toLowerCase() || "png";
+              const mimeTypes: Record<string, string> = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp" };
+              initialAssets[key] = `data:${mimeTypes[ext] || "application/octet-stream"};base64,${buffer.toString("base64")}`;
+            }
+          }
+        }
+        const preparedAssets = await prepareAssets(initialAssets);
+        const renderedSvg = renderSVGTemplate(currentSvgContent, liveFields, preparedAssets);
+        const pngBuffer = await svgToPng(renderedSvg, 1200);
+        initialScreenshotBase64 = pngBuffer.toString("base64");
+      } catch (err) {
+        console.error("Failed to render initial screenshot:", err);
+      }
+    }
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let inputMessage: any;
     if (initialScreenshotBase64 && previousHistory.length === 0) {
-      // Include screenshot so agent sees current state (first message only)
-      // OpenAI Agents SDK format: use "image" not "image_url"
       inputMessage = {
         role: "user",
         content: [
-          {
-            type: "input_text",
-            text: "Here is the current rendered document:",
-          },
-          {
-            type: "input_image",
-            image: `data:image/png;base64,${initialScreenshotBase64}`,
-            detail: "high",
-          },
-          {
-            type: "input_text",
-            text: contextText,
-          },
+          { type: "input_text", text: "Current rendered document:" },
+          { type: "input_image", image: `data:image/png;base64,${initialScreenshotBase64}`, detail: "high" },
+          { type: "input_text", text: contextText },
         ],
       };
     } else {
-      inputMessage = {
-        role: "user",
-        content: contextText,
-      };
+      inputMessage = { role: "user", content: contextText };
     }
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const input: any = previousHistory.length > 0
-      ? [
-          ...previousHistory,
-          inputMessage,
-        ]
+      ? [...previousHistory, inputMessage]
       : [inputMessage];
-    timing.end();
 
-    timing.start("agent_run");
-    const result = await runner.run(agent, input, { maxTurns: 5 });
-    timing.end();
+    // Run agent
+    onEvent?.({ type: "status", content: "Thinking..." });
+    const result = await runner.run(agent, input, { maxTurns: 10 });
 
-    timing.start("extract_traces");
-    // Tool calls and results are now handled via Runner hooks for real-time updates
-    // We just need to extract reasoning and field updates here
-    for (const item of result.newItems || []) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const anyItem = item as any;
-
-      if (anyItem.type === "reasoning_item" && anyItem.rawItem) {
-        const reasoningText = extractReasoningText(anyItem.rawItem);
-        if (reasoningText) {
-          traces.push({ type: "reasoning", content: reasoningText });
-        }
-      }
-
-      // Extract field updates from tool results
-      if (anyItem.type === "tool_call_output_item") {
-        const rawItem = anyItem.rawItem;
-        const toolName = rawItem?.name || "unknown";
-        if (toolName === "update_fields") {
-          try {
-            const parsed = JSON.parse(anyItem.output);
-            if (!parsed.error && Object.keys(parsed).length > 0) {
-              fieldUpdates = parsed;
-            }
-          } catch {
-            // Ignore
-          }
-        }
+    // Cleanup container
+    if (containerId) {
+      try {
+        await openai.containers.delete(containerId);
+        console.log("[Agent] Container deleted");
+      } catch {
+        // Ignore cleanup errors
       }
     }
-    timing.end();
 
-    // Determine mode
-    // Assets changes also trigger re-render (treat like template change)
+    // Determine what changed
     const needsRender = sessionTemplateChanged || sessionAssetsChanged;
     let mode: "fields" | "template" | "both" | "none" = "none";
-    if (fieldUpdates && Object.keys(fieldUpdates).length > 0) {
-      mode = "fields";
-    }
-    if (needsRender) {
-      mode = mode === "fields" ? "both" : "template";
-    }
-
-    if (traces.length > 0) {
-      // Log traces without full base64 content
-      const sanitizedTraces = traces.map(t => ({
-        ...t,
-        content: t.content.length > 200 ? t.content.substring(0, 200) + "..." : t.content
-      }));
-      console.log("Agent traces:", JSON.stringify(sanitizedTraces, null, 2));
-    }
-
-    const timingLogPath = await timing.save();
+    const fieldsChanged = Object.keys(liveFields).some(k => liveFields[k] !== currentFields[k]);
+    if (fieldsChanged) mode = "fields";
+    if (needsRender) mode = mode === "fields" ? "both" : "template";
 
     return {
       success: true,
       mode,
       message: result.finalOutput || "Done.",
-      fieldUpdates,
-      templateChanged: needsRender, // Include both SVG and asset changes
+      fieldUpdates: fieldsChanged ? liveFields as Record<string, string> : undefined,
+      templateChanged: needsRender,
       traces,
       history: result.history,
-      timingLogPath,
     };
   } catch (error) {
-    console.error("SVG template agent error:", error);
-    const timingLogPath = await timing.save();
+    // Cleanup container on error
+    if (containerId) {
+      try {
+        await openai.containers.delete(containerId);
+      } catch {
+        // Ignore
+      }
+    }
+
+    console.error("Template agent error:", error);
     return {
       success: false,
       mode: "none",
       message: `Failed: ${error}`,
-      timingLogPath,
     };
   }
 }
 
 /**
- * Instructions for SVG code tweaking agent
+ * Instructions for SVG code tweaking agent (used by template editor modal)
  */
 const CODE_TWEAK_INSTRUCTIONS = `
 You are an SVG template editor. Edit SVG templates that use {{PLACEHOLDER}} syntax.
-
-The current SVG template is provided in the user message. Make changes using the apply_patch tool with V4A unified diff format.
-
-WORKFLOW:
-1. Analyze the SVG template provided
-2. Use apply_patch with a unified diff to make the requested changes (target file: template.svg)
-3. Respond with a brief summary of what you changed
-
-SVG TEMPLATE RULES:
-- Placeholders use {{FIELD_NAME}} syntax
-- Images use {{ASSET_NAME}} in href attributes
-- Keep all visual styling (fonts, colors, positions)
+Use apply_patch with V4A unified diff format. Target file: template.svg.
 `.trim();
 
 /**
  * Run an SVG code tweak agent - edits raw SVG without job context
- * Used for tweaking generated templates before saving
  */
 export async function runCodeTweakAgent(
   code: string,
@@ -708,111 +584,68 @@ export async function runCodeTweakAgent(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   previousHistory: any[] = [],
   onEvent?: AgentEventCallback
-): Promise<CodeTweakResult> {
+): Promise<{ success: boolean; code?: string; message: string; traces?: AgentTrace[] }> {
   ensureProvider();
-  onEvent?.({ type: "status", content: "Thinking..." });
 
-  // Track code modifications in memory
   let currentCode = code;
   let codeChanged = false;
 
-  // Create an in-memory editor for the code tweak agent
   const codeTweakEditor: Editor = {
-    async createFile(operation: CreateFileOperation): Promise<ApplyPatchResult> {
-      if (operation.path !== SVG_TEMPLATE_PATH) {
-        return { status: "failed", output: `Only ${SVG_TEMPLATE_PATH} can be edited` };
-      }
-      onEvent?.({ type: "status", content: "Creating SVG..." });
+    async createFile(op: CreateFileOperation): Promise<ApplyPatchResult> {
+      if (op.path !== SVG_TEMPLATE_PATH) return { status: "failed", output: `Only ${SVG_TEMPLATE_PATH} can be edited` };
       try {
-        const newContent = applyDiff("", operation.diff, "create");
-        currentCode = newContent;
+        currentCode = applyDiff("", op.diff, "create");
         codeChanged = true;
         return { status: "completed", output: `Created ${SVG_TEMPLATE_PATH}` };
-      } catch (error) {
-        return { status: "failed", output: String(error) };
+      } catch (e) {
+        return { status: "failed", output: String(e) };
       }
     },
-
-    async updateFile(operation: UpdateFileOperation): Promise<ApplyPatchResult> {
-      if (operation.path !== SVG_TEMPLATE_PATH) {
-        return { status: "failed", output: `Only ${SVG_TEMPLATE_PATH} can be edited` };
-      }
-      onEvent?.({ type: "status", content: "Applying changes..." });
+    async updateFile(op: UpdateFileOperation): Promise<ApplyPatchResult> {
+      if (op.path !== SVG_TEMPLATE_PATH) return { status: "failed", output: `Only ${SVG_TEMPLATE_PATH} can be edited` };
       try {
-        const newContent = applyDiff(currentCode, operation.diff);
-        currentCode = newContent;
+        currentCode = applyDiff(currentCode, op.diff);
         codeChanged = true;
-        onEvent?.({ type: "status", content: "SVG updated" });
         return { status: "completed", output: `Updated ${SVG_TEMPLATE_PATH}` };
-      } catch (error) {
-        return { status: "failed", output: String(error) };
+      } catch (e) {
+        return { status: "failed", output: String(e) };
       }
     },
-
-    async deleteFile(operation: DeleteFileOperation): Promise<ApplyPatchResult> {
-      return { status: "failed", output: `Cannot delete ${operation.path}` };
+    async deleteFile(): Promise<ApplyPatchResult> {
+      return { status: "failed", output: "Cannot delete" };
     },
   };
 
-  // Create agent
   const agent = new Agent({
     name: "SVGCodeTweaker",
     instructions: CODE_TWEAK_INSTRUCTIONS,
     model: "gpt-5.1",
-    modelSettings: {
-      reasoning: { effort: "none" },
-    },
+    modelSettings: { reasoning: { effort: "none" } },
     tools: [applyPatchTool({ editor: codeTweakEditor })],
   });
 
-  // Create a Runner with lifecycle hooks for real-time tool call updates
   const runner = new Runner();
   const traces: AgentTrace[] = [];
 
-  // Hook: Tool execution started
-  runner.on("agent_tool_start", (_context, _agent, toolDef, _details) => {
-    const toolName = toolDef.name || "unknown";
-    traces.push({ type: "tool_call", content: `Calling ${toolName}...`, toolName });
-    onEvent?.({ type: "tool_call", content: `Calling ${toolName}...`, toolName });
+  runner.on("agent_tool_start", (_ctx, _agent, toolDef) => {
+    traces.push({ type: "tool_call", content: `Calling ${toolDef.name}...`, toolName: toolDef.name });
+    onEvent?.({ type: "tool_call", content: `Calling ${toolDef.name}...`, toolName: toolDef.name });
   });
 
-  // Hook: Tool execution ended
-  runner.on("agent_tool_end", (_context, _agent, toolDef, result, _details) => {
-    const toolName = toolDef.name || "unknown";
-    const output = typeof result === "string" && result.length > 100
-      ? result.substring(0, 100) + "..."
-      : String(result).substring(0, 100);
-    traces.push({ type: "tool_result", content: output, toolName });
-    onEvent?.({ type: "tool_result", content: output, toolName });
+  runner.on("agent_tool_end", (_ctx, _agent, toolDef, result) => {
+    const output = typeof result === "string" && result.length > 100 ? result.substring(0, 100) + "..." : String(result);
+    traces.push({ type: "tool_result", content: output, toolName: toolDef.name });
+    onEvent?.({ type: "tool_result", content: output, toolName: toolDef.name });
   });
 
   try {
-    const contextMessage = `CURRENT SVG TEMPLATE:
-\`\`\`svg
-${code}
-\`\`\`
-
-Request: ${prompt}`;
-
+    const contextMessage = `SVG TEMPLATE:\n\`\`\`svg\n${code}\n\`\`\`\n\nRequest: ${prompt}`;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const input: any = previousHistory.length > 0
       ? [...previousHistory, { role: "user", content: contextMessage }]
       : contextMessage;
 
     const result = await runner.run(agent, input, { maxTurns: 5 });
-
-    // Extract reasoning from result (tool calls handled via hooks)
-    for (const item of result.newItems || []) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const anyItem = item as any;
-
-      if (anyItem.type === "reasoning_item" && anyItem.rawItem) {
-        const reasoningText = extractReasoningText(anyItem.rawItem);
-        if (reasoningText) {
-          traces.push({ type: "reasoning", content: reasoningText });
-        }
-      }
-    }
 
     return {
       success: true,
@@ -821,10 +654,6 @@ Request: ${prompt}`;
       traces,
     };
   } catch (error) {
-    console.error("SVG code tweak agent error:", error);
-    return {
-      success: false,
-      message: `Failed: ${error}`,
-    };
+    return { success: false, message: `Failed: ${error}` };
   }
 }

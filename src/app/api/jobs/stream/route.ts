@@ -10,10 +10,9 @@ import {
   copySvgTemplateToJob,
   listAssetBankFiles,
   getAssetBankFile,
-  updateJobFields,
 } from "@/lib/fs-utils";
-import { extractFieldsAndAssetsFromFiles } from "@/lib/llm";
 import { Job, UploadedFile } from "@/lib/types";
+import { runTemplateAgent } from "@/lib/agents/template-agent";
 
 export const runtime = "nodejs";
 
@@ -75,7 +74,6 @@ export async function POST(request: NextRequest) {
         assets[slot.name] = null;
       }
 
-      let initialMessage = "I've created a new document. You can edit the field values on the left, or ask me to make changes.";
       const uploadedFiles: UploadedFile[] = [];
 
       // Get all asset bank files from Supabase storage
@@ -97,7 +95,6 @@ export async function POST(request: NextRequest) {
             const buffer = await getAssetBankFile(assetId);
             if (!buffer) continue;
 
-            // Storage path for the job
             const storagePath = `${jobId}/assets/${assetId}`;
 
             if (isImageFile(assetId)) {
@@ -123,18 +120,6 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      // Prepare file lists for extraction
-      const documentFiles: { path: string; filename: string }[] = [];
-      const imageFiles: { path: string; filename: string }[] = [];
-
-      for (const uf of uploadedFiles) {
-        if (uf.type === "image") {
-          imageFiles.push({ path: uf.path, filename: uf.filename });
-        } else {
-          documentFiles.push({ path: uf.path, filename: uf.filename });
-        }
-      }
-
       // Save uploaded files
       if (files && files.length > 0) {
         sendEvent("trace", { type: "status", content: `Saving ${files.length} uploaded file${files.length > 1 ? "s" : ""}...` });
@@ -149,7 +134,6 @@ export async function POST(request: NextRequest) {
 
           if (isImageFile(filename)) {
             await saveAssetFile(jobId, filename, buffer);
-            imageFiles.push({ path: storagePath, filename });
             uploadedFiles.push({
               filename,
               path: storagePath,
@@ -158,7 +142,6 @@ export async function POST(request: NextRequest) {
             });
           } else {
             await saveUploadedFile(jobId, filename, buffer);
-            documentFiles.push({ path: storagePath, filename });
             uploadedFiles.push({
               filename,
               path: storagePath,
@@ -169,35 +152,7 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      // Step 1: Extract fields from documents if any (uses code_interpreter)
-      const hasDocuments = documentFiles.length > 0;
-      if (hasDocuments) {
-        sendEvent("trace", { type: "status", content: "Extracting data from documents..." });
-        const extractionResult = await extractFieldsAndAssetsFromFiles(
-          template,
-          documentFiles,
-          imageFiles,
-          prompt || undefined,
-          (event) => sendEvent("trace", event),
-          reasoning
-        );
-
-        // Merge extracted fields
-        for (const [key, value] of Object.entries(extractionResult.fields)) {
-          if (value !== null) {
-            fields[key] = value;
-          }
-        }
-
-        // Merge assigned assets
-        for (const [key, value] of Object.entries(extractionResult.assets)) {
-          if (value !== null) {
-            assets[key] = value;
-          }
-        }
-      }
-
-      // Step 2: Create the job first so the agent can access it
+      // Create the job first so the agent can access it
       sendEvent("trace", { type: "status", content: "Setting up document..." });
       const historyId = uuidv4();
       const now = new Date().toISOString();
@@ -225,16 +180,16 @@ export async function POST(request: NextRequest) {
       await copyTemplateToJob(templateId, jobId);
       await copySvgTemplateToJob(templateId, jobId);
 
-      // Step 3: Run the template agent to verify/fix the output visually
-      const { runTemplateAgent } = await import("@/lib/agents/template-agent");
-
+      // Build the agent prompt
+      const hasFiles = uploadedFiles.length > 0;
       const agentPrompt = prompt
         ? prompt
-        : hasDocuments
-          ? "I've extracted data from the uploaded documents. Please review the rendered output, assign appropriate images to asset slots, and fix any visual issues (text overflow, alignment, etc.)."
-          : "Please fill in the template fields and assign appropriate images to asset slots. Review the rendered output and fix any visual issues.";
+        : hasFiles
+          ? "Extract data from the uploaded files, fill in the template fields, assign images to asset slots, and verify the output looks good."
+          : "Fill in the template with appropriate placeholder values and verify the output looks good.";
 
-      sendEvent("trace", { type: "status", content: "Reviewing and optimizing layout..." });
+      // Run the unified template agent
+      sendEvent("trace", { type: "status", content: "Processing..." });
 
       const agentResult = await runTemplateAgent(
         jobId,
@@ -247,23 +202,13 @@ export async function POST(request: NextRequest) {
         reasoning
       );
 
-      // Update fields from agent if it made changes
-      if (agentResult.fieldUpdates && Object.keys(agentResult.fieldUpdates).length > 0) {
-        for (const [key, value] of Object.entries(agentResult.fieldUpdates)) {
-          if (key in fields) {
-            fields[key] = value;
-          }
-        }
-      }
-
-      // Set the initial message from agent
-      initialMessage = agentResult.message || "Document is ready for review.";
-
-      // Update job with final state (fields may have been updated by agent)
-      await updateJobFields(jobId, { ...fields, initialMessage } as Record<string, string | number | null>);
-
       // Re-fetch the updated job
       const finalJob = await getJob(jobId);
+
+      // Update initialMessage
+      if (finalJob) {
+        finalJob.initialMessage = agentResult.message || "Document is ready for review.";
+      }
 
       sendEvent("result", { jobId, job: finalJob });
       sendEvent("done", {});

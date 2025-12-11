@@ -60,21 +60,18 @@ export async function POST(request: NextRequest) {
     const uploadedAssets: Asset[] = [];
 
     for (const file of files) {
-      // Generate unique filename
-      const ext = path.extname(file.name);
-      const baseName = path.basename(file.name, ext);
-      const timestamp = Date.now();
-      const uniqueFilename = `${baseName}-${timestamp}${ext}`;
+      // Use the provided filename (user can customize it in the upload dialog)
+      const filename = file.name;
 
       const buffer = Buffer.from(await file.arrayBuffer());
 
-      await uploadAssetBankFile(uniqueFilename, buffer, file.type);
+      await uploadAssetBankFile(filename, buffer, file.type);
 
       const isImage = file.type.startsWith("image/");
 
       uploadedAssets.push({
-        id: uniqueFilename,
-        filename: uniqueFilename,
+        id: filename,
+        filename: filename,
         type: isImage ? "image" : "document",
         size: buffer.length,
         createdAt: new Date().toISOString(),
