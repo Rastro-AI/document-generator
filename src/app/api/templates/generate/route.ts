@@ -1,7 +1,11 @@
 import { NextRequest } from "next/server";
 import { runTemplateGeneratorAgent, GeneratorTrace } from "@/lib/agents/template-generator";
 import puppeteer from "puppeteer-core";
-import chromium from "@sparticuz/chromium";
+import chromium from "@sparticuz/chromium-min";
+import path from "path";
+
+// Path to bundled chromium brotli files (included in repo for Vercel deployment)
+const CHROMIUM_PACK_PATH = path.join(process.cwd(), "bin", "chromium-pack");
 
 // Logger for SSE route
 const log = {
@@ -33,8 +37,8 @@ async function pdfToImages(pdfBuffer: Buffer): Promise<string[]> {
     const launchStart = Date.now();
 
     if (isServerless) {
-      log.info(`Serverless mode: getting bundled chromium executable path`);
-      const execPath = await chromium.executablePath();
+      log.info(`Serverless mode: using bundled chromium pack at ${CHROMIUM_PACK_PATH}`);
+      const execPath = await chromium.executablePath(CHROMIUM_PACK_PATH);
       log.info(`Chromium executable path: ${execPath}`);
       log.info(`Chromium args: ${JSON.stringify(chromium.args)}`);
 

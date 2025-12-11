@@ -17,7 +17,10 @@ import os from "os";
 import { Resvg } from "@resvg/resvg-js";
 import { PDFDocument } from "pdf-lib";
 import puppeteer from "puppeteer-core";
-import chromium from "@sparticuz/chromium";
+import chromium from "@sparticuz/chromium-min";
+
+// Path to bundled chromium brotli files (included in repo for Vercel deployment)
+const CHROMIUM_PACK_PATH = path.join(process.cwd(), "bin", "chromium-pack");
 
 const execAsync = promisify(exec);
 
@@ -347,7 +350,7 @@ export async function svgToPdf(svgContent: string): Promise<Buffer> {
     if (isServerless) {
       browser = await puppeteer.launch({
         args: chromium.args,
-        executablePath: await chromium.executablePath(),
+        executablePath: await chromium.executablePath(CHROMIUM_PACK_PATH),
         headless: true,
       });
     } else {

@@ -9,9 +9,12 @@ import os from "os";
 import { exec } from "child_process";
 import { promisify } from "util";
 import puppeteer from "puppeteer-core";
-import chromium from "@sparticuz/chromium";
+import chromium from "@sparticuz/chromium-min";
 
 const execAsync = promisify(exec);
+
+// Path to bundled chromium brotli files (included in repo for Vercel deployment)
+const CHROMIUM_PACK_PATH = path.join(process.cwd(), "bin", "chromium-pack");
 
 // Helper to launch Puppeteer with correct Chrome for environment
 async function launchBrowser() {
@@ -20,7 +23,7 @@ async function launchBrowser() {
   if (isServerless) {
     return puppeteer.launch({
       args: chromium.args,
-      executablePath: await chromium.executablePath(),
+      executablePath: await chromium.executablePath(CHROMIUM_PACK_PATH),
       headless: true,
     });
   }
