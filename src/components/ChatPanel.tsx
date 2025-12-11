@@ -116,8 +116,9 @@ export function ChatPanel({ jobId, initialMessage, uploadedFiles, initialUserPro
       });
     }
 
-    // Show initial assistant message (don't show files as message, we'll show them separately)
-    if (initialMessage) {
+    // Show initial assistant message ONLY if it's a real message (not "Processing...")
+    // When isCreating is true, we show the live processing UI instead
+    if (initialMessage && initialMessage !== "Processing...") {
       msgs.push({
         id: "initial",
         role: "assistant",
@@ -155,8 +156,9 @@ export function ChatPanel({ jobId, initialMessage, uploadedFiles, initialUserPro
   }, [messages]);
 
   // Add or update assistant message when it arrives from server (with traces if available)
+  // Skip "Processing..." - we show live processing UI instead
   useEffect(() => {
-    if (!initialMessage) return;
+    if (!initialMessage || initialMessage === "Processing...") return;
 
     setMessages(prev => {
       const existingIndex = prev.findIndex(m => m.id === "initial");
@@ -169,7 +171,7 @@ export function ChatPanel({ jobId, initialMessage, uploadedFiles, initialUserPro
       };
 
       if (existingIndex >= 0) {
-        // Update existing message (handles "Processing..." -> real message transition)
+        // Update existing message
         const updated = [...prev];
         updated[existingIndex] = newMessage;
         return updated;
@@ -522,25 +524,20 @@ export function ChatPanel({ jobId, initialMessage, uploadedFiles, initialUserPro
 
                   return (
                     <div>
-                      {/* Expandable completed traces */}
+                      {/* Show all completed traces expanded */}
                       {completedTraces.length > 0 && (
-                        <details className="mb-2">
-                          <summary className="text-[11px] text-[#86868b] cursor-pointer hover:text-[#1d1d1f]">
-                            {completedTraces.filter(t => t.type === "tool_result").length} tool{completedTraces.filter(t => t.type === "tool_result").length !== 1 ? "s" : ""} completed
-                          </summary>
-                          <div className="mt-1 pl-2 border-l-2 border-[#e8e8ed] space-y-0.5">
-                            {completedTraces.map((trace, idx) => (
-                              <div key={idx} className="text-[10px] flex items-center gap-1">
-                                {trace.type === "tool_call" && (
-                                  <span className="text-[#86868b] font-mono">{trace.toolName}</span>
-                                )}
-                                {trace.type === "tool_result" && (
-                                  <span className="text-[#00aa00]">✓ {trace.toolName}</span>
-                                )}
-                              </div>
-                            ))}
-                          </div>
-                        </details>
+                        <div className="mb-2 pl-2 border-l-2 border-[#e8e8ed] space-y-0.5">
+                          {completedTraces.map((trace, idx) => (
+                            <div key={idx} className="text-[11px] flex items-center gap-1">
+                              {trace.type === "tool_call" && (
+                                <span className="text-[#86868b] font-mono">{trace.toolName}()</span>
+                              )}
+                              {trace.type === "tool_result" && (
+                                <span className="text-[#00aa00]">✓ {trace.toolName}</span>
+                              )}
+                            </div>
+                          ))}
+                        </div>
                       )}
                       {/* Current/last tool call with spinner if pending */}
                       {isLastPending && lastToolCall && (
@@ -565,14 +562,14 @@ export function ChatPanel({ jobId, initialMessage, uploadedFiles, initialUserPro
                     </div>
                   );
                 }
-                // No tool traces yet, show simple spinner
+                // No tool traces yet, show simple spinner with "Starting..."
                 return (
                   <div className="flex items-center gap-2">
                     <svg className="animate-spin h-4 w-4 text-[#86868b] flex-shrink-0" viewBox="0 0 24 24">
                       <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
                       <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                     </svg>
-                    <span className="text-[13px] text-[#86868b]">Thinking...</span>
+                    <span className="text-[13px] text-[#86868b]">Starting...</span>
                   </div>
                 );
               })()}

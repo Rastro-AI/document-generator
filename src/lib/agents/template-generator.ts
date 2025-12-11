@@ -276,7 +276,8 @@ CRITICAL RULES:
 - After ANY SVG change, STOP and WAIT for the render comparison before continuing
 - NEVER call mark_complete in the same turn as write_svg or apply_patch
 - You MUST see the rendered preview image before marking complete
-- If you haven't seen a preview of your latest changes, DO NOT mark complete`;
+- If you haven't seen a preview of your latest changes, DO NOT mark complete
+- Be careful with text wrapping - use foreignObject for text that needs to wrap within a container`;
 
 /**
  * Run the SVG template generator agent
