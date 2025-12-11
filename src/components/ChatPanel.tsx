@@ -474,52 +474,50 @@ export function ChatPanel({ jobId, initialMessage, uploadedFiles, initialUserPro
         {isProcessing && (
           <div className="flex justify-start">
             <div className="bg-[#f5f5f7] px-3 py-2 rounded-xl max-w-[80%]">
-              <div className="flex items-center gap-2">
-                <svg className="animate-spin h-4 w-4 text-[#86868b] flex-shrink-0" viewBox="0 0 24 24">
-                  <circle
-                    className="opacity-25"
-                    cx="12"
-                    cy="12"
-                    r="10"
-                    stroke="currentColor"
-                    strokeWidth="4"
-                    fill="none"
-                  />
-                  <path
-                    className="opacity-75"
-                    fill="currentColor"
-                    d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-                  />
-                </svg>
-                <span className="text-[13px] text-[#86868b]">
-                  {isCreating ? creationStatus || "Creating document..." : uploadFilesHook.isPending ? "Processing files..." : liveStatus || "Thinking..."}
-                </span>
-              </div>
-              {/* Live traces - expandable view of what's happening */}
               {(() => {
                 const tracesToShow = isCreating && creationTraces && creationTraces.length > 0 ? creationTraces : liveTraces;
-                return tracesToShow.length > 0 && (
-                  <div className="mt-2 pt-2 border-t border-[#e8e8ed]">
-                    <details className="text-[11px] text-[#86868b]" open>
-                      <summary className="cursor-pointer hover:text-[#1d1d1f] transition-colors">
-                        View details ({tracesToShow.length} step{tracesToShow.length !== 1 ? "s" : ""})
-                      </summary>
-                      <div className="mt-1 pl-2 border-l-2 border-[#e8e8ed] space-y-1 max-h-[150px] overflow-y-auto">
-                        {tracesToShow.map((trace, idx) => (
-                          <div key={idx} className="text-[10px]">
-                            {trace.type === "status" && (
+                // If we have traces, show them directly (no "Processing..." header)
+                if (tracesToShow.length > 0) {
+                  return (
+                    <div className="space-y-1 max-h-[200px] overflow-y-auto">
+                      {tracesToShow.map((trace, idx) => (
+                        <div key={idx} className="text-[11px] flex items-center gap-1.5">
+                          {trace.type === "status" && (
+                            <>
+                              <svg className="animate-spin h-3 w-3 text-[#86868b] flex-shrink-0" viewBox="0 0 24 24">
+                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                              </svg>
                               <span className="text-[#86868b]">{trace.content}</span>
-                            )}
-                            {trace.type === "tool_call" && (
+                            </>
+                          )}
+                          {trace.type === "tool_call" && (
+                            <>
+                              <span className="text-[#0066CC]">→</span>
                               <span className="text-[#0066CC] font-mono">{trace.toolName}()</span>
-                            )}
-                            {trace.type === "tool_result" && (
-                              <span className="text-[#00aa00]">✓ {trace.toolName}</span>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    </details>
+                            </>
+                          )}
+                          {trace.type === "tool_result" && (
+                            <>
+                              <span className="text-[#00aa00]">✓</span>
+                              <span className="text-[#00aa00] font-mono">{trace.toolName}</span>
+                            </>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  );
+                }
+                // No traces yet, show simple spinner
+                return (
+                  <div className="flex items-center gap-2">
+                    <svg className="animate-spin h-4 w-4 text-[#86868b] flex-shrink-0" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                    <span className="text-[13px] text-[#86868b]">
+                      {isCreating ? "Starting..." : uploadFilesHook.isPending ? "Processing files..." : "Thinking..."}
+                    </span>
                   </div>
                 );
               })()}

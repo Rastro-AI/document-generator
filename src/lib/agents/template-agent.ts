@@ -518,6 +518,48 @@ Request: ${userMessage}`;
       ? [...previousHistory, inputMessage]
       : [inputMessage];
 
+    // Debug logging for context size analysis
+    const estimateTokens = (obj: unknown): number => {
+      const str = typeof obj === "string" ? obj : JSON.stringify(obj);
+      return Math.ceil(str.length / 4); // Rough estimate: 4 chars per token
+    };
+
+    const contextAnalysis = {
+      previousHistoryLength: previousHistory.length,
+      previousHistoryTokens: estimateTokens(previousHistory),
+      svgLength: currentSvgContent.length,
+      svgTokens: estimateTokens(currentSvgContent),
+      fieldsTokens: estimateTokens(liveFields),
+      assetsTokens: estimateTokens(liveAssets),
+      hasScreenshot: !!initialScreenshotBase64,
+      screenshotSize: initialScreenshotBase64 ? initialScreenshotBase64.length : 0,
+      userMessageLength: userMessage.length,
+      totalInputTokens: estimateTokens(input),
+      // Break down history by message type
+      historyBreakdown: previousHistory.map((msg: { role: string; content: unknown }, i: number) => ({
+        index: i,
+        role: msg.role,
+        contentLength: typeof msg.content === "string" ? msg.content.length : JSON.stringify(msg.content).length,
+        estimatedTokens: estimateTokens(msg.content),
+      })),
+    };
+
+    console.log(`[Agent] Context Analysis for job ${jobId}:`);
+    console.log(`  Previous history: ${contextAnalysis.previousHistoryLength} messages, ~${contextAnalysis.previousHistoryTokens} tokens`);
+    console.log(`  SVG template: ${contextAnalysis.svgLength} chars, ~${contextAnalysis.svgTokens} tokens`);
+    console.log(`  Fields: ~${contextAnalysis.fieldsTokens} tokens`);
+    console.log(`  Assets: ~${contextAnalysis.assetsTokens} tokens`);
+    console.log(`  Screenshot: ${contextAnalysis.hasScreenshot ? `${contextAnalysis.screenshotSize} chars base64` : "none"}`);
+    console.log(`  User message: ${contextAnalysis.userMessageLength} chars`);
+    console.log(`  TOTAL INPUT: ~${contextAnalysis.totalInputTokens} tokens (estimate)`);
+
+    if (contextAnalysis.historyBreakdown.length > 0) {
+      console.log(`  History breakdown:`);
+      contextAnalysis.historyBreakdown.forEach((msg: { index: number; role: string; contentLength: number; estimatedTokens: number }) => {
+        console.log(`    [${msg.index}] ${msg.role}: ${msg.contentLength} chars, ~${msg.estimatedTokens} tokens`);
+      });
+    }
+
     // Run agent
     onEvent?.({ type: "status", content: "Thinking..." });
     const result = await runner.run(agent, input, { maxTurns: 10 });

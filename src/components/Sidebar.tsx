@@ -160,7 +160,6 @@ export function Sidebar({ onNewDocument, collapsed: controlledCollapsed, onColla
                   ? "bg-blue-50 text-blue-700"
                   : "text-slate-700 hover:bg-slate-50 hover:text-slate-900"
               }`}
-              title={collapsed ? item.label : undefined}
             >
               <span
                 className={`flex items-center justify-center ${
@@ -183,15 +182,7 @@ export function Sidebar({ onNewDocument, collapsed: controlledCollapsed, onColla
                   )}
                 </span>
               )}
-              {/* Tooltip for collapsed state */}
-              {collapsed && (
-                <div className="absolute left-full ml-2 px-2 py-1 bg-slate-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity duration-200 whitespace-nowrap z-50 top-1/2 transform -translate-y-1/2">
-                  <span className="flex items-center">
-                    {item.label}
-                    {item.isPremium && <Lock className="ml-1 h-3 w-3" />}
-                  </span>
-                </div>
-              )}
+              {/* Tooltip removed - was showing unwanted popovers */}
             </div>
           ))}
         </nav>
