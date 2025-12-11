@@ -62,6 +62,18 @@ TOOLS:
 - update_assets: Assign images to slots. Pass JSON {"SLOT_NAME": "filename.jpg"}.
 - apply_patch: Edit SVG design via V4A unified diff format. Target file is always "template.svg".
 - render_preview: Render and view current state. Use after design changes to verify.
+
+WORKFLOW:
+After filling in fields or making changes, ALWAYS call render_preview to check the result visually.
+Look for and fix common issues:
+- Text overflowing containers or getting cut off
+- Text not wrapping properly (too long for the space)
+- Misaligned elements
+- Missing or broken images
+- Generally ugly or unpolished appearance
+
+If you see any issues, use apply_patch to fix them (adjust font sizes, text wrapping, spacing, etc.) and render_preview again to verify.
+Only return to the user when the document looks clean and professional.
 `.trim();
 
 /**

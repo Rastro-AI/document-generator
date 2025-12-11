@@ -48,8 +48,7 @@ export function JobEditor({ jobId, templateId, onBack, initialPrompt, initialFil
   const [templateCode, setTemplateCode] = useState("");
   const [showExportMenu, setShowExportMenu] = useState(false);
   const [pdfExpanded, setPdfExpanded] = useState(false);
-  const [chatMinimized, setChatMinimized] = useState(false);
-  const [extractedDataTab, setExtractedDataTab] = useState<"assets" | "data">("assets");
+  const [rightPanelTab, setRightPanelTab] = useState<"preview" | "assets" | "data">("preview");
   const exportMenuRef = useRef<HTMLDivElement>(null);
   // Locally track the last render timestamp to drive preview updates immediately
   const [previewRenderedAt, setPreviewRenderedAt] = useState<string | undefined>(undefined);
@@ -384,145 +383,160 @@ export function JobEditor({ jobId, templateId, onBack, initialPrompt, initialFil
         </div>
       )}
 
-      {/* Main content + Chat */}
-      <div className="flex flex-1 min-h-0 flex-col">
-        {/* 2-pane layout */}
-        <div className="flex min-h-0 flex-1">
-          {/* Left: Fields editor */}
-          <div className="w-[380px] bg-[#f5f5f7] overflow-y-auto p-6 pr-0">
-            <div className="bg-white rounded-2xl shadow-sm h-full overflow-y-auto">
-              <div className="p-6">
-                {/* Sidebar Title */}
-                <h2 className="text-[17px] font-semibold text-[#1d1d1f] mb-4">
-                  Extracted Data
-                </h2>
-                {/* Tabs */}
-                <div className="flex gap-1 mb-6 p-1 bg-[#f5f5f7] rounded-lg">
-                  <button
-                    onClick={() => setExtractedDataTab("assets")}
-                    className={`flex-1 px-3 py-1.5 text-[13px] font-medium rounded-md transition-colors ${
-                      extractedDataTab === "assets"
-                        ? "bg-white text-[#1d1d1f] shadow-sm"
-                        : "text-[#86868b] hover:text-[#1d1d1f]"
-                    }`}
-                  >
-                    Assets
-                  </button>
-                  <button
-                    onClick={() => setExtractedDataTab("data")}
-                    className={`flex-1 px-3 py-1.5 text-[13px] font-medium rounded-md transition-colors ${
-                      extractedDataTab === "data"
-                        ? "bg-white text-[#1d1d1f] shadow-sm"
-                        : "text-[#86868b] hover:text-[#1d1d1f]"
-                    }`}
-                  >
-                    Data
-                  </button>
-                </div>
-              {isReady ? (
-                <>
-                  <FieldsEditor
-                    template={template}
-                    job={job}
-                    localFields={localFields}
-                    onFieldChange={handleFieldChange}
-                    onAssetChange={handleAssetChange}
-                    onAssetUpload={handleAssetUpload}
-                    onSave={hasChanges ? handleSave : undefined}
-                    disabled={updateFields.isPending || updateAssets.isPending || uploadAsset.isPending}
-                    activeTab={extractedDataTab}
-                  />
-                </>
-              ) : (
-                <div className="flex flex-col items-center justify-center py-16">
-                  <svg className="animate-spin h-6 w-6 text-[#86868b] mb-3" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                  </svg>
-                  <p className="text-[13px] text-[#86868b]">Loading fields...</p>
+      {/* Main content - 2 column layout */}
+      <div className="flex flex-1 min-h-0">
+        {/* Left: Chat panel (50%) */}
+        <div className="w-1/2 flex flex-col bg-[#f5f5f7] p-4 pr-2">
+          <div className="flex-1 min-h-0 bg-white rounded-xl overflow-hidden border border-[#d2d2d7] flex flex-col">
+            <ChatPanel
+              jobId={jobId}
+              initialMessage={job?.initialMessage}
+              uploadedFiles={job?.uploadedFiles}
+              initialUserPrompt={initialPrompt}
+              initialUserFiles={initialFiles?.map(f => ({ name: f.name, type: f.type }))}
+              isCreating={isCreating}
+              creationStatus={creationStatus}
+              initialReasoningMode={initialReasoningMode}
+              onFieldsUpdated={handleFieldsUpdated}
+              onTemplateUpdated={handleTemplateUpdated}
+              onFilesChanged={() => refetch()}
+            />
+          </div>
+        </div>
+
+        {/* Right: Preview/Assets/Data with tabs (50%) */}
+        <div className="w-1/2 flex flex-col bg-[#f5f5f7] p-4 pl-2">
+          <div className="flex-1 min-h-0 bg-white rounded-xl overflow-hidden border border-[#d2d2d7] flex flex-col">
+            {/* Tabs */}
+            <div className="flex-shrink-0 border-b border-[#e8e8ed] px-4 pt-3">
+              <div className="flex gap-1 p-1 bg-[#f5f5f7] rounded-lg w-fit">
+                <button
+                  onClick={() => setRightPanelTab("preview")}
+                  className={`px-4 py-1.5 text-[13px] font-medium rounded-md transition-colors ${
+                    rightPanelTab === "preview"
+                      ? "bg-white text-[#1d1d1f] shadow-sm"
+                      : "text-[#86868b] hover:text-[#1d1d1f]"
+                  }`}
+                >
+                  Preview
+                </button>
+                <button
+                  onClick={() => setRightPanelTab("assets")}
+                  className={`px-4 py-1.5 text-[13px] font-medium rounded-md transition-colors ${
+                    rightPanelTab === "assets"
+                      ? "bg-white text-[#1d1d1f] shadow-sm"
+                      : "text-[#86868b] hover:text-[#1d1d1f]"
+                  }`}
+                >
+                  Assets
+                </button>
+                <button
+                  onClick={() => setRightPanelTab("data")}
+                  className={`px-4 py-1.5 text-[13px] font-medium rounded-md transition-colors ${
+                    rightPanelTab === "data"
+                      ? "bg-white text-[#1d1d1f] shadow-sm"
+                      : "text-[#86868b] hover:text-[#1d1d1f]"
+                  }`}
+                >
+                  Data
+                </button>
+              </div>
+            </div>
+
+            {/* Tab content */}
+            <div className="flex-1 min-h-0 overflow-hidden">
+              {/* Preview tab */}
+              {rightPanelTab === "preview" && (
+                <div className="h-full p-4 relative">
+                  {isReady ? (
+                    <>
+                      <PdfPreview key={pdfKey} jobId={jobId} renderedAt={previewRenderedAt || job.renderedAt} isRendering={renderJob.isPending} />
+                      {/* Expand button */}
+                      <button
+                        onClick={() => setPdfExpanded(true)}
+                        className="absolute top-6 right-6 w-8 h-8 flex items-center justify-center rounded-lg bg-white/80 hover:bg-white shadow-sm transition-colors"
+                        title="Expand preview"
+                      >
+                        <svg className="w-4 h-4 text-[#1d1d1f]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+                        </svg>
+                      </button>
+                    </>
+                  ) : (
+                    <div className="h-full flex flex-col items-center justify-center">
+                      <svg className="animate-spin h-8 w-8 text-[#86868b] mb-4" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                      </svg>
+                      <p className="text-[15px] font-medium text-[#1d1d1f] mb-1">Creating document...</p>
+                      <p className="text-[13px] text-[#86868b]">{isCreating ? creationStatus : "Loading..."}</p>
+                    </div>
+                  )}
                 </div>
               )}
-              </div>
+
+              {/* Assets tab */}
+              {rightPanelTab === "assets" && (
+                <div className="h-full overflow-y-auto p-6">
+                  {isReady ? (
+                    <FieldsEditor
+                      template={template}
+                      job={job}
+                      localFields={localFields}
+                      onFieldChange={handleFieldChange}
+                      onAssetChange={handleAssetChange}
+                      onAssetUpload={handleAssetUpload}
+                      onSave={hasChanges ? handleSave : undefined}
+                      disabled={updateFields.isPending || updateAssets.isPending || uploadAsset.isPending}
+                      activeTab="assets"
+                    />
+                  ) : (
+                    <div className="flex flex-col items-center justify-center py-16">
+                      <svg className="animate-spin h-6 w-6 text-[#86868b] mb-3" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                      </svg>
+                      <p className="text-[13px] text-[#86868b]">Loading assets...</p>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Data tab */}
+              {rightPanelTab === "data" && (
+                <div className="h-full overflow-y-auto p-6">
+                  {isReady ? (
+                    <FieldsEditor
+                      template={template}
+                      job={job}
+                      localFields={localFields}
+                      onFieldChange={handleFieldChange}
+                      onAssetChange={handleAssetChange}
+                      onAssetUpload={handleAssetUpload}
+                      onSave={hasChanges ? handleSave : undefined}
+                      disabled={updateFields.isPending || updateAssets.isPending || uploadAsset.isPending}
+                      activeTab="data"
+                    />
+                  ) : (
+                    <div className="flex flex-col items-center justify-center py-16">
+                      <svg className="animate-spin h-6 w-6 text-[#86868b] mb-3" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                      </svg>
+                      <p className="text-[13px] text-[#86868b]">Loading data...</p>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
 
-          {/* Middle: PDF preview */}
-          <div className="flex-1 p-6 bg-[#f5f5f7] relative">
-            {isReady ? (
-              <>
-                <PdfPreview key={pdfKey} jobId={jobId} renderedAt={previewRenderedAt || job.renderedAt} isRendering={renderJob.isPending} />
-                {/* Expand button */}
-                <button
-                  onClick={() => setPdfExpanded(true)}
-                  className="absolute top-8 right-8 w-8 h-8 flex items-center justify-center rounded-lg bg-white/80 hover:bg-white shadow-sm transition-colors"
-                  title="Expand preview"
-                >
-                  <svg className="w-4 h-4 text-[#1d1d1f]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
-                  </svg>
-                </button>
-              </>
-            ) : (
-              <div className="h-full flex flex-col items-center justify-center bg-white rounded-xl shadow-sm">
-                <svg className="animate-spin h-8 w-8 text-[#86868b] mb-4" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                </svg>
-                <p className="text-[15px] font-medium text-[#1d1d1f] mb-1">Creating document...</p>
-                <p className="text-[13px] text-[#86868b]">{isCreating ? creationStatus : "Loading..."}</p>
-              </div>
-            )}
-          </div>
-
-          {/* Right: History panel */}
+          {/* History panel */}
           {showHistoryPanel && isReady && (
-            <div className="w-[260px] flex-shrink-0">
+            <div className="mt-4 flex-shrink-0 h-[200px]">
               <HistoryPanel job={job} onJobUpdated={handleJobUpdated} />
             </div>
           )}
-        </div>
-
-        {/* Chat panel - collapsible */}
-        <div className={`flex-shrink-0 px-4 pb-4 bg-[#f5f5f7] transition-all duration-300 ${chatMinimized ? "" : "h-[420px]"}`}>
-          {/* Chat container */}
-          <div className={`bg-white rounded-xl overflow-hidden transition-all duration-200 border border-[#d2d2d7] ${chatMinimized ? "" : "h-full flex flex-col"}`}>
-            {/* Chat header - clickable to toggle */}
-            <div
-              onClick={() => setChatMinimized(!chatMinimized)}
-              className={`flex items-center justify-between px-4 py-3 cursor-pointer group hover:bg-[#f9f9fb] transition-colors ${chatMinimized ? "" : "border-b border-[#e8e8ed]"}`}
-            >
-              <span className="text-[13px] font-medium text-[#1d1d1f]">
-                Chat
-              </span>
-              <svg
-                className={`w-4 h-4 text-[#86868b] group-hover:text-[#1d1d1f] transition-all ${chatMinimized ? "" : "rotate-180"}`}
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-                strokeWidth={2}
-              >
-                <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-              </svg>
-            </div>
-            {/* Chat content */}
-            {!chatMinimized && (
-              <div className="flex-1 min-h-0">
-                <ChatPanel
-                jobId={jobId}
-                initialMessage={job?.initialMessage}
-                uploadedFiles={job?.uploadedFiles}
-                initialUserPrompt={initialPrompt}
-                initialUserFiles={initialFiles?.map(f => ({ name: f.name, type: f.type }))}
-                isCreating={isCreating}
-                creationStatus={creationStatus}
-                initialReasoningMode={initialReasoningMode}
-                onFieldsUpdated={handleFieldsUpdated}
-                onTemplateUpdated={handleTemplateUpdated}
-                onFilesChanged={() => refetch()}
-              />
-              </div>
-            )}
-          </div>
         </div>
       </div>
 
