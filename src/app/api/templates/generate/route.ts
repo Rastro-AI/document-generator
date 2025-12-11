@@ -21,10 +21,10 @@ export const runtime = "nodejs";
 export const maxDuration = 300; // 5 minutes for complex generation
 
 /**
- * Convert PDF buffer to PNG images base64 using Puppeteer
- * Returns array of base64 images, one per page (up to maxPages)
+ * Convert PDF buffer to PNG image base64 using Puppeteer
+ * Only converts the first page - multi-page PDFs are not supported
  */
-async function pdfToImages(pdfBuffer: Buffer, maxPages: number = 5): Promise<string[]> {
+async function pdfToImages(pdfBuffer: Buffer): Promise<string[]> {
   const tempDir = os.tmpdir();
   const tempId = `pdf_${Date.now()}_${Math.random().toString(36).slice(2)}`;
   const pdfPath = path.join(tempDir, `${tempId}.pdf`);

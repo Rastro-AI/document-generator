@@ -776,6 +776,7 @@ export function TemplateEditorModal({
                     </button>
                     <div className="absolute bottom-3 left-3 px-2 py-1 bg-white/90 rounded-md shadow-sm">
                       <p className="text-[11px] text-[#1d1d1f] font-medium">PDF to mimic</p>
+                      <p className="text-[10px] text-[#86868b]">Only first page will be used</p>
                     </div>
                   </div>
                 ) : (
