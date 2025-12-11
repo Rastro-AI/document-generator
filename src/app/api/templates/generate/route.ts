@@ -4,7 +4,11 @@ import fs from "fs/promises";
 import path from "path";
 import os from "os";
 import puppeteer from "puppeteer-core";
-import chromium from "@sparticuz/chromium";
+import chromium from "@sparticuz/chromium-min";
+
+// Chromium pack URL for serverless (downloads once per cold start, cached in /tmp)
+// https://github.com/Sparticuz/chromium/releases
+const CHROMIUM_PACK_URL = "https://github.com/Sparticuz/chromium/releases/download/v143.0.0/chromium-v143.0.0-pack.x64.tar";
 
 // Logger for SSE route
 const log = {
@@ -39,7 +43,7 @@ async function pdfToImages(pdfBuffer: Buffer): Promise<string[]> {
     browser = await puppeteer.launch({
       args: isServerless ? chromium.args : ["--no-sandbox", "--disable-setuid-sandbox"],
       executablePath: isServerless
-        ? await chromium.executablePath()
+        ? await chromium.executablePath(CHROMIUM_PACK_URL)
         : process.platform === "darwin"
           ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
           : "/usr/bin/google-chrome",

@@ -4,7 +4,7 @@ const nextConfig: NextConfig = {
   serverExternalPackages: [
     "esbuild",
     "@resvg/resvg-js",
-    "@sparticuz/chromium",
+    "@sparticuz/chromium-min",
     "puppeteer-core",
   ],
 };
