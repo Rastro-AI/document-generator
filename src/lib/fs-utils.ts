@@ -23,6 +23,7 @@ import {
   createJobInDb,
   updateJobFieldsInDb,
   updateJobAssetsInDb,
+  updateJobInitialMessageInDb,
   markJobRenderedInDb,
   addUploadedFileToJobInDb,
   addJobHistoryEntryInDb,
@@ -133,6 +134,15 @@ export async function updateJobAssets(
 ): Promise<Job | null> {
   if (!isDbConfigured()) return null;
   return await updateJobAssetsInDb(jobId, assets);
+}
+
+// Update job initial message
+export async function updateJobInitialMessage(
+  jobId: string,
+  initialMessage: string
+): Promise<Job | null> {
+  if (!isDbConfigured()) return null;
+  return await updateJobInitialMessageInDb(jobId, initialMessage);
 }
 
 // Mark job as rendered

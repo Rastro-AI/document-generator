@@ -174,6 +174,31 @@ export async function updateJobAssetsInDb(
 }
 
 /**
+ * Update job initial message
+ */
+export async function updateJobInitialMessageInDb(
+  jobId: string,
+  initialMessage: string
+): Promise<Job | null> {
+  if (!isDbConfigured()) return null;
+
+  const supabase = getSupabase();
+  const { data, error } = await supabase
+    .from("jobs")
+    .update({ initial_message: initialMessage })
+    .eq("id", jobId)
+    .select()
+    .single();
+
+  if (error) {
+    console.error("Error updating job initial message:", error);
+    return null;
+  }
+
+  return rowToJob(data as JobRow);
+}
+
+/**
  * Mark job as rendered
  */
 export async function markJobRenderedInDb(jobId: string): Promise<Job | null> {

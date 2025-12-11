@@ -14,6 +14,7 @@ import {
   getJobSvgContent,
   saveJobOutputPdf,
   updateJobFields as updateJobFieldsInDb,
+  updateJobInitialMessage,
 } from "@/lib/fs-utils";
 import { Job, UploadedFile } from "@/lib/types";
 import { runTemplateAgent } from "@/lib/agents/template-agent";
@@ -211,10 +212,9 @@ export async function POST(request: NextRequest) {
       // Re-fetch the updated job
       let finalJob = await getJob(jobId);
 
-      // Update initialMessage
-      if (finalJob) {
-        finalJob.initialMessage = agentResult.message || "Document is ready for review.";
-      }
+      // Update initialMessage in the database
+      const agentMessage = agentResult.message || "Document is ready for review.";
+      finalJob = await updateJobInitialMessage(jobId, agentMessage) || finalJob;
 
       // Render the final PDF so it's ready immediately
       sendEvent("trace", { type: "status", content: "Generating PDF..." });

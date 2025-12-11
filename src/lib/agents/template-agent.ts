@@ -91,14 +91,18 @@ You are a document generation assistant. You help users create spec sheets by:
 6. Call render_preview again to verify fixes
 7. ALWAYS end with a text response summarizing what you did
 
-## IMPORTANT
-- ALWAYS call render_preview at least once before responding to verify the output
-- Fix visual issues before returning - don't leave text overflowing or layouts broken
-- Match images to slots by analyzing their content (product photos → PRODUCT_IMAGE, logos → LOGO_IMAGE, etc.)
-- ALWAYS respond with a brief summary when done. Examples:
-  - "I've filled in 15 fields from the spreadsheet and assigned the product image. The spec sheet is ready."
-  - "I've updated the wattage to 15W and adjusted the layout to fit."
-  - "Done! I extracted the data and fixed the text overflow in the description."
+## CRITICAL REQUIREMENTS
+1. ALWAYS call render_preview at least once before your final response to verify the output visually
+2. ALWAYS end your response with a text message summarizing what you did (this is REQUIRED, not optional)
+3. Fix visual issues before returning - don't leave text overflowing or layouts broken
+4. Match images to slots by analyzing their content (product photos → PRODUCT_IMAGE, logos → LOGO_IMAGE, etc.)
+
+Your final message MUST be a brief summary. Examples:
+- "I've filled in 15 fields from the spreadsheet and assigned the product image. The spec sheet is ready."
+- "I've updated the wattage to 15W and adjusted the layout to fit."
+- "Done! I extracted the data and fixed the text overflow in the description."
+
+DO NOT end with just a tool call - you MUST provide a text response after your last tool call.
 `.trim();
 
 /**
@@ -642,10 +646,18 @@ Request: ${userMessage}`;
     if (fieldsChanged) mode = "fields";
     if (needsRender) mode = mode === "fields" ? "both" : "template";
 
+    // Log the agent's final output
+    console.log(`[Agent] Final output for job ${jobId}:`, result.finalOutput ? `"${result.finalOutput.substring(0, 200)}..."` : "(empty)");
+
+    // If no final output, warn - this shouldn't happen
+    if (!result.finalOutput) {
+      console.warn(`[Agent] WARNING: No final text output from agent for job ${jobId}. The agent should always end with a summary message.`);
+    }
+
     return {
       success: true,
       mode,
-      message: result.finalOutput || "Done.",
+      message: result.finalOutput || "Changes applied successfully.",
       fieldUpdates: fieldsChanged ? liveFields as Record<string, string> : undefined,
       templateChanged: needsRender,
       traces,
