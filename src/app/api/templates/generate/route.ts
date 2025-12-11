@@ -304,18 +304,33 @@ export async function POST(request: NextRequest) {
     const stream = new TransformStream();
     const writer = stream.writable.getWriter();
 
-    const sendEvent = (event: string, data: unknown) => {
-      // Log version events specifically
-      if (event === "trace" && typeof data === "object" && data !== null && (data as GeneratorTrace).type === "version") {
-        log.info("SSE sending VERSION event", { version: (data as GeneratorTrace).version, hasPreview: !!(data as GeneratorTrace).previewUrl });
+    // Track if connection is still open
+    let connectionClosed = false;
+
+    const sendEvent = async (event: string, data: unknown) => {
+      if (connectionClosed) return;
+      try {
+        // Log version events specifically
+        if (event === "trace" && typeof data === "object" && data !== null && (data as GeneratorTrace).type === "version") {
+          log.info("SSE sending VERSION event", { version: (data as GeneratorTrace).version, hasPreview: !!(data as GeneratorTrace).previewUrl });
+        }
+        await writer.write(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+      } catch (err) {
+        // Client disconnected - mark connection as closed and stop sending
+        if (String(err).includes("ResponseAborted") || String(err).includes("WritableStream")) {
+          connectionClosed = true;
+          log.info("Client disconnected, stopping SSE events");
+        } else {
+          log.error("Error sending SSE event", err);
+        }
       }
-      writer.write(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
     };
 
     // Run generator in background
     (async () => {
       try {
         const onEvent = (trace: GeneratorTrace) => {
+          if (connectionClosed) return; // Skip if client disconnected
           if (trace.type === "version") {
             log.info("Received VERSION trace from generator", { version: trace.version });
           }
@@ -348,13 +363,17 @@ export async function POST(request: NextRequest) {
           conversationHistory
         );
 
-        sendEvent("result", result);
-        sendEvent("done", {});
+        await sendEvent("result", result);
+        await sendEvent("done", {});
       } catch (error) {
         console.error("Template generation error:", error);
-        sendEvent("error", { error: String(error) });
+        await sendEvent("error", { error: String(error) });
       } finally {
-        await writer.close();
+        try {
+          await writer.close();
+        } catch {
+          // Ignore close errors if connection already closed
+        }
       }
     })();
 
