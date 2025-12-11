@@ -279,7 +279,12 @@ export function ChatPanel({ jobId, initialMessage, uploadedFiles, initialUserPro
     }
   };
 
-  const isProcessing = isStreaming || uploadFilesHook.isPending || isCreating;
+  // Disable input while creating, streaming, uploading, or waiting for initial response
+  // Only wait for first response if we're actively creating (indicated by isCreating prop or user prompt/files being processed)
+  const hasInitialContent = Boolean(initialUserPrompt || (initialUserFiles && initialUserFiles.length > 0));
+  const isWaitingForInitialResponse = hasInitialContent && (!initialMessage || initialMessage === "Processing...");
+  const isActivelyCreating = isCreating || isWaitingForInitialResponse;
+  const isProcessing = isStreaming || uploadFilesHook.isPending || isActivelyCreating;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -594,14 +599,14 @@ export function ChatPanel({ jobId, initialMessage, uploadedFiles, initialUserPro
           onDrop={handleDrop}
           onDragOver={handleDragOver}
         >
-          {/* Uploaded files + Attached files preview - inside the input box */}
+          {/* Uploaded files + Attached files preview - inside the input box, horizontally scrollable */}
           {((uploadedFiles && uploadedFiles.length > 0) || attachedFiles.length > 0) && (
-            <div className="flex flex-wrap gap-2 px-4 pt-3">
+            <div className="flex gap-2 px-4 pt-3 pb-1 overflow-x-auto" style={{ scrollbarWidth: 'thin' }}>
               {/* Already uploaded files */}
               {uploadedFiles?.map((file) => (
                 <div
                   key={file.filename}
-                  className="group flex items-center gap-2 px-2.5 py-1.5 bg-white rounded-lg text-[12px] text-[#1d1d1f] shadow-sm cursor-pointer hover:bg-[#f5f5f7] transition-colors"
+                  className="group flex-shrink-0 flex items-center gap-2 px-2.5 py-1.5 bg-white rounded-lg text-[12px] text-[#1d1d1f] shadow-sm cursor-pointer hover:bg-[#f5f5f7] transition-colors"
                   onClick={(e) => {
                     e.stopPropagation();
                     setPreviewFile(file);
@@ -637,7 +642,7 @@ export function ChatPanel({ jobId, initialMessage, uploadedFiles, initialUserPro
                 <div
                   key={`${file.name}-${index}`}
                   onClick={() => openAttachmentPreview(file)}
-                  className="flex items-center gap-2 px-2.5 py-1.5 bg-white rounded-lg text-[12px] text-[#1d1d1f] shadow-sm cursor-pointer hover:bg-[#f5f5f7] transition-colors"
+                  className="flex-shrink-0 flex items-center gap-2 px-2.5 py-1.5 bg-white rounded-lg text-[12px] text-[#1d1d1f] shadow-sm cursor-pointer hover:bg-[#f5f5f7] transition-colors"
                 >
                   {file.type.startsWith("image/") ? (
                     <svg className="w-3.5 h-3.5 text-[#86868b]" fill="none" viewBox="0 0 24 24" stroke="currentColor">

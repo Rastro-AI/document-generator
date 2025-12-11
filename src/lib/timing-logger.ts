@@ -103,43 +103,55 @@ export class TimingLogger {
   }
 
   /**
-   * Save the timing log to a file
+   * Save the timing log to a file (skips file write on serverless)
    */
-  async save(): Promise<string> {
+  async save(): Promise<string | null> {
     const log = this.getLog();
 
-    // Ensure logs directory exists
-    await fs.mkdir(LOGS_DIR, { recursive: true });
-
-    // Create filename with timestamp
-    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-    const filename = `timing_${timestamp}_${this.requestId}.json`;
-    const filepath = path.join(LOGS_DIR, filename);
-
-    // Format log for readability
-    const formattedLog = {
-      ...log,
-      summary: {
-        totalDuration: `${log.totalDuration?.toFixed(2)}ms`,
-        breakdown: log.entries.map((e) => ({
-          label: e.label,
-          duration: `${e.duration?.toFixed(2)}ms`,
-          percentage: `${((e.duration || 0) / (log.totalDuration || 1) * 100).toFixed(1)}%`,
-        })),
-      },
-    };
-
-    await fs.writeFile(filepath, JSON.stringify(formattedLog, null, 2));
-
-    // Also log summary to console
+    // Log summary to console
     console.log(`\n[TIMING] Request ${this.requestId} - Total: ${log.totalDuration?.toFixed(2)}ms`);
     for (const entry of log.entries) {
       const pct = ((entry.duration || 0) / (log.totalDuration || 1) * 100).toFixed(1);
       console.log(`  ${entry.label}: ${entry.duration?.toFixed(2)}ms (${pct}%)`);
     }
-    console.log(`  Log saved to: ${filepath}\n`);
 
-    return filepath;
+    // Skip file writing on serverless environments (read-only filesystem)
+    const isServerless = process.env.VERCEL === "1" || process.env.AWS_LAMBDA_FUNCTION_NAME;
+    if (isServerless) {
+      console.log(`  (skipping file save on serverless)\n`);
+      return null;
+    }
+
+    try {
+      // Ensure logs directory exists
+      await fs.mkdir(LOGS_DIR, { recursive: true });
+
+      // Create filename with timestamp
+      const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+      const filename = `timing_${timestamp}_${this.requestId}.json`;
+      const filepath = path.join(LOGS_DIR, filename);
+
+      // Format log for readability
+      const formattedLog = {
+        ...log,
+        summary: {
+          totalDuration: `${log.totalDuration?.toFixed(2)}ms`,
+          breakdown: log.entries.map((e) => ({
+            label: e.label,
+            duration: `${e.duration?.toFixed(2)}ms`,
+            percentage: `${((e.duration || 0) / (log.totalDuration || 1) * 100).toFixed(1)}%`,
+          })),
+        },
+      };
+
+      await fs.writeFile(filepath, JSON.stringify(formattedLog, null, 2));
+      console.log(`  Log saved to: ${filepath}\n`);
+
+      return filepath;
+    } catch (err) {
+      console.log(`  (failed to save log file: ${err})\n`);
+      return null;
+    }
   }
 }
 
