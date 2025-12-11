@@ -11,8 +11,9 @@ import {
   setDefaultModelProvider,
   applyPatchTool,
   applyDiff,
+  shellTool,
 } from "@openai/agents-core";
-import type { Editor, ApplyPatchResult } from "@openai/agents-core";
+import type { Editor, ApplyPatchResult, Shell, ShellAction, ShellResult } from "@openai/agents-core";
 
 // Local types for apply_patch operations
 type CreateFileOperation = { type: "create_file"; path: string; diff: string };
@@ -25,6 +26,7 @@ import { renderSVGTemplate, svgToPdf, svgToPng } from "@/lib/svg-template-render
 import fsSync from "fs";
 import path from "path";
 import os from "os";
+import { exec } from "child_process";
 
 // Logger for template generator
 const log = {
@@ -113,6 +115,65 @@ export interface TemplateGeneratorResult {
 // Instead, the LLM creates clean SVG from scratch based on visual analysis.
 
 /**
+ * Local shell executor for the shell tool
+ * Runs commands in the local environment with timeout support
+ */
+class LocalShell implements Shell {
+  private defaultTimeout = 60000; // 60 seconds
+
+  async run(action: ShellAction): Promise<ShellResult> {
+    const timeout = action.timeoutMs ?? this.defaultTimeout;
+    const results: ShellResult["output"] = [];
+
+    for (const cmd of action.commands) {
+      log.info(`[SHELL] Executing: ${cmd}`);
+      try {
+        const result = await new Promise<{ stdout: string; stderr: string; exitCode: number; timedOut: boolean }>((resolve) => {
+          const childProcess = exec(cmd, { timeout }, (error, stdout, stderr) => {
+            // Check if killed (timeout) - use type assertion for ExecException
+            const execError = error as { killed?: boolean; code?: number } | null;
+            if (execError?.killed) {
+              resolve({ stdout: stdout || "", stderr: stderr || "", exitCode: -1, timedOut: true });
+            } else {
+              resolve({
+                stdout: stdout || "",
+                stderr: stderr || "",
+                exitCode: execError?.code ?? 0,
+                timedOut: false,
+              });
+            }
+          });
+          childProcess.on("error", (err) => {
+            resolve({ stdout: "", stderr: err.message, exitCode: 1, timedOut: false });
+          });
+        });
+
+        log.info(`[SHELL] Exit code: ${result.exitCode}, stdout: ${result.stdout.substring(0, 100)}...`);
+        results.push({
+          stdout: result.stdout,
+          stderr: result.stderr,
+          outcome: result.timedOut
+            ? { type: "timeout" }
+            : { type: "exit", exitCode: result.exitCode },
+        });
+      } catch (err) {
+        log.error(`[SHELL] Error executing command`, err);
+        results.push({
+          stdout: "",
+          stderr: String(err),
+          outcome: { type: "exit", exitCode: 1 },
+        });
+      }
+    }
+
+    return {
+      output: results,
+      maxOutputLength: action.maxOutputLength,
+    };
+  }
+}
+
+/**
  * Extract reasoning text from a reasoning item
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -146,63 +207,46 @@ function extractReasoningText(item: any): string | null {
  */
 const SVG_TEMPLATE_PATH = "template.svg";
 
-const SYSTEM_PROMPT = `You create SVG templates from PDF spec sheets using a TWO-PHASE approach.
+const SYSTEM_PROMPT = `You create SVG templates from PDF spec sheets. This is an iterative process.
 
-THIS IS AN ITERATIVE PROCESS. Expect to take 5-10+ iterations to get it right. Do NOT rush to mark_complete.
+## YOUR GOAL
+Create an SVG template that:
+1. Matches the PDF layout (colors, positions, fonts, spacing)
+2. Has {{PLACEHOLDER}} fields for dynamic content
+3. Has {{ASSET_NAME}} references for images
 
-## PHASE 1: EXACT RECREATION (no placeholders yet!) - Expect 4-8 iterations here
-First, recreate the PDF EXACTLY as it appears - same text, same colors, same layout.
-- Copy all text VERBATIM from the PDF (e.g., "PAR38 LED Bulb", "13W", "Model: ABC-123")
-- Match colors precisely (use code_interpreter to extract hex values)
-- Match positions, font sizes, spacing exactly
-- For images: use placeholder rectangles with {{IMAGE_NAME}} as the xlink:href
-- ITERATE MULTIPLE TIMES until your SVG looks nearly identical to the original PDF
-- Each iteration: compare carefully, identify ONE OR TWO issues, fix them with apply_patch
-
-## PHASE 2: ADD PLACEHOLDERS (only after Phase 1 is perfect) - 2-3 more iterations
-Once your recreation matches the original, THEN convert dynamic text to placeholders:
-- Product names → {{PRODUCT_NAME}}
-- Spec values → {{WATTAGE}}, {{LUMENS}}, etc.
-- Keep static labels as-is (e.g., "Wattage:" stays "Wattage:", only the value becomes {{WATTAGE}})
-
-## WHY TWO PHASES?
-Trying to do layout AND placeholders simultaneously produces garbage. Get the layout right first with real text, then it's trivial to swap in placeholders.
-
-## PLACEHOLDER SYNTAX (for Phase 2):
-- Simple: {{FIELD_NAME}}
-- With default: {{FIELD_NAME:Default Text}}
+## PLACEHOLDER SYNTAX
+- Text fields: {{FIELD_NAME}} or {{FIELD_NAME:Default Text}}
 - Images: xlink:href="{{ASSET_NAME}}"
-- Use SCREAMING_SNAKE_CASE
+- Use SCREAMING_SNAKE_CASE (e.g., PRODUCT_NAME, WATTAGE, LOGO_IMAGE)
+- Static labels stay as-is (e.g., "Wattage:" is static, but the value becomes {{WATTAGE}})
 
-## SVG TIPS:
+## SVG BASICS
 - US Letter = 612x792 points, A4 = 595x842 points
 - Use <defs><style> for CSS classes
-- Use code_interpreter to analyze the PDF and extract exact measurements/colors
 - Common fonts: Arial, Helvetica, sans-serif
 
-## TOOLS:
+## TOOLS
 - code_interpreter: Analyze PDFs, extract colors/measurements
+- shell: Run shell commands (e.g., for file operations, image processing)
 - write_svg: Create or completely replace SVG content
 - apply_patch: Edit SVG via unified diff (target: template.svg) - use for incremental changes
 - read_svg: Read current SVG content
 - write_template_json: Define template fields and asset slots
-- mark_complete: Finish generation (only after 5+ iterations)
+- mark_complete: Finish generation (only after 3+ iterations)
 
-## WORKFLOW:
-1. Analyze the PDF with code_interpreter - extract colors, measure element positions, read ALL text
-2. write_svg with EXACT text from PDF (Phase 1) - no placeholders except for images
+## WORKFLOW
+1. Analyze the PDF with code_interpreter - extract colors, positions, text
+2. write_svg to create the template with placeholders already in place
 3. WAIT for render comparison
-4. Review comparison carefully, use apply_patch to fix 1-2 issues at a time
-5. REPEAT steps 3-4 MULTIPLE TIMES (expect 4-8 iterations) until layout is perfect
-6. Once layout matches, apply_patch to convert text to {{PLACEHOLDERS}} (Phase 2)
-7. write_template_json to define fields
-8. WAIT for final render, verify it looks good
-9. mark_complete (only after 5+ iterations minimum)
+4. Review the rendered output, use apply_patch to fix issues
+5. REPEAT steps 3-4 until template looks good (expect 3-5 iterations)
+6. write_template_json to define fields
+7. mark_complete
 
 CRITICAL:
-- Do NOT add text placeholders until the layout matches the original
-- Do NOT call mark_complete until you've done at least 5 iterations
-- Take your time - quality matters more than speed`;
+- Do NOT call mark_complete until you've done at least 3 iterations
+- Compare carefully with the original on each iteration`;
 
 /**
  * Run the SVG template generator agent
@@ -462,10 +506,10 @@ export async function runTemplateGeneratorAgent(
         onEvent?.({ type: "tool_call", content: `Marking complete: ${message}`, toolName: "mark_complete" });
 
         // Require minimum iterations before allowing completion
-        const MIN_VERSIONS = 3; // At least 3 rendered versions before completing
+        const MIN_VERSIONS = 2; // At least 2 rendered versions before completing
         if (currentVersion < MIN_VERSIONS) {
           log.info(`mark_complete REJECTED: only ${currentVersion} versions, need ${MIN_VERSIONS}`);
-          return `ERROR: You've only completed ${currentVersion} iteration(s). This is an iterative process - you need at least ${MIN_VERSIONS} iterations to produce quality output. Keep refining the template with apply_patch. Compare carefully to the original and fix any differences.`;
+          return `ERROR: You've only completed ${currentVersion} iteration(s). You need at least ${MIN_VERSIONS} iterations. Keep refining the template with apply_patch.`;
         }
 
         isComplete = true;
@@ -473,6 +517,9 @@ export async function runTemplateGeneratorAgent(
         return "Generation marked complete.";
       },
     });
+
+    // Create shell executor for the shell tool
+    const localShell = new LocalShell();
 
     // Create agent
     const agent = new Agent({
@@ -484,6 +531,7 @@ export async function runTemplateGeneratorAgent(
       },
       tools: [
         codeInterpreterTool({ container: containerId }),
+        shellTool({ shell: localShell }),
         readSvgTool,
         applyPatchTool({ editor: svgEditor }),
         writeSvgTool,
@@ -515,7 +563,7 @@ Files in container:
 - /mnt/user/current_template.png - Current SVG template rendered as PNG
 - /mnt/user/original_screenshot.png - Screenshot of original PDF`;
     } else {
-      initialPrompt = `Create an SVG template from this PDF spec sheet using the TWO-PHASE approach.
+      initialPrompt = `Create an SVG template from this PDF spec sheet.
 
 Original filename: ${pdfFilename}${userInstructions}
 
@@ -523,31 +571,19 @@ ${pdfBuffer && pdfBuffer.length > 0 ? `Files in container:
 - /mnt/user/original.pdf - The PDF to analyze (use code_interpreter to extract colors, measure positions)
 ${pageImages[0] ? "- /mnt/user/original_screenshot.png - Screenshot of the PDF" : ""}
 
-## PHASE 1: EXACT RECREATION
-First, recreate the PDF EXACTLY - copy all text verbatim, match all colors and positions.
-Use code_interpreter to:
-- Extract exact hex colors from the PDF
-- Measure element positions and sizes
-- Read all text content
+Use code_interpreter to analyze the PDF - extract colors, positions, and text content.
+Then write_svg to create the template WITH {{PLACEHOLDERS}} for dynamic content.
 
-Then write_svg with the EXACT text from the PDF. Do NOT use placeholders yet (except for images).
+START NOW: Analyze the PDF, then create the SVG template.` : `PROMPT-ONLY MODE
+No PDF reference provided. Create a clean, production-grade SVG layout based on the user's instructions.
 
-## PHASE 2: ADD PLACEHOLDERS (later)
-Only after your SVG matches the original visually, then convert dynamic text to {{PLACEHOLDERS}}.
+Best practices:
+- Use consistent grid, spacing, and typography
+- Define CSS classes in <defs><style>
+- Use {{PLACEHOLDER}} syntax for dynamic content
+- Use xlink:href="{{ASSET_NAME}}" for image placeholders
 
-START NOW: Use code_interpreter to analyze the PDF, then write_svg with exact text content.` : `PROMPT-ONLY MODE
-There is no PDF reference. Create a clean, production-grade SVG layout that fulfills the user's instructions. Use best practices:
-- Establish a consistent grid, spacing, and typographic scale
-- Use a neutral base font (e.g., Helvetica/Arial) unless the prompt specifies otherwise
-- Define CSS classes in <defs><style> and reuse them
-- Keep vector shapes simple and editable
-- Leave image areas as rectangles with xlink:href="{{ASSET_NAME}}" if the prompt implies images
-
-Proceed with the TWO-PHASE approach adapted for prompt-only:
-1) Phase 1: produce a high-quality fixed SVG (no text placeholders yet). Focus on visual quality and layout.
-2) Phase 2: convert dynamic text to {{PLACEHOLDERS}} and write_template_json.
-
-START NOW: Design the SVG from the prompt, then write_svg.`}`;
+START NOW: Create the SVG template based on the prompt.`}`;
     }
 
     // Track last render for comparison
@@ -627,28 +663,19 @@ The current template state has been preserved. Please:
         }
         input = [{ role: "user", content: initialContent }];
       } else {
-        // Check if we're still in Phase 1 (no placeholders yet) or Phase 2
-        const hasPlaceholders = currentSvg && currentSvg.includes("{{") && !currentSvg.match(/\{\{[A-Z_]+\}\}/g)?.every(p => p.includes("IMAGE") || p.includes("LOGO") || p.includes("PHOTO"));
         const hasOriginalRef = !!pageImages[0];
 
-        const comparisonText = hasPlaceholders
-          ? `COMPARISON - Version ${currentVersion} rendered.
+        const comparisonText = `COMPARISON - Version ${currentVersion} rendered.
 
 ${hasOriginalRef ? "Left image: Original reference\nRight image: Current rendered template (V" + currentVersion + ")" : "Reference: Current rendered template (V" + currentVersion + ")"}
 
-You are in PHASE 2 (placeholders added). Review the template and refine if needed.
-Call mark_complete when satisfied with the final result.`
-          : `COMPARISON - Version ${currentVersion} rendered.
-
-${hasOriginalRef ? "Left image: Original reference\nRight image: Current rendered template (V" + currentVersion + ")" : "Reference: Current rendered template (V" + currentVersion + ")"}
-
-You are in PHASE 1 (exact recreation). Compare carefully:
+Compare carefully:
 - Does the layout match? (positions, sizes, spacing)
 - Do the colors match? (backgrounds, text colors, borders)
-- Is all the text present and in the right places?
+- Are placeholders correctly placed?
 
-If it matches well → proceed to PHASE 2: use patch_svg to convert dynamic text to {{PLACEHOLDERS}}, then call write_template_json.
-If it doesn't match → use patch_svg to fix the differences first.`;
+If template looks good → call write_template_json (if not done) and mark_complete.
+If issues remain → use apply_patch to fix them.`;
 
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const content: any[] = [

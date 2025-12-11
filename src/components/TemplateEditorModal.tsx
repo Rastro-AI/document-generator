@@ -1131,98 +1131,72 @@ export function TemplateEditorModal({
                       </div>
                     </div>
 
-                    {/* Generation traces - always visible */}
-                    <div className="flex-1 min-h-0 overflow-y-auto border border-[#e8e8ed] rounded-xl bg-[#fafafa]">
-                      <div className="p-3 space-y-2">
+                    {/* Generation traces - simplified uniform list */}
+                    <div className="flex-1 min-h-0 overflow-y-auto border border-[#e8e8ed] rounded-xl bg-white">
+                      <div className="p-3 space-y-1">
                         {generationTraces.length === 0 ? (
-                          <div className="flex items-center gap-2 text-[12px] text-[#86868b]">
-                            <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
-                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                            </svg>
+                          <div className="text-[11px] text-[#86868b] py-2">
                             Initializing...
                           </div>
                         ) : (
                           generationTraces.filter((t) => t.type !== "version").map((trace, idx) => (
-                            <div key={idx} className="text-[11px] leading-relaxed">
-                              {/* User feedback - always visible */}
+                            <div key={idx} className="text-[11px]">
+                              {/* User feedback */}
                               {trace.type === "user_feedback" && (
-                                <div className="flex items-start gap-2 bg-[#e8f4fd] p-2 rounded-lg my-1">
-                                  <svg className="w-3 h-3 flex-shrink-0 text-[#0066CC] mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                                    <path strokeLinecap="round" strokeLinejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-                                  </svg>
-                                  <span className="text-[#1d1d1f]">{trace.content}</span>
+                                <div className="py-1 text-[#1d1d1f] font-medium">
+                                  You: {trace.content}
                                 </div>
                               )}
                               {/* Reasoning - collapsible */}
                               {trace.type === "reasoning" && (
-                                <div className="bg-[#f5f5f7] rounded-lg my-1.5 border-l-2 border-[#6e6e73]">
-                                  <button
-                                    onClick={() => toggleTraceExpanded(idx)}
-                                    className="w-full flex items-center gap-2 p-2 text-left hover:bg-[#f0f0f0] rounded-lg transition-colors"
+                                <button
+                                  onClick={() => toggleTraceExpanded(idx)}
+                                  className="w-full flex items-center gap-1.5 py-1 text-left text-[#6e6e73] hover:text-[#1d1d1f]"
+                                >
+                                  <svg
+                                    className={`w-2.5 h-2.5 flex-shrink-0 transition-transform ${expandedTraces.has(idx) ? "rotate-90" : ""}`}
+                                    fill="currentColor"
+                                    viewBox="0 0 20 20"
                                   >
-                                    <svg
-                                      className={`w-2.5 h-2.5 flex-shrink-0 text-[#6e6e73] transition-transform ${expandedTraces.has(idx) ? "rotate-90" : ""}`}
-                                      fill="currentColor"
-                                      viewBox="0 0 20 20"
-                                    >
-                                      <path fillRule="evenodd" d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z" clipRule="evenodd" />
-                                    </svg>
-                                    <svg className="w-3 h-3 flex-shrink-0 text-[#6e6e73]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                                      <path strokeLinecap="round" strokeLinejoin="round" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
-                                    </svg>
-                                    <span className="text-[#6e6e73] text-[10px] font-medium">Reasoning</span>
-                                  </button>
+                                    <path fillRule="evenodd" d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z" clipRule="evenodd" />
+                                  </svg>
+                                  <span>Thinking...</span>
                                   {expandedTraces.has(idx) && (
-                                    <div className="px-2 pb-2 pt-0">
-                                      <span className="text-[#1d1d1f] whitespace-pre-wrap text-[10px]">{trace.content}</span>
-                                    </div>
+                                    <span className="ml-2 text-[10px] text-[#86868b] whitespace-pre-wrap flex-1">{trace.content.substring(0, 100)}...</span>
                                   )}
+                                </button>
+                              )}
+                              {expandedTraces.has(idx) && trace.type === "reasoning" && (
+                                <div className="pl-4 pb-1 text-[10px] text-[#6e6e73] whitespace-pre-wrap">
+                                  {trace.content}
                                 </div>
                               )}
-                              {/* Status - always visible */}
+                              {/* Status */}
                               {trace.type === "status" && (
-                                <div className="flex items-start gap-2 py-0.5">
-                                  <span className="text-[#86868b]">{trace.content}</span>
+                                <div className="py-1 text-[#86868b]">
+                                  {trace.content}
                                 </div>
                               )}
-                              {/* Tool call - show with spinner while in progress, checkmark when complete */}
-                              {trace.type === "tool_call" && (() => {
-                                // Check if next trace is the result for this tool call
-                                const nextTrace = generationTraces.filter((t) => t.type !== "version")[idx + 1];
-                                const hasResult = nextTrace?.type === "tool_result" && nextTrace?.toolName === trace.toolName;
-                                const isInProgress = !hasResult && !generationComplete;
-
-                                return (
-                                  <button
-                                    onClick={() => toggleTraceExpanded(idx)}
-                                    className="flex items-center gap-1.5 text-[#0066CC] hover:bg-[#f5f5f7] px-1.5 py-0.5 rounded transition-colors w-full text-left"
+                              {/* Tool call - collapsible */}
+                              {trace.type === "tool_call" && (
+                                <button
+                                  onClick={() => toggleTraceExpanded(idx)}
+                                  className="w-full flex items-center gap-1.5 py-1 text-left text-[#6e6e73] hover:text-[#1d1d1f]"
+                                >
+                                  <svg
+                                    className={`w-2.5 h-2.5 flex-shrink-0 transition-transform ${expandedTraces.has(idx) ? "rotate-90" : ""}`}
+                                    fill="currentColor"
+                                    viewBox="0 0 20 20"
                                   >
-                                    <svg
-                                      className={`w-2.5 h-2.5 flex-shrink-0 transition-transform ${expandedTraces.has(idx) ? "rotate-90" : ""}`}
-                                      fill="currentColor"
-                                      viewBox="0 0 20 20"
-                                    >
-                                      <path fillRule="evenodd" d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z" clipRule="evenodd" />
-                                    </svg>
-                                    {isInProgress ? (
-                                      <svg className="animate-spin w-3 h-3 flex-shrink-0" viewBox="0 0 24 24">
-                                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                                      </svg>
-                                    ) : (
-                                      <svg className="w-3 h-3 flex-shrink-0 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                                      </svg>
-                                    )}
-                                    <span className="font-mono">{trace.toolName || trace.content}</span>
-                                  </button>
-                                );
-                              })()}
-                              {/* Tool result - show inline with tool name */}
-                              {trace.type === "tool_result" && (
-                                <div className="flex items-start gap-2 pl-5 py-1 text-[#6e6e73] bg-[#f5f5f7] rounded ml-4 border-l-2 border-green-400">
-                                  <span className="font-mono text-[10px] whitespace-pre-wrap">{trace.content}</span>
+                                    <path fillRule="evenodd" d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z" clipRule="evenodd" />
+                                  </svg>
+                                  <span className="font-mono">{trace.toolName || trace.content}</span>
+                                </button>
+                              )}
+                              {/* Tool result - shown when parent tool_call is expanded */}
+                              {trace.type === "tool_result" && expandedTraces.has(idx - 1) && (
+                                <div className="pl-4 pb-1 text-[10px] text-[#6e6e73] font-mono whitespace-pre-wrap">
+                                  {trace.content}
                                 </div>
                               )}
                             </div>
@@ -1230,13 +1204,6 @@ export function TemplateEditorModal({
                         )}
                       </div>
                     </div>
-
-                    {/* Success message when complete */}
-                    {generationComplete && versions.length > 0 && (
-                      <div className="mt-3 p-3 bg-green-50 rounded-lg text-center">
-                        <p className="text-[12px] text-green-700 font-medium">Generation complete!</p>
-                      </div>
-                    )}
                   </>
                 )}
               </div>
@@ -1526,47 +1493,26 @@ export function TemplateEditorModal({
             Cancel
           </button>
 
-          {/* Accept button - shown during generation when we have at least one version */}
-          {isCreating && isGenerating && versions.length > 0 && (
-            <button
-              onClick={() => {
-                // Ensure code state has the latest version's template code
-                const latestVersion = versions[versions.length - 1];
-                if (latestVersion?.templateCode) {
-                  setCode(latestVersion.templateCode);
-                }
-                setIsGenerating(false);
-                setGenerationComplete(true);
-                setGenerationStatus("Accepted current version");
-              }}
-              className="px-4 py-2 text-[14px] font-medium text-[#1d1d1f] border border-[#d2d2d7] rounded-lg
-                        hover:bg-[#f5f5f7] transition-all duration-200"
-            >
-              Accept V{versions[versions.length - 1]?.version || 1}
-            </button>
-          )}
-
-          {/* Generate button - before generation starts */}
-          {isCreating && !generationComplete && !isGenerating && selectedPdf && (
-            <button
-              onClick={handleGenerate}
-              className="px-4 py-2 text-[14px] font-medium text-white bg-[#1d1d1f] rounded-lg
-                        hover:bg-[#424245] transition-all duration-200"
-            >
-              Generate Template
-            </button>
-          )}
-
           {/* Save button - available when we have at least one version or when editing */}
           {(!isCreating || hasAnyVersion) && (
             <button
-              onClick={handleSave}
+              onClick={() => {
+                // If generating, stop first and use latest version
+                if (isGenerating) {
+                  const latestVersion = versions[versions.length - 1];
+                  if (latestVersion?.templateCode) {
+                    setCode(latestVersion.templateCode);
+                  }
+                  cancelGeneration();
+                }
+                handleSave();
+              }}
               disabled={isSaving || !!jsonError}
               className="px-4 py-2 text-[14px] font-medium text-white bg-[#1d1d1f] rounded-lg
                         hover:bg-[#424245] disabled:opacity-40 disabled:cursor-not-allowed
                         transition-all duration-200"
             >
-              {isSaving ? "Saving..." : "Save"}
+              {isSaving ? "Saving..." : isGenerating ? `Save V${versions[versions.length - 1]?.version || 1}` : "Save"}
             </button>
           )}
         </div>
