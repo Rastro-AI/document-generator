@@ -207,83 +207,50 @@ function extractReasoningText(item: any): string | null {
  */
 const SVG_TEMPLATE_PATH = "template.svg";
 
-const SYSTEM_PROMPT = `You create SVG templates from PDF spec sheets. This is an iterative process.
+const SYSTEM_PROMPT = `You create SVG templates from PDF spec sheets.
 
-## YOUR GOAL
-Create an SVG template that:
-1. Matches the PDF layout (colors, positions, fonts, spacing)
-2. Has {{PLACEHOLDER}} fields for dynamic content
-3. Has {{ASSET_NAME}} references for images
+## GOAL
+Create an SVG template that matches the PDF layout with {{PLACEHOLDER}} fields for dynamic content.
 
 ## TEXT WRAPPING
-For multiline text that needs to wrap, you have TWO options:
-
-### Option 1: foreignObject (RECOMMENDED for wrapping text)
-Use for paragraphs or text that needs automatic wrapping:
+For multiline text, use foreignObject with a wrapping div:
 <foreignObject x="48" y="120" width="252" height="60">
-  <div xmlns="http://www.w3.org/1999/xhtml"
-       style="font-family: Arial, sans-serif; font-size: 14px; color: #000;">
-    {{DESCRIPTION:This is a long description that will wrap automatically within the width.}}
+  <div xmlns="http://www.w3.org/1999/xhtml" style="font-family: Arial; font-size: 14px; color: #000;">
+    {{DESCRIPTION:Default text that wraps automatically.}}
   </div>
 </foreignObject>
 
-### Option 2: Native SVG text with tspan (for short/single-line text)
-Use for headings, labels, or when you need precise positioning:
-<text x="48" y="140" style="font-family: Arial, sans-serif; font-size: 24px; font-weight: 700; fill: #000;">
-  {{TITLE:Product Name}}
-</text>
-
-Or for manually broken lines:
-<text x="48" y="140" style="font-family: Arial, sans-serif; font-size: 14px; fill: #000;">
-  <tspan x="48" dy="0">First line</tspan>
-  <tspan x="48" dy="18">Second line</tspan>
-</text>
-
-NOTE: Our system automatically converts foreignObject to native SVG text when exporting for Figma.
-
 ## PLACEHOLDER SYNTAX
-- Text fields: {{FIELD_NAME}} or {{FIELD_NAME:Default Text}}
+- Text: {{FIELD_NAME}} or {{FIELD_NAME:Default}}
 - Images: xlink:href="{{ASSET_NAME}}"
-- Use SCREAMING_SNAKE_CASE (e.g., PRODUCT_NAME, WATTAGE, LOGO_IMAGE)
-- Static labels stay as-is (e.g., "Wattage:" is static, but the value becomes {{WATTAGE}})
-- For image placeholders, use the <image> element with xlink:href="{{ASSET_NAME}}"
-- Note: Missing images render as bright green boxes. If user mentions these, manipulate the entire <image> element (e.g., remove it or add visibility logic), don't try to change the color
+- Use SCREAMING_SNAKE_CASE (PRODUCT_NAME, WATTAGE, LOGO_IMAGE)
+- Missing images render as bright green boxes - remove or hide the <image> element if needed
 
 ## SVG BASICS
 - US Letter = 612x792 points, A4 = 595x842 points
-- Use inline styles for best compatibility
-- Common fonts: Arial, Helvetica, sans-serif
+- Use inline styles for compatibility
+
+## FILES IN CONTAINER
+- /mnt/user/original.pdf - The source PDF to analyze
+- /mnt/user/original_screenshot.png - Screenshot of the PDF
+- /mnt/user/template.svg - Current SVG template (read/write via tools)
 
 ## TOOLS
-- code_interpreter: Analyze PDFs, extract colors/measurements
-- shell: Run shell commands (e.g., for file operations, image processing)
-- write_svg: Create or completely replace SVG content
-- apply_patch: Edit SVG via unified diff (target: template.svg) - use for incremental changes
-- read_svg: Read current SVG content
-- write_template_json: Define template fields and asset slots
-- mark_complete: Finish generation (ONLY after verifying the rendered preview)
+- code_interpreter: Analyze PDF, extract colors/measurements
+- write_svg: Create or replace SVG content (saves to template.svg)
+- apply_patch: Edit SVG via unified diff
+- read_svg: Read current template.svg
+- write_template_json: Define fields and asset slots (REQUIRED)
+- mark_complete: Finish when template matches the original
 
 ## WORKFLOW
-1. Analyze the PDF with code_interpreter - extract colors, positions, text
-2. write_svg to create the template WITH PLACEHOLDERS ALREADY IN PLACE (e.g., {{PRODUCT_NAME}}, {{WATTAGE}})
-   - Include placeholders for ALL dynamic content from the start
-   - Do NOT create a static copy first - go directly to a template with placeholders
-3. IMMEDIATELY call write_template_json to define ALL fields you used in the SVG
-   - This is REQUIRED - do not skip this step
-   - Every {{PLACEHOLDER}} in the SVG must have a corresponding field definition
-4. STOP and WAIT - the system will render your SVG and show you a comparison
-5. LOOK at the rendered output carefully, compare with the original
-6. If issues exist, use apply_patch to fix them, then WAIT for next render
-7. REPEAT until the template matches well
-8. mark_complete ONLY after you have SEEN and VERIFIED the latest render
+1. Analyze the PDF - extract colors, positions, text, layout
+2. write_svg with {{PLACEHOLDERS}} for all dynamic content
+3. write_template_json to define all fields used in the SVG
+4. Review the rendered output, use apply_patch to fix issues
+5. mark_complete ONLY when the rendered output matches the original
 
-CRITICAL RULES:
-- After ANY SVG change, STOP and WAIT for the render comparison before continuing
-- NEVER call mark_complete in the same turn as write_svg or apply_patch
-- You MUST see the rendered preview image before marking complete
-- If you haven't seen a preview of your latest changes, DO NOT mark complete
-- Be careful with text wrapping - use foreignObject for text that needs to wrap within a container
-- Always try to follow user instructions even if it deviates from the template`;
+Always follow user instructions even if they deviate from the original.`;
 
 /**
  * Run the SVG template generator agent
@@ -407,6 +374,21 @@ export async function runTemplateGeneratorAgent(
       },
     });
 
+    // Helper to upload SVG to container so shell commands can access it
+    const uploadSvgToContainer = async (svg: string) => {
+      if (!containerId) return;
+      try {
+        const svgPath = path.join(os.tmpdir(), "template.svg");
+        fsSync.writeFileSync(svgPath, svg);
+        const svgStream = fsSync.createReadStream(svgPath);
+        await openai.containers.files.create(containerId, { file: svgStream });
+        fsSync.unlinkSync(svgPath);
+        log.info("SVG uploaded to container as template.svg");
+      } catch (err) {
+        log.error("Failed to upload SVG to container", err);
+      }
+    };
+
     // Create an in-memory editor for apply_patch
     const svgEditor: Editor = {
       async createFile(operation: CreateFileOperation): Promise<ApplyPatchResult> {
@@ -418,6 +400,7 @@ export async function runTemplateGeneratorAgent(
           const newContent = applyDiff("", operation.diff, "create");
           currentSvg = newContent;
           log.info(`apply_patch:create - Created SVG (${newContent.length} chars)`);
+          await uploadSvgToContainer(newContent);
           return { status: "completed", output: `Created ${SVG_TEMPLATE_PATH}. Will render after all tool calls complete.` };
         } catch (error) {
           log.error(`apply_patch:create failed`, error);
@@ -437,6 +420,7 @@ export async function runTemplateGeneratorAgent(
           const newContent = applyDiff(currentSvg, operation.diff);
           currentSvg = newContent;
           log.info(`apply_patch:update - Updated SVG (${newContent.length} chars)`);
+          await uploadSvgToContainer(newContent);
           onEvent?.({ type: "tool_result", content: "SVG patched successfully", toolName: "apply_patch" });
           return { status: "completed", output: `Updated ${SVG_TEMPLATE_PATH}. Will render after all tool calls complete.` };
         } catch (error) {
@@ -460,7 +444,8 @@ export async function runTemplateGeneratorAgent(
         onEvent?.({ type: "tool_call", content: "Writing SVG template", toolName: "write_svg" });
         currentSvg = svg;
         log.info(`write_svg: ${svg.length} chars`);
-        return "SVG template written. Will render after all tool calls complete.";
+        await uploadSvgToContainer(svg);
+        return "SVG template written to /mnt/user/template.svg. Will render after all tool calls complete.";
       },
     });
 

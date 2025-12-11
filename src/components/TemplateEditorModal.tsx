@@ -363,7 +363,7 @@ export function TemplateEditorModal({
       // Send feedback with current state to continue generation
       const formData = new FormData();
       formData.append("pdf", selectedPdf);
-      formData.append("reasoning", "low");
+      formData.append("reasoning", "none");
       formData.append("feedback", feedbackText);
       formData.append("currentCode", code);
       formData.append("currentJson", jsonText);
@@ -523,7 +523,7 @@ export function TemplateEditorModal({
         }
       }
 
-      formData.append("reasoning", "low"); // Enable reasoning for better quality
+      formData.append("reasoning", "none"); // Enable reasoning for better quality
 
       const response = await fetch("/api/templates/generate", {
         method: "POST",
