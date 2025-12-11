@@ -9,7 +9,15 @@ import {
   run,
   tool,
   setDefaultModelProvider,
+  applyPatchTool,
+  applyDiff,
 } from "@openai/agents-core";
+import type { Editor, ApplyPatchResult } from "@openai/agents-core";
+
+// Local types for apply_patch operations
+type CreateFileOperation = { type: "create_file"; path: string; diff: string };
+type UpdateFileOperation = { type: "update_file"; path: string; diff: string };
+type DeleteFileOperation = { type: "delete_file"; path: string };
 import { OpenAIProvider, codeInterpreterTool } from "@openai/agents-openai";
 import { z } from "zod";
 import OpenAI from "openai";
@@ -133,6 +141,11 @@ function extractReasoningText(item: any): string | null {
   return null;
 }
 
+/**
+ * Virtual file path for the SVG template in apply_patch operations
+ */
+const SVG_TEMPLATE_PATH = "template.svg";
+
 const SYSTEM_PROMPT = `You create SVG templates from PDF spec sheets using a TWO-PHASE approach.
 
 THIS IS AN ITERATIVE PROCESS. Expect to take 5-10+ iterations to get it right. Do NOT rush to mark_complete.
@@ -144,7 +157,7 @@ First, recreate the PDF EXACTLY as it appears - same text, same colors, same lay
 - Match positions, font sizes, spacing exactly
 - For images: use placeholder rectangles with {{IMAGE_NAME}} as the xlink:href
 - ITERATE MULTIPLE TIMES until your SVG looks nearly identical to the original PDF
-- Each iteration: compare carefully, identify ONE OR TWO issues, fix them with patch_svg
+- Each iteration: compare carefully, identify ONE OR TWO issues, fix them with apply_patch
 
 ## PHASE 2: ADD PLACEHOLDERS (only after Phase 1 is perfect) - 2-3 more iterations
 Once your recreation matches the original, THEN convert dynamic text to placeholders:
@@ -167,13 +180,21 @@ Trying to do layout AND placeholders simultaneously produces garbage. Get the la
 - Use code_interpreter to analyze the PDF and extract exact measurements/colors
 - Common fonts: Arial, Helvetica, sans-serif
 
+## TOOLS:
+- code_interpreter: Analyze PDFs, extract colors/measurements
+- write_svg: Create or completely replace SVG content
+- apply_patch: Edit SVG via unified diff (target: template.svg) - use for incremental changes
+- read_svg: Read current SVG content
+- write_template_json: Define template fields and asset slots
+- mark_complete: Finish generation (only after 5+ iterations)
+
 ## WORKFLOW:
 1. Analyze the PDF with code_interpreter - extract colors, measure element positions, read ALL text
 2. write_svg with EXACT text from PDF (Phase 1) - no placeholders except for images
 3. WAIT for render comparison
-4. Review comparison carefully, use patch_svg to fix 1-2 issues at a time
+4. Review comparison carefully, use apply_patch to fix 1-2 issues at a time
 5. REPEAT steps 3-4 MULTIPLE TIMES (expect 4-8 iterations) until layout is perfect
-6. Once layout matches, patch_svg to convert text to {{PLACEHOLDERS}} (Phase 2)
+6. Once layout matches, apply_patch to convert text to {{PLACEHOLDERS}} (Phase 2)
 7. write_template_json to define fields
 8. WAIT for final render, verify it looks good
 9. mark_complete (only after 5+ iterations minimum)
@@ -305,43 +326,48 @@ export async function runTemplateGeneratorAgent(
       },
     });
 
-    const patchSvgTool = tool({
-      name: "patch_svg",
-      description: "Edit the SVG template using search/replace operations. Use this to add {{PLACEHOLDER}} syntax.",
-      parameters: z.object({
-        operations: z.array(z.object({
-          search: z.string().describe("Exact string to find in the SVG"),
-          replace: z.string().describe("String to replace it with (use {{FIELD_NAME}} for placeholders)"),
-        })).describe("Array of search/replace operations"),
-      }),
-      execute: async ({ operations }) => {
-        onEvent?.({ type: "tool_call", content: `Patching SVG (${operations.length} operations)`, toolName: "patch_svg" });
-        log.info(`patch_svg: ${operations.length} operations`);
-
-        if (!currentSvg) {
-          return "Error: No SVG content to patch";
+    // Create an in-memory editor for apply_patch
+    const svgEditor: Editor = {
+      async createFile(operation: CreateFileOperation): Promise<ApplyPatchResult> {
+        if (operation.path !== SVG_TEMPLATE_PATH) {
+          return { status: "failed", output: `Only ${SVG_TEMPLATE_PATH} can be edited` };
         }
-
-        const results: string[] = [];
-        let allSucceeded = true;
-
-        for (const op of operations) {
-          if (!currentSvg.includes(op.search)) {
-            results.push(`NOT FOUND: "${op.search.substring(0, 50)}..."`);
-            allSucceeded = false;
-            log.error(`Patch NOT FOUND: "${op.search.substring(0, 80)}..."`);
-          } else {
-            currentSvg = currentSvg.replace(op.search, op.replace);
-            results.push(`OK: replaced "${op.search.substring(0, 30)}..."`);
-            log.info(`Patch OK: "${op.search.substring(0, 50)}..." -> "${op.replace.substring(0, 50)}..."`);
-          }
+        onEvent?.({ type: "tool_call", content: "Creating SVG template", toolName: "apply_patch" });
+        try {
+          const newContent = applyDiff("", operation.diff, "create");
+          currentSvg = newContent;
+          log.info(`apply_patch:create - Created SVG (${newContent.length} chars)`);
+          return { status: "completed", output: `Created ${SVG_TEMPLATE_PATH}. Will render after all tool calls complete.` };
+        } catch (error) {
+          log.error(`apply_patch:create failed`, error);
+          return { status: "failed", output: String(error) };
         }
-
-        const resultStr = `Patches: ${results.join("; ")}`;
-        onEvent?.({ type: "tool_result", content: resultStr, toolName: "patch_svg" });
-        return resultStr + (allSucceeded ? " Will render." : "");
       },
-    });
+
+      async updateFile(operation: UpdateFileOperation): Promise<ApplyPatchResult> {
+        if (operation.path !== SVG_TEMPLATE_PATH) {
+          return { status: "failed", output: `Only ${SVG_TEMPLATE_PATH} can be edited` };
+        }
+        if (!currentSvg) {
+          return { status: "failed", output: "No SVG content to patch. Use write_svg first." };
+        }
+        onEvent?.({ type: "tool_call", content: "Patching SVG template", toolName: "apply_patch" });
+        try {
+          const newContent = applyDiff(currentSvg, operation.diff);
+          currentSvg = newContent;
+          log.info(`apply_patch:update - Updated SVG (${newContent.length} chars)`);
+          onEvent?.({ type: "tool_result", content: "SVG patched successfully", toolName: "apply_patch" });
+          return { status: "completed", output: `Updated ${SVG_TEMPLATE_PATH}. Will render after all tool calls complete.` };
+        } catch (error) {
+          log.error(`apply_patch:update failed`, error);
+          return { status: "failed", output: String(error) };
+        }
+      },
+
+      async deleteFile(operation: DeleteFileOperation): Promise<ApplyPatchResult> {
+        return { status: "failed", output: `Cannot delete ${operation.path}` };
+      },
+    };
 
     const writeSvgTool = tool({
       name: "write_svg",
@@ -439,7 +465,7 @@ export async function runTemplateGeneratorAgent(
         const MIN_VERSIONS = 3; // At least 3 rendered versions before completing
         if (currentVersion < MIN_VERSIONS) {
           log.info(`mark_complete REJECTED: only ${currentVersion} versions, need ${MIN_VERSIONS}`);
-          return `ERROR: You've only completed ${currentVersion} iteration(s). This is an iterative process - you need at least ${MIN_VERSIONS} iterations to produce quality output. Keep refining the template with patch_svg. Compare carefully to the original and fix any differences.`;
+          return `ERROR: You've only completed ${currentVersion} iteration(s). This is an iterative process - you need at least ${MIN_VERSIONS} iterations to produce quality output. Keep refining the template with apply_patch. Compare carefully to the original and fix any differences.`;
         }
 
         isComplete = true;
@@ -459,7 +485,7 @@ export async function runTemplateGeneratorAgent(
       tools: [
         codeInterpreterTool({ container: containerId }),
         readSvgTool,
-        patchSvgTool,
+        applyPatchTool({ editor: svgEditor }),
         writeSvgTool,
         writeTemplateJsonTool,
         markCompleteTool,
@@ -478,7 +504,7 @@ ${feedback}
 
 STEPS:
 1. Call read_svg to see the current SVG template
-2. Make the requested changes using patch_svg
+2. Make the requested changes using apply_patch
 3. Update write_template_json if fields changed
 4. Review the rendered output
 

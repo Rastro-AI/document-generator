@@ -9,7 +9,15 @@ import {
   run,
   tool,
   setDefaultModelProvider,
+  applyPatchTool,
+  applyDiff,
 } from "@openai/agents-core";
+import type { Editor, ApplyPatchResult } from "@openai/agents-core";
+
+// Local types for apply_patch operations
+type CreateFileOperation = { type: "create_file"; path: string; diff: string };
+type UpdateFileOperation = { type: "update_file"; path: string; diff: string };
+type DeleteFileOperation = { type: "delete_file"; path: string };
 import { OpenAIProvider } from "@openai/agents-openai";
 import { z } from "zod";
 import { getTemplateSvgPath } from "@/lib/paths";
@@ -52,7 +60,7 @@ ENVIRONMENT:
 TOOLS:
 - update_fields: Change text content. Pass JSON {"FIELD_NAME": "value"}.
 - update_assets: Assign images to slots. Pass JSON {"SLOT_NAME": "filename.jpg"}.
-- patch_svg: Edit SVG design via search/replace. Search string must match EXACTLY from the template.
+- apply_patch: Edit SVG design via V4A unified diff format. Target file is always "template.svg".
 - render_preview: Render and view current state. Use after design changes to verify.
 `.trim();
 
@@ -89,87 +97,74 @@ let sessionAssetsChanged = false;
 let currentSvgContent = "";
 
 /**
- * Create patch_svg tool - diff-based editing for speed
+ * Virtual file path for the SVG template in apply_patch operations
  */
-function createPatchSvgTool(jobId: string, onEvent?: AgentEventCallback) {
-  return tool({
-    name: "patch_svg",
-    description: "Edit SVG template using search/replace operations. Provide one or more operations to find and replace exact strings in the template.",
-    parameters: z.object({
-      operations: z.array(z.object({
-        search: z.string().describe("Exact string to find in the SVG (must match exactly including whitespace)"),
-        replace: z.string().describe("String to replace it with"),
-      })).describe("Array of search/replace operations to apply"),
-    }),
-    execute: async ({ operations }) => {
-      onEvent?.({ type: "status", content: "Applying changes..." });
-      try {
-        let content = currentSvgContent;
-        const results: string[] = [];
-
-        for (const op of operations) {
-          if (!content.includes(op.search)) {
-            results.push(`NOT FOUND: "${op.search.substring(0, 50)}..."`);
-            continue;
-          }
-          content = content.replace(op.search, op.replace);
-          results.push(`OK: replaced "${op.search.substring(0, 30)}..."`);
-        }
-
-        // Save the updated content to Supabase Storage
-        await updateJobSvgContent(jobId, content);
-        currentSvgContent = content;
-        sessionTemplateChanged = true;
-
-        // Log for debugging
-        const titleFontMatch = content.match(/\.title-main\s*\{[^}]*font-size:\s*([^;]+)/);
-        console.log(`[patch_svg] Job ${jobId} - Saved SVG (${content.length} chars), title font-size: ${titleFontMatch ? titleFontMatch[1] : 'NOT FOUND'}`);
-
-        onEvent?.({ type: "status", content: "SVG template updated" });
-
-        return JSON.stringify({ success: true, results });
-      } catch (error) {
-        return JSON.stringify({ error: String(error) });
-      }
-    },
-  });
-}
+const SVG_TEMPLATE_PATH = "template.svg";
 
 /**
- * Create replace_svg tool - full replacement for major changes
+ * Create an in-memory SVG editor for the apply_patch tool
+ * This implements the Editor interface from @openai/agents-core
  */
-function createReplaceSvgTool(jobId: string, onEvent?: AgentEventCallback) {
-  return tool({
-    name: "replace_svg",
-    description: "Replace the entire SVG template with new content. Use this for major restructuring or when patch_svg would require too many operations.",
-    parameters: z.object({
-      svg_content: z.string().describe("The complete new SVG content. Must be valid SVG with {{PLACEHOLDER}} syntax preserved."),
-    }),
-    execute: async ({ svg_content }) => {
-      onEvent?.({ type: "status", content: "Replacing SVG template..." });
+function createSvgEditor(
+  jobId: string,
+  onEvent?: AgentEventCallback
+): Editor {
+  return {
+    async createFile(operation: CreateFileOperation): Promise<ApplyPatchResult> {
+      // For SVG editing, we treat "create" as setting the initial content
+      if (operation.path !== SVG_TEMPLATE_PATH) {
+        return { status: "failed", output: `Only ${SVG_TEMPLATE_PATH} can be edited` };
+      }
+
+      onEvent?.({ type: "status", content: "Creating SVG template..." });
       try {
+        const newContent = applyDiff("", operation.diff, "create");
+
         // Basic validation
-        if (!svg_content.includes("<svg") || !svg_content.includes("</svg>")) {
-          return JSON.stringify({ error: "Invalid SVG: must contain <svg> tags" });
+        if (!newContent.includes("<svg") || !newContent.includes("</svg>")) {
+          return { status: "failed", output: "Invalid SVG: must contain <svg> tags" };
         }
 
-        // Save the new content to Supabase Storage
-        await updateJobSvgContent(jobId, svg_content);
-        currentSvgContent = svg_content;
+        await updateJobSvgContent(jobId, newContent);
+        currentSvgContent = newContent;
         sessionTemplateChanged = true;
 
-        // Log for debugging
-        const titleFontMatch = svg_content.match(/\.title-main\s*\{[^}]*font-size:\s*([^;]+)/);
-        console.log(`[replace_svg] Job ${jobId} - Saved SVG (${svg_content.length} chars), title font-size: ${titleFontMatch ? titleFontMatch[1] : 'NOT FOUND'}`);
+        console.log(`[apply_patch:create] Job ${jobId} - Created SVG (${newContent.length} chars)`);
+        onEvent?.({ type: "status", content: "SVG template created" });
 
-        onEvent?.({ type: "status", content: "SVG template replaced" });
-
-        return JSON.stringify({ success: true, message: "SVG template replaced successfully" });
+        return { status: "completed", output: `Created ${SVG_TEMPLATE_PATH}` };
       } catch (error) {
-        return JSON.stringify({ error: String(error) });
+        return { status: "failed", output: String(error) };
       }
     },
-  });
+
+    async updateFile(operation: UpdateFileOperation): Promise<ApplyPatchResult> {
+      if (operation.path !== SVG_TEMPLATE_PATH) {
+        return { status: "failed", output: `Only ${SVG_TEMPLATE_PATH} can be edited` };
+      }
+
+      onEvent?.({ type: "status", content: "Updating SVG template..." });
+      try {
+        const newContent = applyDiff(currentSvgContent, operation.diff);
+
+        await updateJobSvgContent(jobId, newContent);
+        currentSvgContent = newContent;
+        sessionTemplateChanged = true;
+
+        console.log(`[apply_patch:update] Job ${jobId} - Updated SVG (${newContent.length} chars)`);
+        onEvent?.({ type: "status", content: "SVG template updated" });
+
+        return { status: "completed", output: `Updated ${SVG_TEMPLATE_PATH}` };
+      } catch (error) {
+        return { status: "failed", output: String(error) };
+      }
+    },
+
+    async deleteFile(operation: DeleteFileOperation): Promise<ApplyPatchResult> {
+      // We don't support deleting the SVG template
+      return { status: "failed", output: `Cannot delete ${operation.path}` };
+    },
+  };
 }
 
 /**
@@ -492,8 +487,7 @@ export async function runTemplateAgent(
   timing.start("create_tools");
   const updateFieldsTool = createUpdateFieldsTool(currentFields, templateFields, onEvent);
   const updateAssetsTool = createUpdateAssetsTool(jobId, liveAssets, uploadedFiles, onEvent);
-  const patchSvgTool = createPatchSvgTool(jobId, onEvent);
-  const replaceSvgTool = createReplaceSvgTool(jobId, onEvent);
+  const svgEditor = createSvgEditor(jobId, onEvent);
   const renderPreviewTool = createRenderPreviewTool(
     jobId,
     () => liveFields,
@@ -510,7 +504,7 @@ export async function runTemplateAgent(
     modelSettings: {
       reasoning: { effort: reasoning },
     },
-    tools: [updateFieldsTool, updateAssetsTool, patchSvgTool, replaceSvgTool, renderPreviewTool],
+    tools: [updateFieldsTool, updateAssetsTool, applyPatchTool({ editor: svgEditor }), renderPreviewTool],
   });
   timing.end();
 
@@ -682,18 +676,12 @@ Request: ${userMessage}`;
 const CODE_TWEAK_INSTRUCTIONS = `
 You are an SVG template editor. Edit SVG templates that use {{PLACEHOLDER}} syntax.
 
-The current SVG template is provided in the user message. Make changes using the patch_svg tool with search/replace operations.
+The current SVG template is provided in the user message. Make changes using the apply_patch tool with V4A unified diff format.
 
 WORKFLOW:
 1. Analyze the SVG template provided
-2. Use patch_svg with one or more search/replace operations to make the requested changes
+2. Use apply_patch with a unified diff to make the requested changes (target file: template.svg)
 3. Respond with a brief summary of what you changed
-
-RULES FOR patch_svg:
-- Each operation finds an exact string and replaces it
-- The "search" string must match EXACTLY (including whitespace/indentation)
-- Keep changes minimal - only modify what's needed
-- Preserve {{FIELD_NAME}} placeholder syntax
 
 SVG TEMPLATE RULES:
 - Placeholders use {{FIELD_NAME}} syntax
@@ -719,34 +707,43 @@ export async function runCodeTweakAgent(
   let currentCode = code;
   let codeChanged = false;
 
-  // Create patch_svg tool for in-memory edits
-  const patchSvgTool = tool({
-    name: "patch_svg",
-    description: "Edit SVG template using search/replace operations.",
-    parameters: z.object({
-      operations: z.array(z.object({
-        search: z.string().describe("Exact string to find in the SVG"),
-        replace: z.string().describe("String to replace it with"),
-      })).describe("Array of search/replace operations"),
-    }),
-    execute: async ({ operations }) => {
-      onEvent?.({ type: "status", content: "Applying changes..." });
-      const results: string[] = [];
-
-      for (const op of operations) {
-        if (!currentCode.includes(op.search)) {
-          results.push(`NOT FOUND: "${op.search.substring(0, 50)}..."`);
-          continue;
-        }
-        currentCode = currentCode.replace(op.search, op.replace);
-        results.push(`OK: replaced "${op.search.substring(0, 30)}..."`);
-        codeChanged = true;
+  // Create an in-memory editor for the code tweak agent
+  const codeTweakEditor: Editor = {
+    async createFile(operation: CreateFileOperation): Promise<ApplyPatchResult> {
+      if (operation.path !== SVG_TEMPLATE_PATH) {
+        return { status: "failed", output: `Only ${SVG_TEMPLATE_PATH} can be edited` };
       }
-
-      onEvent?.({ type: "status", content: "SVG updated" });
-      return JSON.stringify({ success: true, results });
+      onEvent?.({ type: "status", content: "Creating SVG..." });
+      try {
+        const newContent = applyDiff("", operation.diff, "create");
+        currentCode = newContent;
+        codeChanged = true;
+        return { status: "completed", output: `Created ${SVG_TEMPLATE_PATH}` };
+      } catch (error) {
+        return { status: "failed", output: String(error) };
+      }
     },
-  });
+
+    async updateFile(operation: UpdateFileOperation): Promise<ApplyPatchResult> {
+      if (operation.path !== SVG_TEMPLATE_PATH) {
+        return { status: "failed", output: `Only ${SVG_TEMPLATE_PATH} can be edited` };
+      }
+      onEvent?.({ type: "status", content: "Applying changes..." });
+      try {
+        const newContent = applyDiff(currentCode, operation.diff);
+        currentCode = newContent;
+        codeChanged = true;
+        onEvent?.({ type: "status", content: "SVG updated" });
+        return { status: "completed", output: `Updated ${SVG_TEMPLATE_PATH}` };
+      } catch (error) {
+        return { status: "failed", output: String(error) };
+      }
+    },
+
+    async deleteFile(operation: DeleteFileOperation): Promise<ApplyPatchResult> {
+      return { status: "failed", output: `Cannot delete ${operation.path}` };
+    },
+  };
 
   // Create agent
   const agent = new Agent({
@@ -756,7 +753,7 @@ export async function runCodeTweakAgent(
     modelSettings: {
       reasoning: { effort: "none" },
     },
-    tools: [patchSvgTool],
+    tools: [applyPatchTool({ editor: codeTweakEditor })],
   });
 
   try {
