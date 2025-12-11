@@ -1472,7 +1472,7 @@ export function TemplateEditorModal({
             </h2>
             {isCreating && (
               <p className="text-[12px] text-[#86868b] mt-0.5">
-                If you passed something to copy, the agent first recreates it before adding template fields
+                The agent will generate an editable template with placeholder fields from your reference
               </p>
             )}
           </div>
