@@ -1,16 +1,29 @@
 import { NextRequest } from "next/server";
 import { v4 as uuidv4 } from "uuid";
-import { createJob, getTemplate, saveUploadedFile, saveAssetFile, copyTemplateToJob } from "@/lib/fs-utils";
-import { extractFieldsAndAssetsFromFiles } from "@/lib/llm";
+import {
+  createJob,
+  getJob,
+  getTemplate,
+  saveUploadedFile,
+  saveAssetFile,
+  copyTemplateToJob,
+  copySvgTemplateToJob,
+  listAssetBankFiles,
+  getAssetBankFile,
+  markJobRendered,
+  getJobSvgContent,
+  saveJobOutputPdf,
+  updateJobFields as updateJobFieldsInDb,
+} from "@/lib/fs-utils";
 import { Job, UploadedFile } from "@/lib/types";
-import { getJobInputPath, getJobAssetPath, ASSET_BANK_DIR, ensureBaseDirs } from "@/lib/paths";
-import { promises as fs } from "fs";
-import path from "path";
+import { runTemplateAgent } from "@/lib/agents/template-agent";
+import { renderSVGTemplate, prepareAssets, svgToPdf } from "@/lib/svg-template-renderer";
+import { getAssetFile, getAssetBankFile as getAssetBankFileBuffer } from "@/lib/fs-utils";
 
 export const runtime = "nodejs";
 
 function isImageFile(filename: string): boolean {
-  const imageExtensions = [".png", ".jpg", ".jpeg", ".gif", ".webp"];
+  const imageExtensions = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"];
   const ext = filename.toLowerCase().slice(filename.lastIndexOf("."));
   return imageExtensions.includes(ext);
 }
@@ -67,17 +80,14 @@ export async function POST(request: NextRequest) {
         assets[slot.name] = null;
       }
 
-      let initialMessage = "I've created a new document. You can edit the field values on the left, or ask me to make changes.";
       const uploadedFiles: UploadedFile[] = [];
 
-      // Always include all asset bank files in the job context
-      // This ensures certification logos and other reusable assets are available
-      ensureBaseDirs();
+      // Get all asset bank files from Supabase storage
       let allAssetBankFiles: string[] = [];
       try {
-        allAssetBankFiles = await fs.readdir(ASSET_BANK_DIR);
+        allAssetBankFiles = await listAssetBankFiles();
       } catch {
-        // Assets directory may not exist or be empty
+        // Assets may not exist or storage not configured
       }
 
       // Merge explicitly selected assets with all asset bank files
@@ -88,14 +98,16 @@ export async function POST(request: NextRequest) {
         const now = new Date().toISOString();
         for (const assetId of allAssetIds) {
           try {
-            const assetPath = path.join(ASSET_BANK_DIR, assetId);
-            const buffer = await fs.readFile(assetPath);
+            const buffer = await getAssetBankFile(assetId);
+            if (!buffer) continue;
+
+            const storagePath = `${jobId}/assets/${assetId}`;
 
             if (isImageFile(assetId)) {
               await saveAssetFile(jobId, assetId, buffer);
               uploadedFiles.push({
                 filename: assetId,
-                path: getJobAssetPath(jobId, assetId),
+                path: storagePath,
                 type: "image",
                 uploadedAt: now,
               });
@@ -103,7 +115,7 @@ export async function POST(request: NextRequest) {
               await saveUploadedFile(jobId, assetId, buffer);
               uploadedFiles.push({
                 filename: assetId,
-                path: getJobInputPath(jobId, assetId),
+                path: `${jobId}/${assetId}`,
                 type: "document",
                 uploadedAt: now,
               });
@@ -111,18 +123,6 @@ export async function POST(request: NextRequest) {
           } catch (err) {
             console.error(`Failed to copy asset ${assetId}:`, err);
           }
-        }
-      }
-
-      // Prepare file lists for extraction
-      const documentFiles: { path: string; filename: string }[] = [];
-      const imageFiles: { path: string; filename: string }[] = [];
-
-      for (const uf of uploadedFiles) {
-        if (uf.type === "image") {
-          imageFiles.push({ path: uf.path, filename: uf.filename });
-        } else {
-          documentFiles.push({ path: uf.path, filename: uf.filename });
         }
       }
 
@@ -134,24 +134,23 @@ export async function POST(request: NextRequest) {
         for (const file of files) {
           const buffer = Buffer.from(await file.arrayBuffer());
           const filename = file.name || "input";
+          const storagePath = isImageFile(filename)
+            ? `${jobId}/assets/${filename}`
+            : `${jobId}/${filename}`;
 
           if (isImageFile(filename)) {
             await saveAssetFile(jobId, filename, buffer);
-            const assetPath = getJobAssetPath(jobId, filename);
-            imageFiles.push({ path: assetPath, filename });
             uploadedFiles.push({
               filename,
-              path: assetPath,
+              path: storagePath,
               type: "image",
               uploadedAt: now,
             });
           } else {
             await saveUploadedFile(jobId, filename, buffer);
-            const filePath = getJobInputPath(jobId, filename);
-            documentFiles.push({ path: filePath, filename });
             uploadedFiles.push({
               filename,
-              path: filePath,
+              path: storagePath,
               type: "document",
               uploadedAt: now,
             });
@@ -159,79 +158,104 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      // Extract fields and assign assets using LLM
-      let extractedCount = 0;
-      if (documentFiles.length > 0 || imageFiles.length > 0) {
-        const extractionResult = await extractFieldsAndAssetsFromFiles(
-          template,
-          documentFiles,
-          imageFiles,
-          prompt || undefined,
-          // Event callback for real-time updates
-          (event) => {
-            sendEvent("trace", event);
-          },
-          reasoning
-        );
-
-        // Merge extracted fields
-        extractedCount = Object.entries(extractionResult.fields).filter(([, v]) => v !== null).length;
-        for (const [key, value] of Object.entries(extractionResult.fields)) {
-          if (value !== null) {
-            fields[key] = value;
-          }
-        }
-
-        // Merge assigned assets
-        for (const [key, value] of Object.entries(extractionResult.assets)) {
-          if (value !== null) {
-            assets[key] = value;
-          }
-        }
-
-        // Generate a descriptive initial message
-        const totalFiles = documentFiles.length + imageFiles.length;
-        const imageCount = imageFiles.length;
-
-        if (extractedCount > 0 || Object.values(assets).some(v => v !== null)) {
-          const parts = [];
-          if (extractedCount > 0) parts.push(`extracted ${extractedCount} fields`);
-          if (imageCount > 0) parts.push(`assigned ${imageCount} image${imageCount > 1 ? "s" : ""} to the template`);
-
-          initialMessage = `I've ${parts.join(" and ")} from your ${totalFiles} file${totalFiles > 1 ? "s" : ""}. The spec sheet is ready for preview. Feel free to edit any values or ask me to make changes.`;
-        } else {
-          initialMessage = `I've processed ${totalFiles} file${totalFiles > 1 ? "s" : ""} but couldn't extract specific data. Please fill in the values manually or provide more guidance.`;
-        }
-      }
-
-      sendEvent("trace", { type: "status", content: "Finalizing job..." });
-
-      // Create initial history entry
+      // Create the job first so the agent can access it
+      sendEvent("trace", { type: "status", content: "Setting up document..." });
       const historyId = uuidv4();
       const now = new Date().toISOString();
 
-      // Create the job
       const job: Job = {
         id: jobId,
         templateId,
         fields,
         assets,
         createdAt: now,
-        initialMessage,
+        initialMessage: "Processing...",
         uploadedFiles,
         history: [{
           id: historyId,
           fields: { ...fields },
           assets: { ...assets },
           timestamp: now,
-          description: "Initial extraction",
+          description: "Initial state",
         }],
       };
 
       await createJob(job);
-      await copyTemplateToJob(templateId, jobId);
 
-      sendEvent("result", { jobId, job });
+      // Copy template files to job storage
+      await copyTemplateToJob(templateId, jobId);
+      await copySvgTemplateToJob(templateId, jobId);
+
+      // Build the agent prompt
+      const hasFiles = uploadedFiles.length > 0;
+      const agentPrompt = prompt
+        ? prompt
+        : hasFiles
+          ? "Extract data from the uploaded files, fill in the template fields, assign images to asset slots, and verify the output looks good."
+          : "Fill in the template with appropriate placeholder values and verify the output looks good.";
+
+      // Run the unified template agent
+      sendEvent("trace", { type: "status", content: "Processing..." });
+
+      const agentResult = await runTemplateAgent(
+        jobId,
+        templateId,
+        agentPrompt,
+        fields,
+        template.fields,
+        [], // No previous history
+        (trace) => sendEvent("trace", trace),
+        reasoning
+      );
+
+      // Re-fetch the updated job
+      let finalJob = await getJob(jobId);
+
+      // Update initialMessage
+      if (finalJob) {
+        finalJob.initialMessage = agentResult.message || "Document is ready for review.";
+      }
+
+      // Render the final PDF so it's ready immediately
+      sendEvent("trace", { type: "status", content: "Generating PDF..." });
+      try {
+        const svgContent = await getJobSvgContent(jobId);
+        if (svgContent && finalJob) {
+          // Prepare assets as data URLs
+          const assetDataUrls: Record<string, string | null> = {};
+          for (const [key, value] of Object.entries(finalJob.assets || {})) {
+            if (value) {
+              try {
+                const assetFilename = value.includes("/") ? value.split("/").pop()! : value;
+                let imageBuffer: Buffer | null = await getAssetFile(jobId, assetFilename);
+                if (!imageBuffer) imageBuffer = await getAssetBankFileBuffer(assetFilename);
+                if (imageBuffer) {
+                  const ext = assetFilename.split(".").pop()?.toLowerCase() || "png";
+                  const mimeTypes: Record<string, string> = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", svg: "image/svg+xml" };
+                  assetDataUrls[key] = `data:${mimeTypes[ext] || "application/octet-stream"};base64,${imageBuffer.toString("base64")}`;
+                } else {
+                  assetDataUrls[key] = null;
+                }
+              } catch {
+                assetDataUrls[key] = null;
+              }
+            } else {
+              assetDataUrls[key] = null;
+            }
+          }
+
+          const preparedAssets = await prepareAssets(assetDataUrls);
+          const renderedSvg = renderSVGTemplate(svgContent, finalJob.fields, preparedAssets);
+          const pdfBuffer = await svgToPdf(renderedSvg);
+          await saveJobOutputPdf(jobId, pdfBuffer);
+          finalJob = await markJobRendered(jobId) || finalJob;
+          console.log(`[JobStream] PDF rendered for job ${jobId}, renderedAt: ${finalJob?.renderedAt}`);
+        }
+      } catch (err) {
+        console.error("[JobStream] Failed to render PDF:", err);
+      }
+
+      sendEvent("result", { jobId, job: finalJob });
       sendEvent("done", {});
     } catch (error) {
       console.error("Error creating job:", error);

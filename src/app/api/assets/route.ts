@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { promises as fs } from "fs";
 import path from "path";
-import { ASSET_BANK_DIR, ensureBaseDirs } from "@/lib/paths";
+import {
+  listAssetBankFiles,
+  uploadAssetBankFile,
+  getAssetBankFile,
+} from "@/lib/fs-utils";
 
 export interface Asset {
   id: string;
@@ -14,31 +17,28 @@ export interface Asset {
 // GET /api/assets - List all assets
 export async function GET() {
   try {
-    ensureBaseDirs();
-
-    const files = await fs.readdir(ASSET_BANK_DIR);
+    const files = await listAssetBankFiles();
     const assets: Asset[] = [];
 
     for (const filename of files) {
-      if (filename === ".gitkeep") continue;
-
-      const filePath = path.join(ASSET_BANK_DIR, filename);
-      const stats = await fs.stat(filePath);
+      if (filename === ".gitkeep" || filename === ".emptyFolderPlaceholder") continue;
 
       const ext = path.extname(filename).toLowerCase();
-      const isImage = [".png", ".jpg", ".jpeg", ".gif", ".webp"].includes(ext);
+      const isImage = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"].includes(ext);
 
+      // For storage-based assets, we don't have exact size/date without additional calls
+      // Use reasonable defaults
       assets.push({
         id: filename,
         filename,
         type: isImage ? "image" : "document",
-        size: stats.size,
-        createdAt: stats.birthtime.toISOString(),
+        size: 0, // Size not available without downloading
+        createdAt: new Date().toISOString(),
       });
     }
 
-    // Sort by creation date, newest first
-    assets.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    // Sort by filename as we don't have creation dates
+    assets.sort((a, b) => a.filename.localeCompare(b.filename));
 
     return NextResponse.json(assets);
   } catch (error) {
@@ -50,8 +50,6 @@ export async function GET() {
 // POST /api/assets - Upload new asset
 export async function POST(request: NextRequest) {
   try {
-    ensureBaseDirs();
-
     const formData = await request.formData();
     const files = formData.getAll("files") as File[];
 
@@ -62,22 +60,18 @@ export async function POST(request: NextRequest) {
     const uploadedAssets: Asset[] = [];
 
     for (const file of files) {
-      // Generate unique filename
-      const ext = path.extname(file.name);
-      const baseName = path.basename(file.name, ext);
-      const timestamp = Date.now();
-      const uniqueFilename = `${baseName}-${timestamp}${ext}`;
+      // Use the provided filename (user can customize it in the upload dialog)
+      const filename = file.name;
 
-      const filePath = path.join(ASSET_BANK_DIR, uniqueFilename);
       const buffer = Buffer.from(await file.arrayBuffer());
 
-      await fs.writeFile(filePath, buffer);
+      await uploadAssetBankFile(filename, buffer, file.type);
 
       const isImage = file.type.startsWith("image/");
 
       uploadedAssets.push({
-        id: uniqueFilename,
-        filename: uniqueFilename,
+        id: filename,
+        filename: filename,
         type: isImage ? "image" : "document",
         size: buffer.length,
         createdAt: new Date().toISOString(),

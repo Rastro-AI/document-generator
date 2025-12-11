@@ -1,0 +1,21 @@
+
+PRODUCT SPECIFICATION SHEET
+
+Product Name: UltraBright LED Ceiling Light Model CL-5000
+Category: Commercial Lighting
+
+Description:
+The UltraBright CL-5000 is a premium commercial LED ceiling light designed for
+office spaces, retail environments, and healthcare facilities. Features advanced
+thermal management and 50,000+ hour lifespan.
+
+Technical Specifications:
+- Wattage: 45W
+- Lumens: 5400lm
+- Color Temperature: 4000K
+- CRI: 95+
+- Beam Angle: 120°
+- Dimensions: 600mm x 600mm x 40mm
+- Weight: 3.2kg
+- IP Rating: IP44
+- Warranty: 5 years

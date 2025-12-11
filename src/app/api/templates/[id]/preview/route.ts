@@ -1,13 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getTemplate } from "@/lib/fs-utils";
-import { getTemplateRoot } from "@/lib/paths";
-import { renderToBuffer } from "@react-pdf/renderer";
-
-// Import the template's render function (hardcoded for now)
-import { render } from "../../../../../../templates/sunco-spec-v1/template";
+import { getTemplate, getTemplateSvgContent } from "@/lib/fs-utils";
+import { renderSVGTemplate, svgToPdf } from "@/lib/svg-template-renderer";
 
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
@@ -22,11 +18,16 @@ export async function GET(
       );
     }
 
-    // For now, we only support the sunco-spec-v1 template
-    if (id !== "sunco-spec-v1") {
+    // Check query params for format preference
+    const searchParams = request.nextUrl.searchParams;
+    const outputFormat = searchParams.get("format") || "pdf"; // "pdf" or "svg"
+
+    // Get SVG template content
+    const svgContent = await getTemplateSvgContent(id);
+    if (!svgContent) {
       return NextResponse.json(
-        { error: "Preview not available for this template" },
-        { status: 400 }
+        { error: "SVG template not found" },
+        { status: 404 }
       );
     }
 
@@ -41,25 +42,43 @@ export async function GET(
     }
 
     // Generate empty/placeholder assets
-    const assets: Record<string, string | undefined> = {};
+    const assets: Record<string, string | null> = {};
     for (const slot of template.assetSlots) {
-      assets[slot.name] = undefined;
+      assets[slot.name] = null;
     }
 
-    // Get template root for font loading
-    const templateRoot = getTemplateRoot(id);
+    // Render SVG template with placeholder values
+    const renderedSvg = renderSVGTemplate(svgContent, fields, assets);
 
-    // Render the PDF using the template's render function
-    const document = render(fields as never, assets as never, templateRoot);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const pdfBuffer = await renderToBuffer(document as any);
+    // Return SVG directly if requested
+    if (outputFormat === "svg") {
+      return new NextResponse(renderedSvg, {
+        headers: {
+          "Content-Type": "image/svg+xml",
+          "Cache-Control": "no-cache",
+        },
+      });
+    }
 
-    return new NextResponse(new Uint8Array(pdfBuffer), {
-      headers: {
-        "Content-Type": "application/pdf",
-        "Cache-Control": "no-cache",
-      },
-    });
+    // Convert to PDF
+    try {
+      const pdfBuffer = await svgToPdf(renderedSvg);
+      return new NextResponse(new Uint8Array(pdfBuffer), {
+        headers: {
+          "Content-Type": "application/pdf",
+          "Cache-Control": "no-cache",
+        },
+      });
+    } catch (pdfError) {
+      console.error("SVG to PDF conversion failed:", pdfError);
+      // Fall back to returning SVG if PDF conversion fails
+      return new NextResponse(renderedSvg, {
+        headers: {
+          "Content-Type": "image/svg+xml",
+          "Cache-Control": "no-cache",
+        },
+      });
+    }
   } catch (error) {
     console.error("Error generating preview:", error);
     return NextResponse.json(

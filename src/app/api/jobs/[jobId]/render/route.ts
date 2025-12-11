@@ -1,93 +1,25 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getJob, getTemplate, markJobRendered, getJobTemplateContent } from "@/lib/fs-utils";
-import { getJobOutputPdfPath, getTemplateRoot } from "@/lib/paths";
-import { renderToBuffer } from "@react-pdf/renderer";
-import fs from "fs/promises";
-import * as esbuild from "esbuild";
-import path from "path";
-import React from "react";
-import * as ReactPDF from "@react-pdf/renderer";
-import sharp from "sharp";
-
-// Fallback: Import the original template's render function
-import { render as originalRender } from "../../../../../../templates/sunco-spec-v1/template";
-
-// Dynamic template compiler
-async function compileAndLoadTemplate(
-  templateCode: string,
-  _templateRoot: string
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-): Promise<{ render: (fields: any, assets: any, templateRoot: string) => React.ReactElement }> {
-  // Remove imports and exports, replace with our provided dependencies
-  // Use non-anchored regex to handle multi-line imports like:
-  // import {
-  //   Document,
-  //   Page,
-  // } from "@react-pdf/renderer";
-  let cleanedCode = templateCode
-    // Remove multi-line or single-line import ... from "..." statements
-    .replace(/import\s+[\s\S]*?from\s+['"][^'"]+['"];?/g, "")
-    // Remove bare imports like: import "something";
-    .replace(/import\s+['"][^'"]+['"];?/g, "")
-    // Convert export function to regular function assignment
-    .replace(/export\s+function\s+render\s*\(/g, "__exportedRender__ = function render(")
-    // Remove other exports
-    .replace(/export\s+/g, "");
-
-  // Transpile TSX to JS
-  const result = await esbuild.transform(cleanedCode, {
-    loader: "tsx",
-    target: "es2020",
-    format: "cjs", // Use CommonJS - simpler output without IIFE wrapping
-  });
-
-  const transpiledCode = result.code;
-
-  // Create a function that provides all dependencies and returns the render function
-  const moduleCode = `
-    "use strict";
-    var __exportedRender__;
-    var exports = {};
-    var module = { exports: exports };
-    var React = __React__;
-    var Document = __ReactPDF__.Document;
-    var Page = __ReactPDF__.Page;
-    var View = __ReactPDF__.View;
-    var Text = __ReactPDF__.Text;
-    var Image = __ReactPDF__.Image;
-    var StyleSheet = __ReactPDF__.StyleSheet;
-    var Font = __ReactPDF__.Font;
-    var path = __path__;
-    ${transpiledCode}
-    return __exportedRender__ || (typeof render !== 'undefined' ? render : null);
-  `;
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const moduleWrapper = new Function(
-    "__React__",
-    "__ReactPDF__",
-    "__path__",
-    moduleCode
-  );
-
-  const renderFn = moduleWrapper(React, ReactPDF, path);
-
-  if (!renderFn || typeof renderFn !== "function") {
-    throw new Error("Template does not export a render function");
-  }
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return { render: renderFn as (fields: any, assets: any, templateRoot: string) => React.ReactElement };
-}
+import {
+  getJob,
+  getTemplate,
+  markJobRendered,
+  getTemplateSvgContent,
+  getJobSvgContent,
+  saveJobOutputPdf,
+  saveJobOutputSvg,
+  getAssetBankFile,
+  getAssetFile,
+} from "@/lib/fs-utils";
+import { renderSVGTemplate, prepareAssets, svgToPdf } from "@/lib/svg-template-renderer";
 
 export async function POST(
-  request: NextRequest,
+  _request: NextRequest,
   { params }: { params: Promise<{ jobId: string }> }
 ) {
   try {
     const { jobId } = await params;
 
-    // Get the job
+    // Get the job (now uses Postgres DB with strong consistency)
     const job = await getJob(jobId);
     if (!job) {
       return NextResponse.json({ error: "Job not found" }, { status: 404 });
@@ -102,85 +34,94 @@ export async function POST(
       );
     }
 
-    // For now, we only support the sunco-spec-v1 template
-    if (job.templateId !== "sunco-spec-v1") {
+    // Get SVG template content
+    // Try job-specific SVG first, then fall back to template SVG
+    let svgContent = await getJobSvgContent(jobId);
+    const usedJobSvg = !!svgContent;
+    if (!svgContent) {
+      svgContent = await getTemplateSvgContent(job.templateId);
+    }
+
+    if (!svgContent) {
       return NextResponse.json(
-        { error: "Unsupported template" },
-        { status: 400 }
+        { error: "SVG template not found" },
+        { status: 404 }
       );
     }
 
-    // Prepare fields - handle MODELS as array, rest as strings
-    const fields: Record<string, string | string[]> = {};
-    for (const [key, value] of Object.entries(job.fields)) {
-      if (key === "MODELS") {
-        // MODELS should be an array
-        if (Array.isArray(value)) {
-          fields[key] = value;
-        } else if (typeof value === "string" && value) {
-          fields[key] = value.split(",").map((m) => m.trim());
-        } else {
-          fields[key] = [];
-        }
-      } else {
-        fields[key] = value !== null ? String(value) : "";
-      }
-    }
+    console.log(`[Render] Job ${jobId} - Using ${usedJobSvg ? "job-specific" : "template"} SVG (${svgContent.length} chars)`);
+    console.log(`[Render] Job ${jobId} - SVG preview: ${svgContent.substring(0, 200)}...`);
+    // Log title font-size to debug state mismatch
+    const titleFontMatch = svgContent.match(/\.title-main\s*\{[^}]*font-size:\s*([^;]+)/);
+    console.log(`[Render] Job ${jobId} - Title font-size in SVG: ${titleFontMatch ? titleFontMatch[1] : 'NOT FOUND'}`);
 
-    // Prepare assets - convert image paths to data URLs
-    // React-PDF only supports PNG and JPG, so convert WebP/GIF to PNG
-    const assets: Record<string, string | undefined> = {};
+    // Prepare assets - convert image paths/references to data URLs
+    const assets: Record<string, string | null> = {};
     for (const [key, value] of Object.entries(job.assets)) {
       if (value) {
         try {
-          const imageBuffer = await fs.readFile(value);
-          const ext = value.split(".").pop()?.toLowerCase() || "png";
+          // Value could be a job asset path or asset bank reference
+          const assetFilename = value.includes("/") ? value.split("/").pop()! : value;
+          let imageBuffer: Buffer | null = null;
 
-          // Convert WebP/GIF to PNG (React-PDF doesn't support them)
-          if (ext === "webp" || ext === "gif") {
-            const pngBuffer = await sharp(imageBuffer).png().toBuffer();
-            assets[key] = `data:image/png;base64,${pngBuffer.toString("base64")}`;
-          } else {
-            const mimeType = ext === "jpg" ? "image/jpeg" : `image/${ext}`;
+          // First try to load from job's assets folder
+          imageBuffer = await getAssetFile(jobId, assetFilename);
+
+          // If not found in job assets, try asset bank
+          if (!imageBuffer) {
+            imageBuffer = await getAssetBankFile(assetFilename);
+          }
+
+          if (imageBuffer) {
+            const ext = assetFilename.split(".").pop()?.toLowerCase() || "png";
+            const mimeTypes: Record<string, string> = {
+              png: "image/png",
+              jpg: "image/jpeg",
+              jpeg: "image/jpeg",
+              gif: "image/gif",
+              webp: "image/webp",
+              svg: "image/svg+xml",
+            };
+            const mimeType = mimeTypes[ext] || "application/octet-stream";
             assets[key] = `data:${mimeType};base64,${imageBuffer.toString("base64")}`;
+          } else {
+            console.warn(`Asset not found: ${value} (tried job assets and asset bank)`);
+            assets[key] = null;
           }
         } catch (err) {
           console.error(`Failed to process image ${value}:`, err);
-          assets[key] = undefined;
+          assets[key] = null;
         }
       } else {
-        assets[key] = undefined;
+        assets[key] = null;
       }
     }
 
-    // Get template root for font loading
-    const templateRoot = getTemplateRoot(job.templateId);
+    // Prepare assets for SVG rendering
+    const preparedAssets = await prepareAssets(assets);
 
-    // Try to load job-specific template, fall back to original
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let renderFn: (fields: any, assets: any, templateRoot: string) => React.ReactElement;
+    // Debug: log fields and assets being rendered
+    console.log(`[Render] Job ${jobId} - Fields:`, JSON.stringify(job.fields, null, 2));
+    console.log(`[Render] Job ${jobId} - Job assets (raw):`, JSON.stringify(job.assets, null, 2));
+    console.log(`[Render] Job ${jobId} - Prepared assets:`, Object.entries(preparedAssets).map(([k, v]) =>
+      `${k}: ${v ? (v.startsWith('data:') ? `data URL (${v.length} chars)` : v) : 'null'}`
+    ));
 
-    const jobTemplateContent = await getJobTemplateContent(jobId);
-    if (jobTemplateContent) {
-      try {
-        const compiledTemplate = await compileAndLoadTemplate(jobTemplateContent, templateRoot);
-        renderFn = compiledTemplate.render;
-      } catch (compileError) {
-        console.error("Failed to compile job template, using original:", compileError);
-        renderFn = originalRender;
-      }
-    } else {
-      renderFn = originalRender;
+    // Render SVG template with field values
+    const renderedSvg = renderSVGTemplate(svgContent, job.fields, preparedAssets);
+
+    // Debug: check if placeholders remain
+    const remainingPlaceholders = renderedSvg.match(/\{\{[A-Z_]+\}\}/g);
+    if (remainingPlaceholders && remainingPlaceholders.length > 0) {
+      console.log(`[Render] Job ${jobId} - Remaining placeholders:`, remainingPlaceholders);
     }
 
-    // Render the PDF using the template's render function
-    const document = renderFn(fields, assets, templateRoot);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const pdfBuffer = await renderToBuffer(document as any);
+    // Convert SVG to PDF
+    const pdfBuffer = await svgToPdf(renderedSvg);
 
-    // Save the PDF
-    const outputPath = getJobOutputPdfPath(jobId);
-    await fs.writeFile(outputPath, pdfBuffer);
+    // Save both SVG and PDF outputs to Supabase storage
+    await saveJobOutputSvg(jobId, renderedSvg);
+    await saveJobOutputPdf(jobId, pdfBuffer);
 
     // Mark as rendered
     await markJobRendered(jobId);
@@ -188,6 +129,7 @@ export async function POST(
     return NextResponse.json({
       ok: true,
       renderedAt: new Date().toISOString(),
+      format: "svg",
     });
   } catch (error) {
     console.error("Error rendering PDF:", error);

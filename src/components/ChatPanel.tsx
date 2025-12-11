@@ -29,10 +29,12 @@ interface ChatPanelProps {
   initialUserFiles?: { name: string; type: string }[];
   isCreating?: boolean;
   creationStatus?: string;
+  creationTraces?: AgentTrace[];
   initialReasoningMode?: ReasoningMode;
   onFieldsUpdated: (fields: Record<string, string | number | null>) => void;
   onTemplateUpdated: () => void;
   onFilesChanged?: () => void;
+  onBack?: () => void;
 }
 
 /**
@@ -95,7 +97,7 @@ function TracesDisplay({ traces }: { traces: AgentTrace[] }) {
 
 type ReasoningMode = "none" | "low";
 
-export function ChatPanel({ jobId, initialMessage, uploadedFiles, initialUserPrompt, initialUserFiles, isCreating, creationStatus, initialReasoningMode, onFieldsUpdated, onTemplateUpdated, onFilesChanged }: ChatPanelProps) {
+export function ChatPanel({ jobId, initialMessage, uploadedFiles, initialUserPrompt, initialUserFiles, isCreating, creationStatus, creationTraces, initialReasoningMode, onFieldsUpdated, onTemplateUpdated, onFilesChanged, onBack }: ChatPanelProps) {
   const [reasoningMode, setReasoningMode] = useState<ReasoningMode>(initialReasoningMode || "none");
   const [messages, setMessages] = useState<ChatMessage[]>(() => {
     const msgs: ChatMessage[] = [];
@@ -152,7 +154,7 @@ export function ChatPanel({ jobId, initialMessage, uploadedFiles, initialUserPro
     scrollToBottom();
   }, [messages]);
 
-  // Add assistant message when it arrives from server
+  // Add assistant message when it arrives from server (with traces if available)
   useEffect(() => {
     if (initialMessage && !messages.some(m => m.id === "initial")) {
       setMessages(prev => [...prev, {
@@ -160,9 +162,10 @@ export function ChatPanel({ jobId, initialMessage, uploadedFiles, initialUserPro
         role: "assistant",
         content: initialMessage,
         timestamp: new Date(),
+        traces: creationTraces && creationTraces.length > 0 ? creationTraces : undefined,
       }]);
     }
-  }, [initialMessage]);
+  }, [initialMessage, creationTraces]);
 
   // Handle click outside to unfocus
   useEffect(() => {
@@ -338,20 +341,30 @@ export function ChatPanel({ jobId, initialMessage, uploadedFiles, initialUserPro
             },
             // onResult - final result
             (result) => {
+              // Use result.traces if available, otherwise use the liveTraces we collected
+              const finalTraces = (result.traces && result.traces.length > 0) ? result.traces : [...liveTraces];
+
               const assistantMessage: ChatMessage = {
                 id: (Date.now() + 1).toString(),
                 role: "assistant",
                 content: result.message || "Done",
                 timestamp: new Date(),
-                traces: result.traces,
+                traces: finalTraces.length > 0 ? finalTraces : undefined,
               };
 
               setMessages((prev) => [...prev, assistantMessage]);
 
               // Notify parent of updates
-              if (result.mode === "fields" && result.fields) {
+              console.log("[ChatPanel] Stream result:", { mode: result.mode, templateChanged: result.templateChanged, hasFields: !!result.fields });
+
+              // Handle fields updates (mode can be "fields" or "both")
+              if ((result.mode === "fields" || result.mode === "both") && result.fields) {
+                console.log("[ChatPanel] Calling onFieldsUpdated");
                 onFieldsUpdated(result.fields);
-              } else if (result.mode === "template" || result.templateChanged) {
+              }
+              // Handle template updates (mode can be "template" or "both", or templateChanged flag)
+              if (result.mode === "template" || result.mode === "both" || result.templateChanged) {
+                console.log("[ChatPanel] Calling onTemplateUpdated - will trigger render");
                 onTemplateUpdated();
               }
             },
@@ -401,70 +414,24 @@ export function ChatPanel({ jobId, initialMessage, uploadedFiles, initialUserPro
     <div
       ref={containerRef}
       onClick={() => setIsFocused(true)}
-      className={`flex flex-col h-full bg-white rounded-xl transition-all duration-200 cursor-text overflow-visible ${
-        isFocused
-          ? "ring-2 ring-[#1d1d1f] shadow-lg"
-          : "border border-[#d2d2d7] hover:border-[#86868b]"
-      }`}
+      className="flex flex-col h-full bg-white transition-all duration-200 cursor-text overflow-visible"
     >
-      {/* Uploaded files section - shown at top */}
-      {uploadedFiles && uploadedFiles.length > 0 && (
-        <div className="flex-shrink-0 px-4 pt-3 pb-2 border-b border-[#e8e8ed]">
-          <div className="flex items-center flex-wrap gap-2">
-            {uploadedFiles.map((file) => (
-              <div
-                key={file.filename}
-                className="group flex items-center gap-2 px-2.5 py-1.5 bg-[#f5f5f7] hover:bg-[#e8e8ed] rounded-lg text-[12px] text-[#1d1d1f] cursor-pointer transition-colors"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setPreviewFile(file);
-                }}
-              >
-                {file.type === "image" ? (
-                  <svg className="w-3.5 h-3.5 text-[#86868b]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                  </svg>
-                ) : (
-                  <svg className="w-3.5 h-3.5 text-[#86868b]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                  </svg>
-                )}
-                <span className="max-w-[100px] truncate">{file.filename}</span>
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleRemoveUploadedFile(file.filename);
-                  }}
-                  disabled={removeFile.isPending}
-                  className="ml-0.5 text-[#86868b] hover:text-[#ff3b30] opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-50"
-                >
-                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
-              </div>
-            ))}
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                fileInputRef.current?.click();
-              }}
-              disabled={isProcessing}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 text-[12px] text-[#86868b] hover:text-[#1d1d1f] hover:bg-[#f5f5f7] rounded-lg transition-colors disabled:opacity-50"
-            >
-              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
-              </svg>
-              Add document or image
-            </button>
-          </div>
+      {/* Back button */}
+      {onBack && (
+        <div className="flex-shrink-0 px-3 pt-3">
+          <button
+            onClick={onBack}
+            className="w-7 h-7 flex items-center justify-center rounded-full hover:bg-[#f5f5f7] transition-colors"
+          >
+            <svg className="w-4 h-4 text-[#1d1d1f]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+            </svg>
+          </button>
         </div>
       )}
 
-      {/* Messages */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-3 min-h-0">
+      {/* Messages - increased height for more conversation history */}
+      <div className="flex-[1.2] overflow-y-auto p-4 space-y-3 min-h-0">
         {messages.length === 0 && (!uploadedFiles || uploadedFiles.length === 0) && (
           <div className="text-center text-[13px] text-[#86868b] py-8">
             <p className="font-medium text-[#1d1d1f] mb-1">Edit with AI</p>
@@ -524,52 +491,73 @@ export function ChatPanel({ jobId, initialMessage, uploadedFiles, initialUserPro
         {isProcessing && (
           <div className="flex justify-start">
             <div className="bg-[#f5f5f7] px-3 py-2 rounded-xl max-w-[80%]">
-              <div className="flex items-center gap-2">
-                <svg className="animate-spin h-4 w-4 text-[#86868b] flex-shrink-0" viewBox="0 0 24 24">
-                  <circle
-                    className="opacity-25"
-                    cx="12"
-                    cy="12"
-                    r="10"
-                    stroke="currentColor"
-                    strokeWidth="4"
-                    fill="none"
-                  />
-                  <path
-                    className="opacity-75"
-                    fill="currentColor"
-                    d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-                  />
-                </svg>
-                <span className="text-[13px] text-[#86868b]">
-                  {isCreating ? creationStatus || "Creating document..." : uploadFilesHook.isPending ? "Processing files..." : liveStatus || "Thinking..."}
-                </span>
-              </div>
-              {/* Live traces - expandable view of what's happening */}
-              {liveTraces.length > 0 && (
-                <div className="mt-2 pt-2 border-t border-[#e8e8ed]">
-                  <details className="text-[11px] text-[#86868b]">
-                    <summary className="cursor-pointer hover:text-[#1d1d1f] transition-colors">
-                      View details ({liveTraces.length} step{liveTraces.length !== 1 ? "s" : ""})
-                    </summary>
-                    <div className="mt-1 pl-2 border-l-2 border-[#e8e8ed] space-y-1 max-h-[150px] overflow-y-auto">
-                      {liveTraces.map((trace, idx) => (
-                        <div key={idx} className="text-[10px]">
-                          {trace.type === "status" && (
-                            <span className="text-[#86868b]">{trace.content}</span>
-                          )}
-                          {trace.type === "tool_call" && (
-                            <span className="text-[#0066CC] font-mono">{trace.toolName}()</span>
-                          )}
-                          {trace.type === "tool_result" && (
-                            <span className="text-[#00aa00]">✓ {trace.toolName}</span>
-                          )}
+              {(() => {
+                const tracesToShow = isCreating && creationTraces && creationTraces.length > 0 ? creationTraces : liveTraces;
+                // Filter to only tool_call and tool_result traces
+                const toolTraces = tracesToShow.filter(t => t.type === "tool_call" || t.type === "tool_result");
+
+                if (toolTraces.length > 0) {
+                  // Find the last tool call that doesn't have a result yet
+                  const lastToolCall = [...toolTraces].reverse().find(t => t.type === "tool_call");
+                  const completedTraces = toolTraces.slice(0, -1); // All but the last
+                  const isLastPending = toolTraces[toolTraces.length - 1]?.type === "tool_call";
+
+                  return (
+                    <div>
+                      {/* Expandable completed traces */}
+                      {completedTraces.length > 0 && (
+                        <details className="mb-2">
+                          <summary className="text-[11px] text-[#86868b] cursor-pointer hover:text-[#1d1d1f]">
+                            {completedTraces.filter(t => t.type === "tool_result").length} tool{completedTraces.filter(t => t.type === "tool_result").length !== 1 ? "s" : ""} completed
+                          </summary>
+                          <div className="mt-1 pl-2 border-l-2 border-[#e8e8ed] space-y-0.5">
+                            {completedTraces.map((trace, idx) => (
+                              <div key={idx} className="text-[10px] flex items-center gap-1">
+                                {trace.type === "tool_call" && (
+                                  <span className="text-[#86868b] font-mono">{trace.toolName}</span>
+                                )}
+                                {trace.type === "tool_result" && (
+                                  <span className="text-[#00aa00]">✓ {trace.toolName}</span>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        </details>
+                      )}
+                      {/* Current/last tool call with spinner if pending */}
+                      {isLastPending && lastToolCall && (
+                        <div className="flex items-center gap-2">
+                          <svg className="animate-spin h-3.5 w-3.5 text-[#0066CC] flex-shrink-0" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                          </svg>
+                          <span className="text-[12px] text-[#0066CC] font-mono">{lastToolCall.toolName}()</span>
                         </div>
-                      ))}
+                      )}
+                      {/* If last was a result, show waiting for response */}
+                      {!isLastPending && (
+                        <div className="flex items-center gap-2">
+                          <svg className="animate-spin h-3.5 w-3.5 text-[#86868b] flex-shrink-0" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                          </svg>
+                          <span className="text-[12px] text-[#86868b]">Thinking...</span>
+                        </div>
+                      )}
                     </div>
-                  </details>
-                </div>
-              )}
+                  );
+                }
+                // No tool traces yet, show simple spinner
+                return (
+                  <div className="flex items-center gap-2">
+                    <svg className="animate-spin h-4 w-4 text-[#86868b] flex-shrink-0" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                    <span className="text-[13px] text-[#86868b]">Thinking...</span>
+                  </div>
+                );
+              })()}
             </div>
           </div>
         )}
@@ -593,9 +581,45 @@ export function ChatPanel({ jobId, initialMessage, uploadedFiles, initialUserPro
           onDrop={handleDrop}
           onDragOver={handleDragOver}
         >
-          {/* Attached files preview - inside the input box */}
-          {attachedFiles.length > 0 && (
+          {/* Uploaded files + Attached files preview - inside the input box */}
+          {((uploadedFiles && uploadedFiles.length > 0) || attachedFiles.length > 0) && (
             <div className="flex flex-wrap gap-2 px-4 pt-3">
+              {/* Already uploaded files */}
+              {uploadedFiles?.map((file) => (
+                <div
+                  key={file.filename}
+                  className="group flex items-center gap-2 px-2.5 py-1.5 bg-white rounded-lg text-[12px] text-[#1d1d1f] shadow-sm cursor-pointer hover:bg-[#f5f5f7] transition-colors"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setPreviewFile(file);
+                  }}
+                >
+                  {file.type === "image" ? (
+                    <svg className="w-3.5 h-3.5 text-[#86868b]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                    </svg>
+                  ) : (
+                    <svg className="w-3.5 h-3.5 text-[#86868b]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                  )}
+                  <span className="max-w-[100px] truncate">{file.filename}</span>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleRemoveUploadedFile(file.filename);
+                    }}
+                    disabled={removeFile.isPending}
+                    className="ml-0.5 text-[#86868b] hover:text-[#ff3b30] opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-50"
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                </div>
+              ))}
+              {/* Newly attached files (pending upload) */}
               {attachedFiles.map((file, index) => (
                 <div
                   key={`${file.name}-${index}`}
@@ -629,15 +653,20 @@ export function ChatPanel({ jobId, initialMessage, uploadedFiles, initialUserPro
             </div>
           )}
 
-          {/* Text input */}
-          <input
-            type="text"
+          {/* Text input - textarea for multi-line support */}
+          <textarea
             value={input}
-            onChange={(e) => setInput(e.target.value)}
+            onChange={(e) => {
+              setInput(e.target.value);
+              // Auto-resize
+              e.target.style.height = 'auto';
+              e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px';
+            }}
             onPaste={handlePaste}
             onFocus={() => setIsFocused(true)}
             onKeyDown={(e) => {
-              if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+              // Submit on Enter (without shift), or Cmd/Ctrl+Enter
+              if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
                 if (input.trim() || attachedFiles.length > 0) {
                   handleSubmit(e as unknown as React.FormEvent);
@@ -646,8 +675,9 @@ export function ChatPanel({ jobId, initialMessage, uploadedFiles, initialUserPro
             }}
             placeholder="Ask to edit values or design..."
             disabled={isProcessing}
+            rows={1}
             className="w-full px-4 py-3 bg-transparent text-[14px] text-[#1d1d1f]
-                      placeholder-[#86868b] border-0
+                      placeholder-[#86868b] border-0 resize-none
                       focus:outline-none focus:ring-0
                       focus-visible:outline-none focus-visible:ring-0
                       disabled:opacity-50"
@@ -719,13 +749,14 @@ export function ChatPanel({ jobId, initialMessage, uploadedFiles, initialUserPro
               <button
                 type="submit"
                 disabled={(!input.trim() && attachedFiles.length === 0) || isProcessing}
-                className="w-8 h-8 flex items-center justify-center rounded-lg bg-[#1d1d1f] text-white
+                className="h-8 px-3 flex items-center justify-center gap-1.5 rounded-lg bg-[#1d1d1f] text-white
                           hover:bg-[#424245] active:scale-[0.95]
                           disabled:opacity-40 disabled:cursor-not-allowed
-                          transition-all duration-200"
+                          transition-all duration-200 text-[13px] font-medium"
               >
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 12h14M12 5l7 7-7 7" />
+                Go
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3" />
                 </svg>
               </button>
             </div>

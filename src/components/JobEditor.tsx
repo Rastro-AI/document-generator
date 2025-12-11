@@ -1,12 +1,11 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { useJob, useUpdateJobFields, useRenderJob, streamCreateJob } from "@/hooks/useJobs";
+import { useJob, useUpdateJobFields, useUpdateJobAssets, useUploadJobAsset, useRenderJob, streamCreateJob } from "@/hooks/useJobs";
 import { useTemplate } from "@/hooks/useTemplates";
 import { FieldsEditor } from "./FieldsEditor";
 import { PdfPreview } from "./PdfPreview";
 import { ChatPanel } from "./ChatPanel";
-import { HistoryPanel } from "./HistoryPanel";
 
 type ReasoningMode = "none" | "low";
 
@@ -29,6 +28,7 @@ export function JobEditor({ jobId, templateId, onBack, initialPrompt, initialFil
   // Initial creation streaming state
   const [isCreating, setIsCreating] = useState(!!initialFiles || !!initialAssetIds || !!initialPrompt);
   const [creationStatus, setCreationStatus] = useState<string>("Starting...");
+  const [creationTraces, setCreationTraces] = useState<Array<{ type: "reasoning" | "tool_call" | "tool_result" | "status"; content: string; toolName?: string }>>([]);
   const hasStartedCreation = useRef(false);
 
   const [localFields, setLocalFields] = useState<
@@ -39,34 +39,45 @@ export function JobEditor({ jobId, templateId, onBack, initialPrompt, initialFil
   const [hasEdited, setHasEdited] = useState(false);
 
   const updateFields = useUpdateJobFields();
+  const updateAssets = useUpdateJobAssets();
+  const uploadAsset = useUploadJobAsset();
   const renderJob = useRenderJob();
   const hasAutoRendered = useRef(false);
-  const [showHistoryPanel, setShowHistoryPanel] = useState(false);
   const [showCodeModal, setShowCodeModal] = useState(false);
   const [templateCode, setTemplateCode] = useState("");
   const [showExportMenu, setShowExportMenu] = useState(false);
   const [pdfExpanded, setPdfExpanded] = useState(false);
-  const [chatMinimized, setChatMinimized] = useState(false);
+  const [rightPanelTab, setRightPanelTab] = useState<"preview" | "assets" | "data">("preview");
   const exportMenuRef = useRef<HTMLDivElement>(null);
+  const historyMenuRef = useRef<HTMLDivElement>(null);
+  const [showHistoryMenu, setShowHistoryMenu] = useState(false);
+  // Locally track the last render timestamp to drive preview updates immediately
+  const [previewRenderedAt, setPreviewRenderedAt] = useState<string | undefined>(undefined);
 
   // Sync local fields when job data loads
   useEffect(() => {
     if (job) {
       setLocalFields(job.fields);
       setHasChanges(false);
+      // Keep local preview timestamp in sync with server state
+      setPreviewRenderedAt(job.renderedAt);
     }
   }, [job]);
 
-  // Close export menu when clicking outside
+  // Close dropdown menus when clicking outside
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (exportMenuRef.current && !exportMenuRef.current.contains(event.target as Node)) {
         setShowExportMenu(false);
       }
+      if (historyMenuRef.current && !historyMenuRef.current.contains(event.target as Node)) {
+        setShowHistoryMenu(false);
+      }
     };
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
+
 
   // Start job creation streaming when component mounts
   useEffect(() => {
@@ -86,10 +97,18 @@ export function JobEditor({ jobId, templateId, onBack, initialPrompt, initialFil
         if (trace.type === "status") {
           setCreationStatus(trace.content);
         }
+        // Collect all traces for display in chat
+        setCreationTraces(prev => [...prev, trace as { type: "reasoning" | "tool_call" | "tool_result" | "status"; content: string; toolName?: string }]);
       },
       // onResult
-      () => {
+      (result) => {
         setIsCreating(false);
+        // Use the returned job's renderedAt immediately to update preview
+        if (result.job?.renderedAt) {
+          console.log("[JobEditor] Creation complete, renderedAt:", result.job.renderedAt);
+          setPreviewRenderedAt(result.job.renderedAt);
+          setPdfKey(k => k + 1);
+        }
         refetch();
       },
       // onError
@@ -106,7 +125,9 @@ export function JobEditor({ jobId, templateId, onBack, initialPrompt, initialFil
   useEffect(() => {
     if (job && !job.renderedAt && !hasAutoRendered.current && !renderJob.isPending && !isCreating) {
       hasAutoRendered.current = true;
-      renderJob.mutateAsync(jobId).then(() => {
+      renderJob.mutateAsync({ jobId }).then((res) => {
+        if (res?.renderedAt) setPreviewRenderedAt(res.renderedAt);
+        if (res?.renderedAt) console.log("[JobEditor] Auto-render complete:", res.renderedAt);
         setPdfKey((k) => k + 1);
       }).catch((error) => {
         console.error("Failed to auto-render:", error);
@@ -121,12 +142,49 @@ export function JobEditor({ jobId, templateId, onBack, initialPrompt, initialFil
     setHasEdited(true);
   };
 
+  const handleAssetChange = async (name: string, value: string | null) => {
+    if (!job) return;
+    try {
+      await updateAssets.mutateAsync({
+        jobId,
+        assets: { ...job.assets, [name]: value }
+      });
+      // Auto re-render after asset change
+      const res = await renderJob.mutateAsync({ jobId });
+      if (res?.renderedAt) setPreviewRenderedAt(res.renderedAt);
+      if (res?.renderedAt) console.log("[JobEditor] Render after asset change:", res.renderedAt);
+      setPdfKey((k) => k + 1);
+    } catch (error) {
+      console.error("Failed to update asset:", error);
+    }
+  };
+
+  const handleAssetUpload = async (slotName: string, file: File) => {
+    try {
+      const uploadResult = await uploadAsset.mutateAsync({ jobId, slotName, file });
+      console.log("[JobEditor] Asset uploaded:", slotName, "->", uploadResult.assetPath);
+
+      // Auto re-render after upload (DB has strong consistency now)
+      const res = await renderJob.mutateAsync({ jobId });
+      if (res?.renderedAt) setPreviewRenderedAt(res.renderedAt);
+      if (res?.renderedAt) console.log("[JobEditor] Render after asset upload:", res.renderedAt);
+      setPdfKey((k) => k + 1);
+
+      // Refetch to update local cache
+      await refetch();
+    } catch (error) {
+      console.error("Failed to upload asset:", error);
+    }
+  };
+
   const handleSave = async () => {
     try {
       await updateFields.mutateAsync({ jobId, fields: localFields });
       setHasChanges(false);
       // Auto-render after save
-      await renderJob.mutateAsync(jobId);
+      const res = await renderJob.mutateAsync({ jobId });
+      if (res?.renderedAt) setPreviewRenderedAt(res.renderedAt);
+      if (res?.renderedAt) console.log("[JobEditor] Render after save:", res.renderedAt);
       setPdfKey((k) => k + 1);
     } catch (error) {
       console.error("Failed to save fields:", error);
@@ -138,7 +196,9 @@ export function JobEditor({ jobId, templateId, onBack, initialPrompt, initialFil
       await handleSave();
     } else {
       try {
-        await renderJob.mutateAsync(jobId);
+        const res = await renderJob.mutateAsync({ jobId });
+        if (res?.renderedAt) setPreviewRenderedAt(res.renderedAt);
+        if (res?.renderedAt) console.log("[JobEditor] Manual render:", res.renderedAt);
         setPdfKey((k) => k + 1);
       } catch (error) {
         console.error("Failed to render:", error);
@@ -147,25 +207,38 @@ export function JobEditor({ jobId, templateId, onBack, initialPrompt, initialFil
   };
 
   const handleFieldsUpdated = async (newFields: Record<string, string | number | null>) => {
+    // Update local fields immediately with the server-provided values
     setLocalFields(newFields);
     setHasChanges(false);
     setHasEdited(true);
-    refetch();
-    // Auto-render after chat update
+
+    // Auto-render after chat update (DB has strong consistency now)
     try {
-      await renderJob.mutateAsync(jobId);
+      const res = await renderJob.mutateAsync({ jobId });
+      if (res?.renderedAt) setPreviewRenderedAt(res.renderedAt);
+      if (res?.renderedAt) console.log("[JobEditor] Render after chat fields update:", res.renderedAt);
       setPdfKey((k) => k + 1);
+      // Refetch after render to sync any other job state changes
+      await refetch();
     } catch (error) {
       console.error("Failed to render after chat update:", error);
     }
   };
 
   const handleTemplateUpdated = async () => {
+    console.log("[JobEditor] handleTemplateUpdated called - starting render");
     setHasEdited(true);
     // Auto-render after template change
     try {
-      await renderJob.mutateAsync(jobId);
+      console.log("[JobEditor] Calling renderJob.mutateAsync...");
+      const res = await renderJob.mutateAsync({ jobId });
+      console.log("[JobEditor] Render complete, response:", res);
+      if (res?.renderedAt) {
+        console.log("[JobEditor] Setting previewRenderedAt to:", res.renderedAt);
+        setPreviewRenderedAt(res.renderedAt);
+      }
       setPdfKey((k) => k + 1);
+      console.log("[JobEditor] PdfKey incremented");
     } catch (error) {
       console.error("Failed to render after template update:", error);
     }
@@ -176,7 +249,9 @@ export function JobEditor({ jobId, templateId, onBack, initialPrompt, initialFil
     await refetch();
     // Auto-render after job update
     try {
-      await renderJob.mutateAsync(jobId);
+      const res = await renderJob.mutateAsync({ jobId });
+      if (res?.renderedAt) setPreviewRenderedAt(res.renderedAt);
+      if (res?.renderedAt) console.log("[JobEditor] Render after job update:", res.renderedAt);
       setPdfKey((k) => k + 1);
     } catch (error) {
       console.error("Failed to render after job update:", error);
@@ -201,140 +276,6 @@ export function JobEditor({ jobId, templateId, onBack, initialPrompt, initialFil
 
   return (
     <div className="flex flex-col h-full bg-white">
-      {/* Header - compact */}
-      <header className="flex-shrink-0 flex items-center justify-between px-4 py-2 border-b border-[#d2d2d7]">
-        <div className="flex items-center gap-3">
-          <button
-            onClick={onBack}
-            className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-[#f5f5f7] transition-colors"
-          >
-            <svg className="w-4 h-4 text-[#1d1d1f]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
-            </svg>
-          </button>
-          <h1 className="text-[15px] font-semibold text-[#1d1d1f]">
-            {template?.name || "Loading..."}
-          </h1>
-        </div>
-
-        <div className="flex items-center gap-2">
-          {isReady && (
-            <>
-              {hasChanges && (
-                <span className="text-[12px] text-[#86868b]">Unsaved</span>
-              )}
-              {hasChanges && (
-                <button
-                  onClick={handleSave}
-                  disabled={updateFields.isPending || renderJob.isPending}
-                  className="px-3 py-1.5 text-[13px] font-medium text-white bg-[#1d1d1f] rounded-lg
-                            hover:bg-[#424245] active:scale-[0.98]
-                            disabled:opacity-40 disabled:cursor-not-allowed
-                            transition-all duration-200"
-                >
-                  {updateFields.isPending || renderJob.isPending ? "Saving..." : "Save"}
-                </button>
-              )}
-              {job.renderedAt && (
-                <div className="relative" ref={exportMenuRef}>
-                  <button
-                    onClick={() => setShowExportMenu(!showExportMenu)}
-                    className="px-3 py-1.5 text-[13px] font-medium text-[#1d1d1f] bg-white border border-[#d2d2d7] rounded-lg
-                              hover:bg-[#f5f5f7] active:scale-[0.98]
-                              transition-all duration-200 flex items-center gap-1.5"
-                  >
-                    Export
-                    <svg className={`w-3.5 h-3.5 transition-transform ${showExportMenu ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-                    </svg>
-                  </button>
-
-                  {showExportMenu && (
-                    <div className="absolute right-0 top-full mt-1 w-44 bg-white rounded-lg shadow-lg border border-[#e8e8ed] py-1 z-50">
-                      <a
-                        href={`/api/jobs/${jobId}/pdf`}
-                        download="output.pdf"
-                        onClick={() => setShowExportMenu(false)}
-                        className="w-full px-3 py-2 text-left text-[13px] text-[#1d1d1f] hover:bg-[#f5f5f7] transition-colors flex items-center gap-2"
-                      >
-                        <svg className="w-4 h-4 text-[#86868b]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
-                        </svg>
-                        PDF
-                      </a>
-                      <button
-                        onClick={async () => {
-                          setShowExportMenu(false);
-                          // TODO: Implement SVG export
-                          alert("SVG export coming soon");
-                        }}
-                        className="w-full px-3 py-2 text-left text-[13px] text-[#1d1d1f] hover:bg-[#f5f5f7] transition-colors flex items-center gap-2"
-                      >
-                        <svg className="w-4 h-4 text-[#86868b]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 001.5-1.5V6a1.5 1.5 0 00-1.5-1.5H3.75A1.5 1.5 0 002.25 6v12a1.5 1.5 0 001.5 1.5zm10.5-11.25h.008v.008h-.008V8.25zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z" />
-                        </svg>
-                        SVG
-                      </button>
-                      <button
-                        onClick={async () => {
-                          setShowExportMenu(false);
-                          // TODO: Implement save to catalog
-                          alert("Save to catalog coming soon");
-                        }}
-                        className="w-full px-3 py-2 text-left text-[13px] text-[#1d1d1f] hover:bg-[#f5f5f7] transition-colors flex items-center gap-2"
-                      >
-                        <svg className="w-4 h-4 text-[#86868b]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25" />
-                        </svg>
-                        Save to Catalog
-                      </button>
-                      <div className="border-t border-[#e8e8ed] my-1" />
-                      <button
-                        onClick={async () => {
-                          setShowExportMenu(false);
-                          const res = await fetch(`/api/templates/${job.templateId}/code`);
-                          if (res.ok) {
-                            setTemplateCode(await res.text());
-                            setShowCodeModal(true);
-                          }
-                        }}
-                        className="w-full px-3 py-2 text-left text-[13px] text-[#1d1d1f] hover:bg-[#f5f5f7] transition-colors flex items-center gap-2"
-                      >
-                        <svg className="w-4 h-4 text-[#86868b]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M17.25 6.75L22.5 12l-5.25 5.25m-10.5 0L1.5 12l5.25-5.25m7.5-3l-4.5 16.5" />
-                        </svg>
-                        Code
-                      </button>
-                    </div>
-                  )}
-                </div>
-              )}
-              <button
-                onClick={() => setShowHistoryPanel(!showHistoryPanel)}
-                className={`px-3 py-1.5 text-[13px] font-medium rounded-lg transition-colors flex items-center gap-1.5 border ${
-                  showHistoryPanel
-                    ? "bg-[#1d1d1f] text-white border-[#1d1d1f]"
-                    : "bg-white text-[#1d1d1f] border-[#d2d2d7] hover:bg-[#f5f5f7]"
-                }`}
-              >
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-                History
-              </button>
-              <button
-                onClick={() => alert("Deploy coming soon")}
-                className="px-3 py-1.5 text-[13px] font-medium text-[#1d1d1f] bg-white border border-[#d2d2d7] rounded-lg
-                          hover:bg-[#f5f5f7] active:scale-[0.98]
-                          transition-all duration-200"
-              >
-                Deploy
-              </button>
-            </>
-          )}
-        </div>
-      </header>
-
       {/* Error banner */}
       {(updateFields.isError || renderJob.isError) && (
         <div className="px-6 py-3 bg-red-50 border-b border-red-100">
@@ -344,115 +285,292 @@ export function JobEditor({ jobId, templateId, onBack, initialPrompt, initialFil
         </div>
       )}
 
-      {/* Main content + Chat */}
-      <div className="flex flex-1 min-h-0 flex-col">
-        {/* 2-pane layout */}
-        <div className="flex min-h-0 flex-1">
-          {/* Left: Fields editor */}
-          <div className="w-[380px] border-r border-[#d2d2d7] bg-white overflow-y-auto">
-            <div className="p-6">
-              {/* Sidebar Title */}
-              <h2 className="text-[17px] font-semibold text-[#1d1d1f] mb-6">
-                Extracted Data
-              </h2>
-              {isReady ? (
-                <>
-                  <FieldsEditor
-                    template={template}
-                    job={{ ...job, fields: localFields }}
-                    onFieldChange={handleFieldChange}
-                    disabled={updateFields.isPending}
-                  />
-                </>
-              ) : (
-                <div className="flex flex-col items-center justify-center py-16">
-                  <svg className="animate-spin h-6 w-6 text-[#86868b] mb-3" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                  </svg>
-                  <p className="text-[13px] text-[#86868b]">Loading fields...</p>
+      {/* Main content - 2 column layout */}
+      <div className="flex flex-1 min-h-0">
+        {/* Left: Chat panel (50%) */}
+        <div className="w-1/2 flex flex-col bg-[#f5f5f7] p-4 pr-2">
+          <div className="flex-1 min-h-0 bg-white rounded-xl overflow-hidden border border-[#d2d2d7] flex flex-col">
+            <ChatPanel
+              jobId={jobId}
+              initialMessage={job?.initialMessage}
+              uploadedFiles={job?.uploadedFiles}
+              initialUserPrompt={initialPrompt}
+              initialUserFiles={initialFiles?.map(f => ({ name: f.name, type: f.type }))}
+              isCreating={isCreating}
+              creationStatus={creationStatus}
+              creationTraces={creationTraces}
+              initialReasoningMode={initialReasoningMode}
+              onFieldsUpdated={handleFieldsUpdated}
+              onTemplateUpdated={handleTemplateUpdated}
+              onFilesChanged={() => refetch()}
+              onBack={onBack}
+            />
+          </div>
+        </div>
+
+        {/* Right: Preview/Assets/Data with tabs (50%) */}
+        <div className="w-1/2 flex flex-col bg-[#f5f5f7] p-4 pl-2">
+          <div className="flex-1 min-h-0 bg-white rounded-xl overflow-hidden border border-[#d2d2d7] flex flex-col">
+            {/* Tabs + Actions */}
+            <div className="flex-shrink-0 px-4 pt-3 pb-2 flex items-center justify-between">
+              <div className="flex gap-1 p-1 bg-[#f5f5f7] rounded-lg w-fit">
+                <button
+                  onClick={() => setRightPanelTab("preview")}
+                  className={`px-4 py-1.5 text-[13px] font-medium rounded-md transition-colors ${
+                    rightPanelTab === "preview"
+                      ? "bg-white text-[#1d1d1f] shadow-sm"
+                      : "text-[#86868b] hover:text-[#1d1d1f]"
+                  }`}
+                >
+                  Preview
+                </button>
+                <button
+                  onClick={() => setRightPanelTab("assets")}
+                  className={`px-4 py-1.5 text-[13px] font-medium rounded-md transition-colors ${
+                    rightPanelTab === "assets"
+                      ? "bg-white text-[#1d1d1f] shadow-sm"
+                      : "text-[#86868b] hover:text-[#1d1d1f]"
+                  }`}
+                >
+                  Assets
+                </button>
+                <button
+                  onClick={() => setRightPanelTab("data")}
+                  className={`px-4 py-1.5 text-[13px] font-medium rounded-md transition-colors ${
+                    rightPanelTab === "data"
+                      ? "bg-white text-[#1d1d1f] shadow-sm"
+                      : "text-[#86868b] hover:text-[#1d1d1f]"
+                  }`}
+                >
+                  Data
+                </button>
+              </div>
+
+              {/* Actions: Export and History dropdowns */}
+              {isReady && (
+                <div className="flex items-center gap-2">
+                  {/* Save button when there are changes */}
+                  {hasChanges && (
+                    <button
+                      onClick={handleSave}
+                      disabled={updateFields.isPending || renderJob.isPending}
+                      className="px-3 py-1.5 text-[12px] font-medium text-white bg-[#1d1d1f] rounded-md
+                                hover:bg-[#424245] active:scale-[0.98]
+                                disabled:opacity-40 disabled:cursor-not-allowed
+                                transition-all duration-200"
+                    >
+                      {updateFields.isPending || renderJob.isPending ? "Saving..." : "Save"}
+                    </button>
+                  )}
+
+                  {/* Export dropdown */}
+                  {job.renderedAt && (
+                    <div className="relative" ref={exportMenuRef}>
+                      <button
+                        onClick={() => setShowExportMenu(!showExportMenu)}
+                        className="px-3 py-1.5 text-[12px] font-medium text-[#86868b] hover:text-[#1d1d1f] rounded-md hover:bg-[#f5f5f7] transition-colors flex items-center gap-1"
+                      >
+                        Export
+                        <svg className={`w-3 h-3 transition-transform ${showExportMenu ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                        </svg>
+                      </button>
+
+                      {showExportMenu && (
+                        <div className="absolute right-0 top-full mt-1 w-36 bg-white rounded-lg shadow-lg border border-[#e8e8ed] py-1 z-50">
+                          <a
+                            href={`/api/jobs/${jobId}/pdf?t=${(previewRenderedAt || job.renderedAt) ?? Date.now()}`}
+                            download="output.pdf"
+                            onClick={() => setShowExportMenu(false)}
+                            className="block w-full px-3 py-2 text-left text-[12px] text-[#1d1d1f] hover:bg-[#f5f5f7] transition-colors"
+                          >
+                            PDF
+                          </a>
+                          <a
+                            href={`/api/jobs/${jobId}/svg?t=${(previewRenderedAt || job.renderedAt) ?? Date.now()}`}
+                            download="output.svg"
+                            onClick={() => setShowExportMenu(false)}
+                            className="block w-full px-3 py-2 text-left text-[12px] text-[#1d1d1f] hover:bg-[#f5f5f7] transition-colors"
+                          >
+                            SVG
+                          </a>
+                          <button
+                            onClick={async () => {
+                              setShowExportMenu(false);
+                              const res = await fetch(`/api/jobs/${job.id}/template-code`);
+                              if (res.ok) {
+                                setTemplateCode(await res.text());
+                                setShowCodeModal(true);
+                              }
+                            }}
+                            className="block w-full px-3 py-2 text-left text-[12px] text-[#1d1d1f] hover:bg-[#f5f5f7] transition-colors"
+                          >
+                            Code
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* History dropdown */}
+                  <div className="relative" ref={historyMenuRef}>
+                    <button
+                      onClick={() => setShowHistoryMenu(!showHistoryMenu)}
+                      className={`px-3 py-1.5 text-[12px] font-medium rounded-md transition-colors flex items-center gap-1 ${
+                        showHistoryMenu
+                          ? "text-[#1d1d1f] bg-[#f5f5f7]"
+                          : "text-[#86868b] hover:text-[#1d1d1f] hover:bg-[#f5f5f7]"
+                      }`}
+                    >
+                      History
+                      <svg className={`w-3 h-3 transition-transform ${showHistoryMenu ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                      </svg>
+                    </button>
+
+                    {showHistoryMenu && (
+                      <div className="absolute right-0 top-full mt-1 w-64 bg-white rounded-lg shadow-lg border border-[#e8e8ed] py-1 z-50 max-h-80 overflow-y-auto">
+                        {job.history && job.history.length > 0 ? (
+                          [...job.history].reverse().map((entry, index) => (
+                            <div
+                              key={entry.id}
+                              className={`px-3 py-2 flex items-center justify-between gap-2 ${
+                                index === 0 ? "bg-[#f5f5f7]" : "hover:bg-[#f5f5f7]"
+                              }`}
+                            >
+                              <div className="flex-1 min-w-0">
+                                <p className="text-[12px] font-medium text-[#1d1d1f] truncate">
+                                  {entry.description}
+                                </p>
+                                <p className="text-[10px] text-[#86868b]">
+                                  {new Date(entry.timestamp).toLocaleString("en-US", {
+                                    month: "short",
+                                    day: "numeric",
+                                    hour: "numeric",
+                                    minute: "2-digit",
+                                  })}
+                                </p>
+                              </div>
+                              {index === 0 ? (
+                                <span className="text-[10px] text-[#86868b]">Current</span>
+                              ) : (
+                                <button
+                                  onClick={async () => {
+                                    setShowHistoryMenu(false);
+                                    try {
+                                      await fetch(`/api/jobs/${job.id}/history/${entry.id}/restore`, { method: "POST" });
+                                      await handleJobUpdated();
+                                    } catch (error) {
+                                      console.error("Failed to restore:", error);
+                                    }
+                                  }}
+                                  className="px-2 py-1 text-[10px] font-medium text-[#1d1d1f] bg-white border border-[#d2d2d7] rounded hover:bg-[#f5f5f7] transition-colors"
+                                >
+                                  Restore
+                                </button>
+                              )}
+                            </div>
+                          ))
+                        ) : (
+                          <div className="px-3 py-4 text-center text-[12px] text-[#86868b]">
+                            No history yet
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Tab content */}
+            <div className="flex-1 min-h-0 overflow-hidden">
+              {/* Preview tab */}
+              {rightPanelTab === "preview" && (
+                <div className="h-full p-4 relative">
+                  {isReady ? (
+                    <>
+                      <PdfPreview key={pdfKey} jobId={jobId} renderedAt={previewRenderedAt || job.renderedAt} isRendering={renderJob.isPending} />
+                      {/* Expand button */}
+                      <button
+                        onClick={() => setPdfExpanded(true)}
+                        className="absolute top-6 right-6 w-8 h-8 flex items-center justify-center rounded-lg bg-white/80 hover:bg-white shadow-sm transition-colors"
+                        title="Expand preview"
+                      >
+                        <svg className="w-4 h-4 text-[#1d1d1f]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+                        </svg>
+                      </button>
+                    </>
+                  ) : (
+                    <div className="h-full flex flex-col items-center justify-center">
+                      <svg className="animate-spin h-8 w-8 text-[#86868b] mb-4" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                      </svg>
+                      <p className="text-[15px] font-medium text-[#1d1d1f] mb-1">Creating document...</p>
+                      <p className="text-[13px] text-[#86868b]">{isCreating ? creationStatus : "Loading..."}</p>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Assets tab */}
+              {rightPanelTab === "assets" && (
+                <div className="h-full overflow-y-auto p-6">
+                  {isReady ? (
+                    <FieldsEditor
+                      template={template}
+                      job={job}
+                      localFields={localFields}
+                      onFieldChange={handleFieldChange}
+                      onAssetChange={handleAssetChange}
+                      onAssetUpload={handleAssetUpload}
+                      onSave={hasChanges ? handleSave : undefined}
+                      disabled={updateFields.isPending || updateAssets.isPending || uploadAsset.isPending}
+                      activeTab="assets"
+                    />
+                  ) : (
+                    <div className="flex flex-col items-center justify-center py-16">
+                      <svg className="animate-spin h-6 w-6 text-[#86868b] mb-3" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                      </svg>
+                      <p className="text-[13px] text-[#86868b]">Loading assets...</p>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Data tab */}
+              {rightPanelTab === "data" && (
+                <div className="h-full overflow-y-auto p-6">
+                  {isReady ? (
+                    <FieldsEditor
+                      template={template}
+                      job={job}
+                      localFields={localFields}
+                      onFieldChange={handleFieldChange}
+                      onAssetChange={handleAssetChange}
+                      onAssetUpload={handleAssetUpload}
+                      onSave={hasChanges ? handleSave : undefined}
+                      disabled={updateFields.isPending || updateAssets.isPending || uploadAsset.isPending}
+                      activeTab="data"
+                    />
+                  ) : (
+                    <div className="flex flex-col items-center justify-center py-16">
+                      <svg className="animate-spin h-6 w-6 text-[#86868b] mb-3" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                      </svg>
+                      <p className="text-[13px] text-[#86868b]">Loading data...</p>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
           </div>
 
-          {/* Middle: PDF preview */}
-          <div className="flex-1 p-6 bg-[#f5f5f7] relative">
-            {isReady ? (
-              <>
-                <PdfPreview key={pdfKey} jobId={jobId} renderedAt={job.renderedAt} isRendering={renderJob.isPending} />
-                {/* Expand button */}
-                <button
-                  onClick={() => setPdfExpanded(true)}
-                  className="absolute top-8 right-8 w-8 h-8 flex items-center justify-center rounded-lg bg-white/80 hover:bg-white shadow-sm transition-colors"
-                  title="Expand preview"
-                >
-                  <svg className="w-4 h-4 text-[#1d1d1f]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
-                  </svg>
-                </button>
-              </>
-            ) : (
-              <div className="h-full flex flex-col items-center justify-center bg-white rounded-xl shadow-sm">
-                <svg className="animate-spin h-8 w-8 text-[#86868b] mb-4" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                </svg>
-                <p className="text-[15px] font-medium text-[#1d1d1f] mb-1">Creating document...</p>
-                <p className="text-[13px] text-[#86868b]">{isCreating ? creationStatus : "Loading..."}</p>
-              </div>
-            )}
-          </div>
-
-          {/* Right: History panel */}
-          {showHistoryPanel && isReady && (
-            <div className="w-[260px] flex-shrink-0">
-              <HistoryPanel job={job} onJobUpdated={handleJobUpdated} />
-            </div>
-          )}
-        </div>
-
-        {/* Chat panel - collapsible */}
-        <div className={`flex-shrink-0 px-4 pb-4 bg-[#f5f5f7] transition-all duration-300 ${chatMinimized ? "" : "h-[350px]"}`}>
-          {/* Chat container with outline */}
-          <div className={`bg-white rounded-xl border border-[#e8e8ed] overflow-hidden ${chatMinimized ? "" : "h-full flex flex-col"}`}>
-            {/* Chat header - clickable to toggle */}
-            <div
-              onClick={() => setChatMinimized(!chatMinimized)}
-              className="flex items-center justify-between px-4 py-3 cursor-pointer group border-b border-[#e8e8ed] hover:bg-[#f9f9fb] transition-colors"
-            >
-              <span className="text-[13px] font-medium text-[#1d1d1f]">
-                Chat
-              </span>
-              <svg
-                className={`w-4 h-4 text-[#86868b] group-hover:text-[#1d1d1f] transition-all ${chatMinimized ? "" : "rotate-180"}`}
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-                strokeWidth={2}
-              >
-                <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-              </svg>
-            </div>
-            {/* Chat content */}
-            {!chatMinimized && (
-              <div className="flex-1 min-h-0">
-                <ChatPanel
-                jobId={jobId}
-                initialMessage={job?.initialMessage}
-                uploadedFiles={job?.uploadedFiles}
-                initialUserPrompt={initialPrompt}
-                initialUserFiles={initialFiles?.map(f => ({ name: f.name, type: f.type }))}
-                isCreating={isCreating}
-                creationStatus={creationStatus}
-                initialReasoningMode={initialReasoningMode}
-                onFieldsUpdated={handleFieldsUpdated}
-                onTemplateUpdated={handleTemplateUpdated}
-                onFilesChanged={() => refetch()}
-              />
-              </div>
-            )}
-          </div>
         </div>
       </div>
 
@@ -501,7 +619,7 @@ export function JobEditor({ jobId, templateId, onBack, initialPrompt, initialFil
                     });
                     if (res.ok) {
                       setShowCodeModal(false);
-                      await renderJob.mutateAsync(jobId);
+                      await renderJob.mutateAsync({ jobId });
                       setPdfKey((k) => k + 1);
                     }
                   } catch (error) {
@@ -546,7 +664,7 @@ export function JobEditor({ jobId, templateId, onBack, initialPrompt, initialFil
             </div>
             <div className="h-[calc(100%-52px)]">
               <iframe
-                src={`/api/jobs/${jobId}/pdf?t=${job.renderedAt}#toolbar=0&navpanes=0&scrollbar=1&view=FitH`}
+                src={`/api/jobs/${jobId}/pdf?t=${(previewRenderedAt || job.renderedAt) ?? Date.now()}#toolbar=0&navpanes=0&scrollbar=1&view=FitH`}
                 className="w-full h-full"
                 style={{ border: 0 }}
                 title="PDF Preview"

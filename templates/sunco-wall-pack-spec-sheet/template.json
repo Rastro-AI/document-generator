@@ -1,0 +1,211 @@
+{
+  "id": "sunco-wall-pack-spec-sheet",
+  "name": "Sunco Wall Pack Spec Sheet",
+  "format": "svg",
+  "canvas": {
+    "width": 612,
+    "height": 792
+  },
+  "fields": [
+    {
+      "name": "PRODUCT_TITLE",
+      "type": "string",
+      "description": "Main product title text in the upper left",
+      "optional": false,
+      "default": "60W SELECTABLE WALL PACK",
+      "example": "60W SELECTABLE WALL PACK"
+    },
+    {
+      "name": "DESCRIPTION",
+      "type": "string",
+      "description": "Full product description paragraph that will wrap in the left column",
+      "optional": false,
+      "default": "This durable 60W Wall Pack delivers reliable exterior lighting for commercial and industrial applications. Fixture is dimmable, IP65-rated, and features 50,000 lifetime hours of effective brightness. Use slider switch to select your preferred color temperature (3000K, 4000K, 5000K) during installation.",
+      "example": "This durable 60W Wall Pack delivers reliable exterior lighting for commercial and industrial applications. Fixture is dimmable, IP65-rated, and features 50,000 lifetime hours of effective brightness. Use slider switch to select your preferred color temperature (3000K, 4000K, 5000K) during installation."
+    },
+    {
+      "name": "MODEL_NUMBER",
+      "type": "string",
+      "description": "Model number text under MODELS section",
+      "optional": false,
+      "default": "WP_BR-3050K-#",
+      "example": "WP_BR-3050K-#"
+    },
+    {
+      "name": "VOLTAGE",
+      "type": "string",
+      "description": "Voltage value in specifications",
+      "optional": false,
+      "default": "120-277V",
+      "example": "120-277V"
+    },
+    {
+      "name": "WATTAGE",
+      "type": "string",
+      "description": "Wattage value in specifications",
+      "optional": false,
+      "default": "60W",
+      "example": "60W"
+    },
+    {
+      "name": "POWER_FACTOR",
+      "type": "string",
+      "description": "Power factor or current value",
+      "optional": false,
+      "default": "0.6A",
+      "example": "0.6A"
+    },
+    {
+      "name": "LUMENS",
+      "type": "string",
+      "description": "Lumens output",
+      "optional": false,
+      "default": "7600",
+      "example": "7600"
+    },
+    {
+      "name": "EQUIVALENCY",
+      "type": "string",
+      "description": "Equivalency value",
+      "optional": false,
+      "default": "60W",
+      "example": "60W"
+    },
+    {
+      "name": "COLOR_TEMPERATURE",
+      "type": "string",
+      "description": "Color temperature range text",
+      "optional": false,
+      "default": "3000K/4000K/5000K",
+      "example": "3000K/4000K/5000K"
+    },
+    {
+      "name": "CRI",
+      "type": "string",
+      "description": "Color Rendering Index value",
+      "optional": false,
+      "default": "80 CRI",
+      "example": "80 CRI"
+    },
+    {
+      "name": "BEAM_ANGLE",
+      "type": "string",
+      "description": "Beam angle value",
+      "optional": false,
+      "default": "85°",
+      "example": "85°"
+    },
+    {
+      "name": "DIMMABLE",
+      "type": "string",
+      "description": "Dimmable value (Yes/No)",
+      "optional": false,
+      "default": "Yes",
+      "example": "Yes"
+    },
+    {
+      "name": "EFFICACY_3000K_5000K",
+      "type": "string",
+      "description": "Efficacy value for 3000K/5000K",
+      "optional": false,
+      "default": "135lm/w",
+      "example": "135lm/w"
+    },
+    {
+      "name": "EFFICACY_4000K",
+      "type": "string",
+      "description": "Efficacy value for 4000K",
+      "optional": false,
+      "default": "145lm/w",
+      "example": "145lm/w"
+    },
+    {
+      "name": "FREQUENCY",
+      "type": "string",
+      "description": "Frequency value",
+      "optional": false,
+      "default": "50/60Hz",
+      "example": "50/60Hz"
+    },
+    {
+      "name": "OPERATING_TEMPERATURE",
+      "type": "string",
+      "description": "Operating temperature range",
+      "optional": false,
+      "default": "-40°F - 122°F",
+      "example": "-40°F - 122°F"
+    },
+    {
+      "name": "MOISTURE_RATING",
+      "type": "string",
+      "description": "Moisture rating (e.g., IP65)",
+      "optional": false,
+      "default": "IP65",
+      "example": "IP65"
+    },
+    {
+      "name": "HOUSING_MATERIAL",
+      "type": "string",
+      "description": "Housing material description",
+      "optional": false,
+      "default": "Aluminium Alloy",
+      "example": "Aluminium Alloy"
+    },
+    {
+      "name": "WEIGHT",
+      "type": "string",
+      "description": "Fixture weight",
+      "optional": false,
+      "default": "3.53 lbs",
+      "example": "3.53 lbs"
+    },
+    {
+      "name": "AVERAGE_LIFETIME",
+      "type": "string",
+      "description": "Average lifetime value",
+      "optional": false,
+      "default": "50,000 hrs",
+      "example": "50,000 hrs"
+    },
+    {
+      "name": "WARRANTY",
+      "type": "string",
+      "description": "Warranty duration",
+      "optional": false,
+      "default": "7 Years",
+      "example": "7 Years"
+    }
+  ],
+  "assetSlots": [
+    {
+      "name": "LOGO_IMAGE",
+      "kind": "logo",
+      "description": "Brand logo in the top-left teal bar"
+    },
+    {
+      "name": "PRODUCT_IMAGE",
+      "kind": "photo",
+      "description": "Main product photo in the upper-right"
+    },
+    {
+      "name": "DISTRIBUTION_CHART",
+      "kind": "chart",
+      "description": "Light distribution polar chart graphic"
+    },
+    {
+      "name": "CERT_LOGO_1",
+      "kind": "logo",
+      "description": "First certification logo under CERTIFICATIONS (optional)"
+    },
+    {
+      "name": "CERT_LOGO_2",
+      "kind": "logo",
+      "description": "Second certification logo under CERTIFICATIONS (optional)"
+    },
+    {
+      "name": "CERT_LOGO_3",
+      "kind": "logo",
+      "description": "Third certification logo under CERTIFICATIONS (optional)"
+    }
+  ]
+}

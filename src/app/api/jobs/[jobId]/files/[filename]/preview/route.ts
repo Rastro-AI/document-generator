@@ -1,8 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getJob } from "@/lib/fs-utils";
-import { getJobDir } from "@/lib/paths";
-import fs from "fs/promises";
-import path from "path";
+import { getJob, getUploadedFile } from "@/lib/fs-utils";
 import * as XLSX from "xlsx";
 
 // GET - Render XLSX/CSV as HTML table
@@ -25,8 +22,10 @@ export async function GET(
       return new NextResponse("File not found", { status: 404 });
     }
 
-    const filePath = path.join(getJobDir(jobId), decodedFilename);
-    const fileBuffer = await fs.readFile(filePath);
+    const fileBuffer = await getUploadedFile(jobId, decodedFilename);
+    if (!fileBuffer) {
+      return new NextResponse("File not found in storage", { status: 404 });
+    }
 
     // Parse the spreadsheet
     const workbook = XLSX.read(fileBuffer, { type: "buffer" });

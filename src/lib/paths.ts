@@ -57,6 +57,10 @@ export function getTemplateTsxPath(templateId: string): string {
   return path.join(getTemplateDir(templateId), "template.tsx");
 }
 
+export function getTemplateSvgPath(templateId: string): string {
+  return path.join(getTemplateDir(templateId), "template.svg");
+}
+
 export function getTemplateCodePath(templateId: string): string {
   return getTemplateTsxPath(templateId);
 }
@@ -84,6 +88,14 @@ export function getJobOutputPdfPath(jobId: string): string {
 
 export function getJobTemplateTsxPath(jobId: string): string {
   return path.join(getJobDir(jobId), "template.tsx");
+}
+
+export function getJobTemplateSvgPath(jobId: string): string {
+  return path.join(getJobDir(jobId), "template.svg");
+}
+
+export function getJobOutputSvgPath(jobId: string): string {
+  return path.join(getJobDir(jobId), "output.svg");
 }
 
 export function getJobAssetsDir(jobId: string): string {

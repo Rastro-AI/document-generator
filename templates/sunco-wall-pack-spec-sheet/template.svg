@@ -1,0 +1,137 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="612" height="792" viewBox="0 0 612 792">
+  <defs>
+    <style>
+      .bg-page { fill: #ffffff; }
+      .bg-teal { fill: #0b91b7; }
+      .bg-light { fill: #f7f7f7; }
+      .text-main { fill: #000000; font-family: Arial, Helvetica, sans-serif; }
+      .h1 { font-size: 24px; font-weight: 700; }
+      .h2 { font-size: 16px; font-weight: 700; }
+      .body { font-size: 10px; }
+      .label { font-size: 9px; }
+      .value { font-size: 9px; font-weight: 700; }
+      .small { font-size: 8px; }
+      .line { stroke: #000000; stroke-width: 0.8; }
+      .divider { stroke: #000000; stroke-width: 0.6; }
+      .spec-row-border { stroke: #e0e0e0; stroke-width: 0.6; }
+    </style>
+  </defs>
+
+  <!-- White page background -->
+  <rect class="bg-page" x="0" y="0" width="612" height="792" />
+
+  <!-- Top teal bar -->
+  <rect class="bg-teal" x="0" y="0" width="612" height="90" />
+  <!-- Sunco logo placeholder -->
+  <image x="36" y="24" width="80" height="32" xlink:href="{{LOGO_IMAGE}}" />
+
+  <!-- Left column main heading (single field; allow natural wrapping) -->
+  <text class="text-main h1" x="48" y="150">{{PRODUCT_TITLE:60W SELECTABLE WALL PACK}}</text>
+
+  <!-- Description paragraph as a single flowing line -->
+  <text class="text-main body" x="48" y="190">{{DESCRIPTION:This durable 60W Wall Pack delivers reliable exterior lighting for commercial and industrial applications. Fixture is dimmable, IP65-rated, and features 50,000 lifetime hours of effective brightness. Use slider switch to select your preferred color temperature (3000K, 4000K, 5000K) during installation.}}</text>
+
+  <!-- Models section -->
+  <text class="text-main h2" x="48" y="280">MODELS</text>
+  <line class="divider" x1="48" y1="288" x2="276" y2="288" />
+  <text class="text-main body" x="48" y="308">{{MODEL_NUMBER:WP_BR-3050K-#}}</text>
+
+  <!-- Light distribution angle heading -->
+  <text class="text-main h2" x="48" y="360">LIGHT DISTRIBUTION ANGLE</text>
+
+  <!-- Light distribution chart placeholder -->
+  <image x="72" y="372" width="240" height="240" xlink:href="{{DISTRIBUTION_CHART}}" />
+
+  <!-- Certifications heading -->
+  <text class="text-main h2" x="48" y="670">CERTIFICATIONS</text>
+  <line class="divider" x1="48" y1="678" x2="276" y2="678" />
+
+  <!-- Certifications logos placeholders (multiple, optional) -->
+  <image x="60" y="690" width="40" height="40" xlink:href="{{CERT_LOGO_1}}" />
+  <image x="110" y="690" width="40" height="40" xlink:href="{{CERT_LOGO_2}}" />
+  <image x="160" y="690" width="40" height="40" xlink:href="{{CERT_LOGO_3}}" />
+
+  <!-- Right column product image placeholder -->
+  <image x="324" y="110" width="240" height="180" xlink:href="{{PRODUCT_IMAGE}}" />
+
+  <!-- Specifications heading -->
+  <text class="text-main h2" x="324" y="326">SPECIFICATIONS</text>
+
+  <!-- Specifications table -->
+  <!-- Column headers: label column (left), value column (right) -->
+  <!-- Basic layout: each row height 18px -->
+
+  <!-- Voltage row background -->
+  <rect class="bg-light" x="324" y="344" width="252" height="18" />
+  <rect class="bg-light" x="324" y="398" width="252" height="18" />
+  <rect class="bg-light" x="324" y="452" width="252" height="18" />
+  <rect class="bg-light" x="324" y="488" width="252" height="18" />
+  <rect class="bg-light" x="324" y="524" width="252" height="18" />
+  <rect class="bg-light" x="324" y="578" width="252" height="18" />
+  <rect class="bg-light" x="324" y="614" width="252" height="18" />
+
+  <!-- Section titles -->
+  <text class="text-main h2" x="324" y="416">LIGHTING PERFORMANCE</text>
+  <text class="text-main h2" x="324" y="596">ENVIRONMENT</text>
+  <text class="text-main h2" x="324" y="650">CONSTRUCTION</text>
+  <text class="text-main h2" x="324" y="714">LIFETIME</text>
+
+  <!-- Top three spec rows: Voltage, Wattage, Power Factor -->
+  <text class="text-main label" x="332" y="356">Voltage</text>
+  <text class="text-main value" x="540" y="356">{{VOLTAGE:120-277V}}</text>
+
+  <text class="text-main label" x="332" y="374">Wattage</text>
+  <text class="text-main value" x="540" y="374">{{WATTAGE:60W}}</text>
+
+  <text class="text-main label" x="332" y="392">Power Factor</text>
+  <text class="text-main value" x="540" y="392">{{POWER_FACTOR:0.6A}}</text>
+
+  <!-- LIGHTING PERFORMANCE rows -->
+  <text class="text-main label" x="332" y="432">Lumens</text>
+  <text class="text-main value" x="540" y="432">{{LUMENS:7600}}</text>
+
+  <text class="text-main label" x="332" y="450">Equivalency</text>
+  <text class="text-main value" x="540" y="450">{{EQUIVALENCY:60W}}</text>
+
+  <text class="text-main label" x="332" y="468">Color Temperature</text>
+  <text class="text-main value" x="540" y="468">{{COLOR_TEMPERATURE:3000K/4000K/5000K}}</text>
+
+  <text class="text-main label" x="332" y="486">Color Rendering Index</text>
+  <text class="text-main value" x="540" y="486">{{CRI:80 CRI}}</text>
+
+  <text class="text-main label" x="332" y="504">Beam Angle</text>
+  <text class="text-main value" x="540" y="504">{{BEAM_ANGLE:85°}}</text>
+
+  <text class="text-main label" x="332" y="522">Dimmable</text>
+  <text class="text-main value" x="540" y="522">{{DIMMABLE:Yes}}</text>
+
+  <text class="text-main label" x="332" y="540">Efficacy 3000K/5000K</text>
+  <text class="text-main value" x="540" y="540">{{EFFICACY_3000K_5000K:135lm/w}}</text>
+
+  <text class="text-main label" x="332" y="558">Efficacy 4000K</text>
+  <text class="text-main value" x="540" y="558">{{EFFICACY_4000K:145lm/w}}</text>
+
+  <text class="text-main label" x="332" y="576">Frequency</text>
+  <text class="text-main value" x="540" y="576">{{FREQUENCY:50/60Hz}}</text>
+
+  <!-- ENVIRONMENT rows -->
+  <text class="text-main label" x="332" y="612">Operating Temperature</text>
+  <text class="text-main value" x="540" y="612">{{OPERATING_TEMPERATURE:-40°F - 122°F}}</text>
+
+  <text class="text-main label" x="332" y="630">Moisture Rating</text>
+  <text class="text-main value" x="540" y="630">{{MOISTURE_RATING:IP65}}</text>
+
+  <!-- CONSTRUCTION rows -->
+  <text class="text-main label" x="332" y="666">Housing Material</text>
+  <text class="text-main value" x="540" y="666">{{HOUSING_MATERIAL:Aluminium Alloy}}</text>
+
+  <text class="text-main label" x="332" y="684">Weight</text>
+  <text class="text-main value" x="540" y="684">{{WEIGHT:3.53 lbs}}</text>
+
+  <!-- LIFETIME rows -->
+  <text class="text-main label" x="332" y="730">Average Lifetime</text>
+  <text class="text-main value" x="540" y="730">{{AVERAGE_LIFETIME:50,000 hrs}}</text>
+
+  <text class="text-main label" x="332" y="748">Warranty</text>
+  <text class="text-main value" x="540" y="748">{{WARRANTY:7 Years}}</text>
+</svg>

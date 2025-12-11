@@ -1,36 +1,46 @@
 /**
- * Template Generator Agent
- * Uses OpenAI Agents SDK with code_interpreter and containers
- * Full feature parity with the original Responses API version
+ * SVG Template Generator Agent
+ * Creates editable SVG templates with {{FIELD}} placeholders from PDF analysis
+ * LLM analyzes PDF visually and creates clean SVG from scratch
  */
 
 import {
   Agent,
-  run,
+  Runner,
   tool,
   setDefaultModelProvider,
+  applyPatchTool,
+  applyDiff,
+  shellTool,
 } from "@openai/agents-core";
+import type { Editor, ApplyPatchResult, Shell, ShellAction, ShellResult } from "@openai/agents-core";
+
+// Local types for apply_patch operations
+type CreateFileOperation = { type: "create_file"; path: string; diff: string };
+type UpdateFileOperation = { type: "update_file"; path: string; diff: string };
+type DeleteFileOperation = { type: "delete_file"; path: string };
 import { OpenAIProvider, codeInterpreterTool } from "@openai/agents-openai";
 import { z } from "zod";
 import OpenAI from "openai";
-import { renderTemplateCode } from "@/lib/template-renderer";
-import path from "path";
+import { renderSVGTemplate, svgToPdf, svgToPng } from "@/lib/svg-template-renderer";
 import fsSync from "fs";
+import path from "path";
 import os from "os";
+import { exec } from "child_process";
 
 // Logger for template generator
 const log = {
   info: (msg: string, data?: unknown) => {
     const timestamp = new Date().toISOString();
-    console.log(`[${timestamp}] [template-generator-agent] ${msg}`, data !== undefined ? data : "");
+    console.log(`[${timestamp}] [svg-template-generator] ${msg}`, data !== undefined ? data : "");
   },
   error: (msg: string, data?: unknown) => {
     const timestamp = new Date().toISOString();
-    console.error(`[${timestamp}] [template-generator-agent] ERROR: ${msg}`, data !== undefined ? data : "");
+    console.error(`[${timestamp}] [svg-template-generator] ERROR: ${msg}`, data !== undefined ? data : "");
   },
   debug: (msg: string, data?: unknown) => {
     const timestamp = new Date().toISOString();
-    console.log(`[${timestamp}] [template-generator-agent] DEBUG: ${msg}`, data !== undefined ? data : "");
+    console.log(`[${timestamp}] [svg-template-generator] DEBUG: ${msg}`, data !== undefined ? data : "");
   },
 };
 
@@ -65,7 +75,7 @@ export interface GeneratorTrace {
   previewUrl?: string;
   pdfUrl?: string;
   templateJson?: TemplateJson;
-  templateCode?: string;
+  templateCode?: string; // For SVG, this contains the SVG code
 }
 
 export type GeneratorEventCallback = (event: GeneratorTrace) => void;
@@ -74,6 +84,8 @@ export interface TemplateJsonField {
   name: string;
   type: string;
   description: string;
+  optional?: boolean;
+  default?: unknown;
   example?: unknown;
   items?: { type: string; properties?: Record<string, { type: string; description?: string }> };
   properties?: Record<string, { type: string; description?: string }>;
@@ -82,130 +94,84 @@ export interface TemplateJsonField {
 export interface TemplateJson {
   id: string;
   name: string;
+  format: "svg";
   canvas: { width: number; height: number };
   fields: TemplateJsonField[];
   assetSlots: Array<{ name: string; kind: string; description: string }>;
 }
 
-/**
- * Generate placeholder value for a field based on its type
- * For previews, we want to show meaningful placeholders that work with .map(), etc.
- */
-function generatePlaceholderValue(field: TemplateJsonField): unknown {
-  const placeholder = `{{${field.name}}}`;
-
-  switch (field.type) {
-    case "array":
-      // Generate array with placeholder items
-      if (field.items?.type === "object" && field.items.properties) {
-        // Array of objects - generate 2 sample items with placeholder properties
-        const sampleObject: Record<string, string> = {};
-        for (const [key] of Object.entries(field.items.properties)) {
-          sampleObject[key] = `{{${field.name}[].${key}}}`;
-        }
-        return [sampleObject, sampleObject];
-      } else {
-        // Array of primitives
-        return [`{{${field.name}[0]}}`, `{{${field.name}[1]}}`];
-      }
-
-    case "object":
-      // Generate object with placeholder properties
-      if (field.properties) {
-        const sampleObject: Record<string, unknown> = {};
-        for (const [key, prop] of Object.entries(field.properties)) {
-          if (prop.type === "array") {
-            sampleObject[key] = [`{{${field.name}.${key}[0]}}`, `{{${field.name}.${key}[1]}}`];
-          } else {
-            sampleObject[key] = `{{${field.name}.${key}}}`;
-          }
-        }
-        return sampleObject;
-      }
-      return { value: placeholder };
-
-    case "number":
-      return placeholder;
-
-    case "boolean":
-      return true; // Show truthy state for preview
-
-    case "string":
-    default:
-      return placeholder;
-  }
-}
-
 export interface TemplateGeneratorResult {
   success: boolean;
   templateJson?: TemplateJson;
-  templateCode?: string;
+  templateCode?: string; // SVG content
   message: string;
   versions?: Array<{ version: number; previewBase64: string; pdfBase64?: string }>;
+  // Full conversation history for resuming later
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  conversationHistory?: any[];
 }
 
-const SYSTEM_PROMPT = `You generate @react-pdf/renderer templates for product spec sheets.
+// Note: We don't use pdf2svg because it produces uneditable glyph-based SVG.
+// Instead, the LLM creates clean SVG from scratch based on visual analysis.
 
-These templates will be reused across different products. Branding/layout stays consistent; product data and section content are dynamic fields.
+/**
+ * Local shell executor for the shell tool
+ * Runs commands in the local environment with timeout support
+ */
+class LocalShell implements Shell {
+  private defaultTimeout = 60000; // 60 seconds
 
-YOUR GOAL: Create a template that renders IDENTICALLY to the input PDF - same margins, colors, fonts, spacing, layout.
+  async run(action: ShellAction): Promise<ShellResult> {
+    const timeout = action.timeoutMs ?? this.defaultTimeout;
+    const results: ShellResult["output"] = [];
 
-FUNCTION SIGNATURE (required):
-\`\`\`tsx
-export function render(
-  fields: Record<string, any>,
-  assets: Record<string, string | null>,
-  templateRoot: string
-): React.ReactElement
-\`\`\`
+    for (const cmd of action.commands) {
+      log.info(`[SHELL] Executing: ${cmd}`);
+      try {
+        const result = await new Promise<{ stdout: string; stderr: string; exitCode: number; timedOut: boolean }>((resolve) => {
+          const childProcess = exec(cmd, { timeout }, (error, stdout, stderr) => {
+            // Check if killed (timeout) - use type assertion for ExecException
+            const execError = error as { killed?: boolean; code?: number } | null;
+            if (execError?.killed) {
+              resolve({ stdout: stdout || "", stderr: stderr || "", exitCode: -1, timedOut: true });
+            } else {
+              resolve({
+                stdout: stdout || "",
+                stderr: stderr || "",
+                exitCode: execError?.code ?? 0,
+                timedOut: false,
+              });
+            }
+          });
+          childProcess.on("error", (err) => {
+            resolve({ stdout: "", stderr: err.message, exitCode: 1, timedOut: false });
+          });
+        });
 
-FIELD TYPES - Use appropriate types for the data:
-- "string": Simple text (TITLE, PRODUCT_NAME)
-- "number": Numeric values (PRICE, QUANTITY)
-- "array": Lists of items - use for repeated content like model numbers, features, specs
-- "object": Grouped data with named properties - use for structured sections
+        log.info(`[SHELL] Exit code: ${result.exitCode}, stdout: ${result.stdout.substring(0, 100)}...`);
+        results.push({
+          stdout: result.stdout,
+          stderr: result.stderr,
+          outcome: result.timedOut
+            ? { type: "timeout" }
+            : { type: "exit", exitCode: result.exitCode },
+        });
+      } catch (err) {
+        log.error(`[SHELL] Error executing command`, err);
+        results.push({
+          stdout: "",
+          stderr: String(err),
+          outcome: { type: "exit", exitCode: 1 },
+        });
+      }
+    }
 
-USING FIELDS IN CODE:
-- String: \`{fields.TITLE || "{{TITLE}}"}\`
-- Array: \`{(fields.MODELS as string[] || []).map((m, i) => <Text key={i}>{m}</Text>)}\`
-- Object with array:
-  \`\`\`tsx
-  {(fields.SPECIFICATIONS as {title: string, items: {label: string, value: string}[]})?.items?.map((item, i) => (
-    <View key={i} style={styles.specRow}>
-      <Text>{item.label}</Text>
-      <Text>{item.value}</Text>
-    </View>
-  ))}
-  \`\`\`
-
-ASSETS (images): Show placeholder when not provided:
-\`\`\`tsx
-{assets.LOGO ? (
-  <Image src={assets.LOGO} style={{width: 100, height: 50}} />
-) : (
-  <View style={{width: 100, height: 50, backgroundColor: "#e0e0e0"}} />
-)}
-\`\`\`
-
-TECHNICAL CONSTRAINTS (will crash if violated):
-- Only import from "react" and "@react-pdf/renderer"
-- Only use: Document, Page, View, Text, Image, StyleSheet
-- fontFamily: "Helvetica" (no Font.register - it crashes)
-- Borders require ALL THREE props together: borderWidth + borderColor + borderStyle
-- For partial borders (e.g. bottom only): borderBottomWidth + borderBottomColor + borderBottomStyle
-- NEVER use borderWidth: 0 - just omit border props if no border needed
-- Use paddingTop/Bottom/Left/Right (NOT paddingHorizontal/paddingVertical)
-- Dimensions in points (72pt = 1in)
-
-WORKFLOW:
-1. Analyze the PDF - measure margins, colors, spacing, fonts from the original
-2. Call write_template_code AND write_template_json in parallel
-3. BEFORE making any changes, ALWAYS carefully compare the latest rendered screenshot to the original - describe specific differences you see
-4. Refine until they match, then call mark_complete
-
-CRITICAL: Never make changes blindly. Always examine the current rendered output first and describe what's different before deciding what to fix.
-
-FIELD NAMING: SCREAMING_SNAKE_CASE (TITLE, PRODUCT_NAME, SPECIFICATIONS)`;
+    return {
+      output: results,
+      maxOutputLength: action.maxOutputLength,
+    };
+  }
+}
 
 /**
  * Extract reasoning text from a reasoning item
@@ -237,202 +203,259 @@ function extractReasoningText(item: any): string | null {
 }
 
 /**
- * Run the template generator agent
- *
- * Can be called in two modes:
- * 1. Fresh generation: Just pass pdf, screenshot(s), filename, prompt
- * 2. Continuation with feedback: Also pass existingCode, existingJson, feedback
- *
- * @param pdfPageImages - Array of base64 images, one per page (or single string for backwards compat)
+ * Virtual file path for the SVG template in apply_patch operations
+ */
+const SVG_TEMPLATE_PATH = "template.svg";
+
+const SYSTEM_PROMPT = `You create SVG templates from PDF spec sheets. This is an iterative process.
+
+## YOUR GOAL
+Create an SVG template that:
+1. Matches the PDF layout (colors, positions, fonts, spacing)
+2. Has {{PLACEHOLDER}} fields for dynamic content
+3. Has {{ASSET_NAME}} references for images
+
+## TEXT WRAPPING
+For multiline text that needs to wrap, you have TWO options:
+
+### Option 1: foreignObject (RECOMMENDED for wrapping text)
+Use for paragraphs or text that needs automatic wrapping:
+<foreignObject x="48" y="120" width="252" height="60">
+  <div xmlns="http://www.w3.org/1999/xhtml"
+       style="font-family: Arial, sans-serif; font-size: 14px; color: #000;">
+    {{DESCRIPTION:This is a long description that will wrap automatically within the width.}}
+  </div>
+</foreignObject>
+
+### Option 2: Native SVG text with tspan (for short/single-line text)
+Use for headings, labels, or when you need precise positioning:
+<text x="48" y="140" style="font-family: Arial, sans-serif; font-size: 24px; font-weight: 700; fill: #000;">
+  {{TITLE:Product Name}}
+</text>
+
+Or for manually broken lines:
+<text x="48" y="140" style="font-family: Arial, sans-serif; font-size: 14px; fill: #000;">
+  <tspan x="48" dy="0">First line</tspan>
+  <tspan x="48" dy="18">Second line</tspan>
+</text>
+
+NOTE: Our system automatically converts foreignObject to native SVG text when exporting for Figma.
+
+## PLACEHOLDER SYNTAX
+- Text fields: {{FIELD_NAME}} or {{FIELD_NAME:Default Text}}
+- Images: xlink:href="{{ASSET_NAME}}"
+- Use SCREAMING_SNAKE_CASE (e.g., PRODUCT_NAME, WATTAGE, LOGO_IMAGE)
+- Static labels stay as-is (e.g., "Wattage:" is static, but the value becomes {{WATTAGE}})
+
+## SVG BASICS
+- US Letter = 612x792 points, A4 = 595x842 points
+- Use inline styles for best compatibility
+- Common fonts: Arial, Helvetica, sans-serif
+
+## TOOLS
+- code_interpreter: Analyze PDFs, extract colors/measurements
+- shell: Run shell commands (e.g., for file operations, image processing)
+- write_svg: Create or completely replace SVG content
+- apply_patch: Edit SVG via unified diff (target: template.svg) - use for incremental changes
+- read_svg: Read current SVG content
+- write_template_json: Define template fields and asset slots
+- mark_complete: Finish generation (only after 3+ iterations)
+
+## WORKFLOW
+1. Analyze the PDF with code_interpreter - extract colors, positions, text
+2. write_svg to create the template with placeholders already in place
+3. WAIT for render comparison
+4. Review the rendered output, use apply_patch to fix issues
+5. REPEAT steps 3-4 until template looks good (expect 3-5 iterations)
+6. write_template_json to define fields
+7. mark_complete
+
+CRITICAL:
+- Do NOT call mark_complete until you've done at least 3 iterations
+- Compare carefully with the original on each iteration`;
+
+/**
+ * Run the SVG template generator agent
  */
 export async function runTemplateGeneratorAgent(
   pdfPageImages: string | string[],
-  pdfBuffer: Buffer,
   pdfFilename: string,
+  pdfBuffer?: Buffer | null,
   userPrompt?: string,
   onEvent?: GeneratorEventCallback,
   reasoning: "none" | "low" | "high" = "low",
   // Continuation parameters
-  existingCode?: string,
+  existingSvg?: string,
   existingJson?: TemplateJson,
   feedback?: string,
-  startVersion: number = 0
+  startVersion: number = 0,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  existingConversationHistory?: any[]
 ): Promise<TemplateGeneratorResult> {
-  // Normalize to array for multi-page support (backwards compatible with single string)
   const pageImages = Array.isArray(pdfPageImages) ? pdfPageImages : [pdfPageImages];
-  const isContinuation = !!(existingCode && feedback);
+  const isContinuation = !!(existingSvg && feedback);
 
   log.info(`\n${"#".repeat(80)}`);
-  log.info(`### TEMPLATE GENERATOR AGENT ${isContinuation ? "CONTINUING" : "STARTED"} ###`);
+  log.info(`### SVG TEMPLATE GENERATOR ${isContinuation ? "CONTINUING" : "STARTED"} ###`);
   log.info(`${"#".repeat(80)}`);
   log.info(`PDF filename: ${pdfFilename}`);
   log.info(`Reasoning level: ${reasoning}`);
-  log.info(`User prompt: ${userPrompt || "(none)"}`);
   log.info(`Continuation mode: ${isContinuation}`);
-  if (isContinuation) {
-    log.info(`Feedback: ${feedback}`);
-    log.info(`Existing code: ${existingCode?.length || 0} chars`);
-  }
-  log.info(`PDF pages: ${pageImages.length}`);
-  log.info(`Total screenshot size: ${pageImages.reduce((sum, img) => sum + img.length, 0)} chars`);
-  log.info(`PDF buffer size: ${pdfBuffer.length} bytes`);
 
   ensureProvider();
   const openai = getOpenAI();
 
-  // State tracking - initialize from existing state if continuing
+  // State tracking
   const versions: Array<{ version: number; previewBase64: string; pdfBase64?: string }> = [];
-  let currentVersion = startVersion; // Continue from existing version count
-  let currentCode: string | null = existingCode || null;
+  let currentVersion = startVersion;
+  let currentSvg: string | null = existingSvg || null;
   let currentJson: TemplateJson | null = existingJson || null;
   let isComplete = false;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let conversationHistory: any[] = existingConversationHistory || [];
 
-  // Container management
+  // Container for code_interpreter
   let containerId: string | null = null;
 
   try {
-    // Create container and upload files
-    onEvent?.({ type: "status", content: isContinuation ? "Applying feedback..." : "Creating container..." });
+    // For fresh generation, start with null SVG - the model will create it from scratch
+    // PDF-to-SVG converters produce uneditable glyph-based output, so we don't use them
+    if (!isContinuation) {
+      currentSvg = null; // Model will create SVG from scratch based on PDF analysis
+      log.info("Starting fresh - model will create SVG from scratch");
+    }
+
+    // Create container for code_interpreter
+    onEvent?.({ type: "status", content: isContinuation ? "Applying feedback..." : "Analyzing PDF..." });
     log.info("Creating OpenAI container...");
 
     const container = await openai.containers.create({
-      name: `template-gen-${Date.now()}`,
+      name: `svg-template-gen-${Date.now()}`,
     });
     containerId = container.id;
     log.info("Container created", containerId);
 
-    if (!isContinuation) {
-      onEvent?.({ type: "status", content: "Uploading files to container..." });
+    // Upload PDF for analysis (if provided)
+    if (pdfBuffer && pdfBuffer.length > 0) {
+      const pdfPath = path.join(os.tmpdir(), "original.pdf");
+      fsSync.writeFileSync(pdfPath, pdfBuffer);
+      const pdfStream = fsSync.createReadStream(pdfPath);
+      await openai.containers.files.create(containerId, { file: pdfStream });
+      log.info("Original PDF uploaded");
+      fsSync.unlinkSync(pdfPath);
+    } else {
+      log.info("No PDF provided (prompt-only mode)");
     }
 
-    // Upload PDF
-    const pdfPath = path.join(os.tmpdir(), "original.pdf");
-    fsSync.writeFileSync(pdfPath, pdfBuffer);
-    const pdfStream = fsSync.createReadStream(pdfPath);
-    await openai.containers.files.create(containerId, { file: pdfStream });
-    log.info("Original PDF uploaded to container");
-    fsSync.unlinkSync(pdfPath);
-
-    // Upload all page screenshots as PNGs
-    for (let i = 0; i < pageImages.length; i++) {
-      const pageNum = i + 1;
-      const screenshotBuffer = Buffer.from(pageImages[i].split(",")[1], "base64");
-      const screenshotPath = path.join(os.tmpdir(), `original_screenshot_page${pageNum}.png`);
-      fsSync.writeFileSync(screenshotPath, screenshotBuffer);
-      const screenshotStream = fsSync.createReadStream(screenshotPath);
-      await openai.containers.files.create(containerId, { file: screenshotStream });
-      log.info(`Screenshot page ${pageNum}/${pageImages.length} uploaded to container`);
-      fsSync.unlinkSync(screenshotPath);
-    }
-    // Also upload first page as original_screenshot.png for backwards compatibility
-    const firstScreenshotBuffer = Buffer.from(pageImages[0].split(",")[1], "base64");
-    const firstScreenshotPath = path.join(os.tmpdir(), "original_screenshot.png");
-    fsSync.writeFileSync(firstScreenshotPath, firstScreenshotBuffer);
-    const firstScreenshotStream = fsSync.createReadStream(firstScreenshotPath);
-    await openai.containers.files.create(containerId, { file: firstScreenshotStream });
-    log.info("First page also uploaded as original_screenshot.png");
-    fsSync.unlinkSync(firstScreenshotPath);
-
-    if (!isContinuation) {
-      onEvent?.({ type: "status", content: "Analyzing PDF structure..." });
+    // If continuing, upload current SVG as PNG for visual reference
+    if (currentSvg) {
+      try {
+        const svgPngBuffer = await svgToPng(currentSvg);
+        const svgPngPath = path.join(os.tmpdir(), "current_template.png");
+        fsSync.writeFileSync(svgPngPath, svgPngBuffer);
+        const svgPngStream = fsSync.createReadStream(svgPngPath);
+        await openai.containers.files.create(containerId, { file: svgPngStream });
+        log.info("Current template (as PNG) uploaded");
+        fsSync.unlinkSync(svgPngPath);
+      } catch (e) {
+        log.error("Failed to convert/upload SVG as PNG", e);
+      }
     }
 
-    // Create custom tools with closures for state management
-    const writeTemplateCodeTool = tool({
-      name: "write_template_code",
-      description: "Write or replace the complete template code. Use for initial generation or major rewrites.",
-      parameters: z.object({
-        code: z.string().describe("The complete @react-pdf/renderer template code"),
-      }),
-      execute: async ({ code }) => {
-        onEvent?.({ type: "tool_call", content: "Writing template code", toolName: "write_template_code" });
-        currentCode = code;
-        log.info(`write_template_code: ${code.length} chars`);
-        return "Template code written. Will render after all tool calls complete.";
-      },
-    });
+    // Upload screenshot for visual reference (if we have one)
+    if (pageImages[0]) {
+      try {
+        const commaIdx = pageImages[0].indexOf(",");
+        const base64Data = commaIdx >= 0 ? pageImages[0].slice(commaIdx + 1) : pageImages[0];
+        const screenshotBuffer = Buffer.from(base64Data, "base64");
+        const screenshotPath = path.join(os.tmpdir(), "original_screenshot.png");
+        fsSync.writeFileSync(screenshotPath, screenshotBuffer);
+        const screenshotStream = fsSync.createReadStream(screenshotPath);
+        await openai.containers.files.create(containerId, { file: screenshotStream });
+        log.info("Screenshot uploaded");
+        fsSync.unlinkSync(screenshotPath);
+      } catch (e) {
+        log.error("Failed to upload screenshot", e);
+      }
+    } else {
+      log.info("No screenshot provided");
+    }
 
-    const readTemplateTool = tool({
-      name: "read_template",
-      description: "Read the current template code AND template JSON (fields/assets). Use this to see the exact current state, find correct search strings for patches, or debug issues.",
+    // Create custom tools
+    const readSvgTool = tool({
+      name: "read_svg",
+      description: "Read the current SVG template content. Returns the SVG code if it exists, or a message indicating you need to create it first with write_svg.",
       parameters: z.object({}),
       execute: async () => {
-        onEvent?.({ type: "tool_call", content: "Reading template", toolName: "read_template" });
-
-        const parts: string[] = [];
-
-        if (currentCode) {
-          parts.push("=== TEMPLATE CODE ===\n" + currentCode);
-        } else {
-          parts.push("=== TEMPLATE CODE ===\n(none yet)");
+        onEvent?.({ type: "tool_call", content: "Reading SVG template", toolName: "read_svg" });
+        if (!currentSvg) {
+          return "No SVG template exists yet. Use write_svg to create the initial SVG template based on the PDF layout.";
         }
-
-        if (currentJson) {
-          parts.push("\n\n=== TEMPLATE JSON ===\n" + JSON.stringify(currentJson, null, 2));
-        } else {
-          parts.push("\n\n=== TEMPLATE JSON ===\n(none yet)");
-        }
-
-        const result = parts.join("");
-        log.info(`read_template: returning code=${currentCode?.length || 0} chars, json=${currentJson ? 'yes' : 'no'}`);
-        return result;
+        log.info(`read_svg: returning ${currentSvg.length} chars`);
+        return currentSvg;
       },
     });
 
-    const patchTemplateCodeTool = tool({
-      name: "patch_template_code",
-      description: "Make small edits to existing template code using search/replace. More efficient than rewriting. If a patch fails, use read_template to see the actual current code and fields.",
+    // Create an in-memory editor for apply_patch
+    const svgEditor: Editor = {
+      async createFile(operation: CreateFileOperation): Promise<ApplyPatchResult> {
+        if (operation.path !== SVG_TEMPLATE_PATH) {
+          return { status: "failed", output: `Only ${SVG_TEMPLATE_PATH} can be edited` };
+        }
+        onEvent?.({ type: "tool_call", content: "Creating SVG template", toolName: "apply_patch" });
+        try {
+          const newContent = applyDiff("", operation.diff, "create");
+          currentSvg = newContent;
+          log.info(`apply_patch:create - Created SVG (${newContent.length} chars)`);
+          return { status: "completed", output: `Created ${SVG_TEMPLATE_PATH}. Will render after all tool calls complete.` };
+        } catch (error) {
+          log.error(`apply_patch:create failed`, error);
+          return { status: "failed", output: String(error) };
+        }
+      },
+
+      async updateFile(operation: UpdateFileOperation): Promise<ApplyPatchResult> {
+        if (operation.path !== SVG_TEMPLATE_PATH) {
+          return { status: "failed", output: `Only ${SVG_TEMPLATE_PATH} can be edited` };
+        }
+        if (!currentSvg) {
+          return { status: "failed", output: "No SVG content to patch. Use write_svg first." };
+        }
+        onEvent?.({ type: "tool_call", content: "Patching SVG template", toolName: "apply_patch" });
+        try {
+          const newContent = applyDiff(currentSvg, operation.diff);
+          currentSvg = newContent;
+          log.info(`apply_patch:update - Updated SVG (${newContent.length} chars)`);
+          onEvent?.({ type: "tool_result", content: "SVG patched successfully", toolName: "apply_patch" });
+          return { status: "completed", output: `Updated ${SVG_TEMPLATE_PATH}. Will render after all tool calls complete.` };
+        } catch (error) {
+          log.error(`apply_patch:update failed`, error);
+          return { status: "failed", output: String(error) };
+        }
+      },
+
+      async deleteFile(operation: DeleteFileOperation): Promise<ApplyPatchResult> {
+        return { status: "failed", output: `Cannot delete ${operation.path}` };
+      },
+    };
+
+    const writeSvgTool = tool({
+      name: "write_svg",
+      description: "Completely replace the SVG template content. Use for major rewrites.",
       parameters: z.object({
-        operations: z.array(z.object({
-          search: z.string().describe("Exact string to find"),
-          replace: z.string().describe("String to replace it with"),
-        })).describe("Array of search/replace operations"),
+        svg: z.string().describe("The complete SVG content"),
       }),
-      execute: async ({ operations }) => {
-        onEvent?.({ type: "tool_call", content: `Patching template (${operations.length} operations)`, toolName: "patch_template_code" });
-        log.info(`patch_template_code: ${operations.length} operations`);
-
-        if (!currentCode) {
-          return "Error: No template code to patch. Use write_template_code first.";
-        }
-
-        const results: string[] = [];
-        let allPatchesSucceeded = true;
-
-        for (const op of operations) {
-          const escapedSearch = op.search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-          const matchCount = (currentCode.match(new RegExp(escapedSearch, 'g')) || []).length;
-
-          if (matchCount === 0) {
-            // Try to find similar content to help debug
-            const firstLine = op.search.split('\n')[0].trim();
-            const similarFound = currentCode.includes(firstLine.substring(0, 30));
-            const hint = similarFound
-              ? " The first line exists but full match failed - check whitespace/indentation."
-              : " First line not found either - use read_template to see current code.";
-            results.push(`ERROR: No match found for "${op.search.substring(0, 40)}...".${hint}`);
-            log.error(`Patch ERROR: "${op.search.substring(0, 80)}..." NOT FOUND`);
-            allPatchesSucceeded = false;
-          } else if (matchCount > 1) {
-            results.push(`ERROR: Found ${matchCount} matches for "${op.search.substring(0, 30)}...". Include more surrounding context to make it unique.`);
-            log.error(`Patch ERROR: ${matchCount} matches for "${op.search.substring(0, 50)}..."`);
-            allPatchesSucceeded = false;
-          } else {
-            currentCode = currentCode.replace(op.search, op.replace);
-            results.push(`OK: replaced "${op.search.substring(0, 25)}..."`);
-            log.info(`Patch OK: "${op.search.substring(0, 50)}..." -> "${op.replace.substring(0, 50)}..."`);
-          }
-        }
-
-        const resultStr = `Patches: ${results.join("; ")}${allPatchesSucceeded ? " Will render." : ""}`;
-        onEvent?.({ type: "tool_result", content: resultStr, toolName: "patch_template_code" });
-        return resultStr;
+      execute: async ({ svg }) => {
+        onEvent?.({ type: "tool_call", content: "Writing SVG template", toolName: "write_svg" });
+        currentSvg = svg;
+        log.info(`write_svg: ${svg.length} chars`);
+        return "SVG template written. Will render after all tool calls complete.";
       },
     });
 
     const writeTemplateJsonTool = tool({
       name: "write_template_json",
-      description: "Write or update the template metadata (fields and asset slots).",
+      description: "Write the template metadata (fields and asset slots).",
       parameters: z.object({
         id: z.string().describe("Template ID (lowercase, hyphens)"),
         name: z.string().describe("Human-readable template name"),
@@ -444,9 +467,11 @@ export async function runTemplateGeneratorAgent(
           name: z.string().describe("SCREAMING_SNAKE_CASE field name"),
           type: z.enum(["string", "number", "boolean", "array", "object"]),
           description: z.string(),
-          exampleJson: z.string().nullable().describe("JSON-encoded example value. For string: '\"hello\"', for array: '[\"a\",\"b\"]', for object: '{\"key\":\"value\"}'. Use null if no example."),
-          itemsJson: z.string().nullable().describe("For array types only: JSON schema of array items, e.g. '{\"type\":\"string\"}' or '{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\"},\"value\":{\"type\":\"string\"}}}'. Use null if not an array."),
-          propertiesJson: z.string().nullable().describe("For object types only: JSON schema of properties, e.g. '{\"title\":{\"type\":\"string\"},\"items\":{\"type\":\"array\"}}'. Use null if not an object."),
+          optional: z.boolean().nullable().describe("Whether this field is optional (default: false)"),
+          defaultValue: z.string().nullable().describe("Default value if field is not provided"),
+          exampleJson: z.string().nullable().describe("JSON-encoded example value"),
+          itemsJson: z.string().nullable().describe("For arrays: item schema"),
+          propertiesJson: z.string().nullable().describe("For objects: properties schema"),
         })),
         assetSlots: z.array(z.object({
           name: z.string().describe("SCREAMING_SNAKE_CASE asset name"),
@@ -458,7 +483,6 @@ export async function runTemplateGeneratorAgent(
       execute: async ({ id, name, canvas, fields, assetSlots }: any) => {
         onEvent?.({ type: "tool_call", content: `Writing template JSON (${fields.length} fields, ${assetSlots.length} assets)`, toolName: "write_template_json" });
 
-        // Parse JSON strings back to values
         const parseJson = (str: string | null): unknown => {
           if (!str) return undefined;
           try {
@@ -471,11 +495,14 @@ export async function runTemplateGeneratorAgent(
         currentJson = {
           id: id || "generated-template",
           name: name || "Generated Template",
+          format: "svg",
           canvas: canvas || { width: 612, height: 792 },
-          fields: fields.map((f: { name: string; type: string; description: string; exampleJson?: string | null; itemsJson?: string | null; propertiesJson?: string | null }) => ({
+          fields: fields.map((f: { name: string; type: string; description: string; optional?: boolean | null; defaultValue?: string | null; exampleJson?: string | null; itemsJson?: string | null; propertiesJson?: string | null }) => ({
             name: f.name,
             type: f.type,
             description: f.description,
+            optional: f.optional ?? false,
+            default: f.defaultValue || undefined,
             example: parseJson(f.exampleJson || null),
             items: parseJson(f.itemsJson || null),
             properties: parseJson(f.propertiesJson || null),
@@ -485,7 +512,6 @@ export async function runTemplateGeneratorAgent(
 
         log.info(`write_template_json: ${currentJson.fields.length} fields, ${currentJson.assetSlots.length} assets`);
 
-        // Emit template_json event for frontend
         onEvent?.({
           type: "template_json",
           content: `Template JSON updated: ${currentJson.fields.length} fields, ${currentJson.assetSlots.length} assets`,
@@ -498,21 +524,32 @@ export async function runTemplateGeneratorAgent(
 
     const markCompleteTool = tool({
       name: "mark_complete",
-      description: "ONLY call this after at least 3 refinement iterations AND when template closely matches original. Be thorough!",
+      description: "Call this ONLY after you have seen at least one rendered comparison and the template matches the original well. Do NOT call on the first iteration.",
       parameters: z.object({
         message: z.string().describe("Brief summary of what was generated"),
       }),
       execute: async ({ message }) => {
         onEvent?.({ type: "tool_call", content: `Marking complete: ${message}`, toolName: "mark_complete" });
+
+        // Require minimum iterations before allowing completion
+        const MIN_VERSIONS = 2; // At least 2 rendered versions before completing
+        if (currentVersion < MIN_VERSIONS) {
+          log.info(`mark_complete REJECTED: only ${currentVersion} versions, need ${MIN_VERSIONS}`);
+          return `ERROR: You've only completed ${currentVersion} iteration(s). You need at least ${MIN_VERSIONS} iterations. Keep refining the template with apply_patch.`;
+        }
+
         isComplete = true;
-        log.info(`mark_complete: ${message}`);
+        log.info(`mark_complete: ${message} (after ${currentVersion} versions)`);
         return "Generation marked complete.";
       },
     });
 
-    // Create agent with code_interpreter + custom tools
+    // Create shell executor for the shell tool
+    const localShell = new LocalShell();
+
+    // Create agent
     const agent = new Agent({
-      name: "TemplateGenerator",
+      name: "SVGTemplateGenerator",
       instructions: SYSTEM_PROMPT,
       model: "gpt-5.1",
       modelSettings: {
@@ -520,69 +557,88 @@ export async function runTemplateGeneratorAgent(
       },
       tools: [
         codeInterpreterTool({ container: containerId }),
-        writeTemplateCodeTool,
-        readTemplateTool,
-        patchTemplateCodeTool,
+        shellTool({ shell: localShell }),
+        readSvgTool,
+        applyPatchTool({ editor: svgEditor }),
+        writeSvgTool,
         writeTemplateJsonTool,
         markCompleteTool,
       ],
     });
 
-    // Build initial prompt - different for fresh vs continuation
+    // Build initial prompt
     const userInstructions = userPrompt ? `\n\nUSER INSTRUCTIONS:\n${userPrompt}\n` : "";
-
-    // Build page file list for prompts
-    const pageFileList = pageImages.length > 1
-      ? pageImages.map((_, i) => `- /mnt/user/original_screenshot_page${i + 1}.png - Page ${i + 1} screenshot`).join("\n")
-      : "- /mnt/user/original_screenshot.png - Screenshot";
-
-    const pageCountNote = pageImages.length > 1
-      ? `\n\nIMPORTANT: This is a ${pageImages.length}-page PDF. I'm showing you screenshots of all ${pageImages.length} pages. Your template should generate ALL pages to match the original.`
-      : "";
 
     let initialPrompt: string;
     if (isContinuation) {
-      // Continuation mode: we already have code/json, user is providing feedback
-      initialPrompt = `You are continuing work on a @react-pdf/renderer template based on user feedback.
+      initialPrompt = `You are continuing work on an SVG template based on user feedback.
 
 USER FEEDBACK:
 ${feedback}
 
-IMPORTANT STEPS:
-1. FIRST, call read_template to see the CURRENT template code and JSON
-2. Then make the changes the user requested using patch_template_code (for small fixes) or write_template_code (for major rewrites)
-3. The template will be automatically rendered after your changes
+STEPS:
+1. Call read_svg to see the current SVG template
+2. Make the requested changes using apply_patch
+3. Update write_template_json if fields changed
+4. Review the rendered output
 
-Original filename: ${pdfFilename}${pageCountNote}
+Original filename: ${pdfFilename}
 
 Files in container:
-- /mnt/user/original.pdf - The original PDF to match
-${pageFileList}`;
+- /mnt/user/original.pdf - Original PDF for reference
+- /mnt/user/current_template.png - Current SVG template rendered as PNG
+- /mnt/user/original_screenshot.png - Screenshot of original PDF`;
     } else {
-      // Fresh generation mode
-      initialPrompt = `Analyze this PDF and generate a @react-pdf/renderer template.
-Original filename: ${pdfFilename}${pageCountNote}
-${userInstructions}
-Files in container:
-- /mnt/user/original.pdf - The PDF to analyze (${pageImages.length} page${pageImages.length > 1 ? "s" : ""})
-${pageFileList}
+      initialPrompt = `Create an SVG template from this PDF spec sheet.
 
-Steps:
-1. Use code_interpreter to analyze the PDF structure
-2. Call BOTH write_template_code AND write_template_json IN PARALLEL (same response)
-3. I'll render and show you the comparison for refinement`;
+Original filename: ${pdfFilename}${userInstructions}
+
+${pdfBuffer && pdfBuffer.length > 0 ? `Files in container:
+- /mnt/user/original.pdf - The PDF to analyze (use code_interpreter to extract colors, measure positions)
+${pageImages[0] ? "- /mnt/user/original_screenshot.png - Screenshot of the PDF" : ""}
+
+Use code_interpreter to analyze the PDF - extract colors, positions, and text content.
+Then write_svg to create the template WITH {{PLACEHOLDERS}} for dynamic content.
+
+START NOW: Analyze the PDF, then create the SVG template.` : `PROMPT-ONLY MODE
+No PDF reference provided. Create a clean, production-grade SVG layout based on the user's instructions.
+
+Best practices:
+- Use consistent grid, spacing, and typography
+- Define CSS classes in <defs><style>
+- Use {{PLACEHOLDER}} syntax for dynamic content
+- Use xlink:href="{{ASSET_NAME}}" for image placeholders
+
+START NOW: Create the SVG template based on the prompt.`}`;
     }
 
-    // Track last render for comparison images
+    // Track last render for comparison
     let lastRenderPngBase64: string | null = null;
-    let lastRenderError: string | null = null; // Track render errors to tell the model
 
-    // Iterative generation loop
+    // Create a Runner with lifecycle hooks for real-time tool call updates
+    const runner = new Runner();
+
+    // Hook: Tool execution started - emit event immediately
+    runner.on("agent_tool_start", (_context, _agent, tool, _details) => {
+      const toolName = tool.name || "unknown";
+      log.info(`[TOOL START] ${toolName}`);
+      onEvent?.({ type: "tool_call", content: `Calling ${toolName}...`, toolName });
+    });
+
+    // Hook: Tool execution ended - emit result
+    runner.on("agent_tool_end", (_context, _agent, tool, result, _details) => {
+      const toolName = tool.name || "unknown";
+      // Truncate long results for display
+      const truncatedResult = typeof result === "string" && result.length > 200
+        ? result.substring(0, 200) + "..."
+        : String(result);
+      log.info(`[TOOL END] ${toolName}: ${truncatedResult.substring(0, 100)}`);
+      onEvent?.({ type: "tool_result", content: truncatedResult, toolName });
+    });
+
+    // Iteration loop - allow plenty of iterations for quality output
     const MAX_ITERATIONS = 15;
-    log.info("Starting iteration loop", { maxIterations: MAX_ITERATIONS, isContinuation });
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let conversationHistory: any[] = [];
+    log.info("Starting iteration loop", { maxIterations: MAX_ITERATIONS });
 
     for (let iteration = 0; iteration < MAX_ITERATIONS && !isComplete; iteration++) {
       log.info(`\n${"=".repeat(80)}`);
@@ -592,226 +648,177 @@ Steps:
       onEvent?.({
         type: "status",
         content: iteration === 0
-          ? (isContinuation ? "Applying feedback..." : "Generating initial template...")
+          ? (isContinuation ? "Applying feedback..." : "Analyzing SVG and adding placeholders...")
           : `Refining template (iteration ${iteration + 1})...`,
       });
 
-      // Build input for this iteration
+      // Build input
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       let input: any;
 
-      if (iteration === 0) {
-        // Initial input with all PDF page screenshots
-        // The Agents SDK uses `image` property (not `image_url`) for InputImage type
+      if (iteration === 0 && existingConversationHistory && existingConversationHistory.length > 0) {
+        // Resuming with existing history - inject user feedback into the conversation
+        log.info(`Resuming with existing conversation history (${existingConversationHistory.length} items)`);
+
+        const feedbackContent = `USER FEEDBACK (please address this):
+${feedback}
+
+The current template state has been preserved. Please:
+1. Review the feedback carefully
+2. Use read_svg to see the current template if needed
+3. Make the requested changes using patch_svg
+4. Update write_template_json if fields changed`;
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const feedbackMessage: any[] = [
+          { type: "input_text", text: feedbackContent },
+        ];
+        if (pageImages[0]) {
+          feedbackMessage.push({ type: "input_image", image: pageImages[0] });
+        }
+
+        input = [...existingConversationHistory, { role: "user", content: feedbackMessage }];
+      } else if (iteration === 0) {
+        // Fresh start
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const initialContent: any[] = [
           { type: "input_text", text: initialPrompt },
         ];
-        // Add all page images with labels
-        for (let i = 0; i < pageImages.length; i++) {
-          if (pageImages.length > 1) {
-            initialContent.push({ type: "input_text", text: `\n--- Page ${i + 1} of ${pageImages.length} ---` });
-          }
-          initialContent.push({ type: "input_image", image: pageImages[i] });
+        if (pageImages[0]) {
+          initialContent.push({ type: "input_image", image: pageImages[0] });
         }
-        input = [
-          {
-            role: "user",
-            content: initialContent,
-          },
-        ];
+        input = [{ role: "user", content: initialContent }];
       } else {
-        // Continuation with comparison images or error feedback
-        let comparisonText: string;
+        const hasOriginalRef = !!pageImages[0];
 
-        if (lastRenderError) {
-          // Last render FAILED - tell the model to fix it
-          comparisonText = `ERROR - Version ${currentVersion} FAILED TO RENDER!
+        const comparisonText = `COMPARISON - Version ${currentVersion} rendered.
 
-The template code has a compilation/syntax error:
-${lastRenderError}
+${hasOriginalRef ? "Left image: Original reference\nRight image: Current rendered template (V" + currentVersion + ")" : "Reference: Current rendered template (V" + currentVersion + ")"}
 
-DO NOT call mark_complete - the template is broken!
-You MUST fix this error first using write_template_code (full rewrite recommended for JSX structure errors) or patch_template_code.
+Compare carefully:
+- Does the layout match? (positions, sizes, spacing)
+- Do the colors match? (backgrounds, text colors, borders)
+- Are placeholders correctly placed?
 
-The right image shows the LAST SUCCESSFUL render (V${currentVersion - 1}), not your broken V${currentVersion}.`;
-        } else {
-          // Last render succeeded - normal comparison
-          comparisonText = `COMPARISON - Version ${currentVersion} rendered successfully.
+If template looks good → call write_template_json (if not done) and mark_complete.
+If issues remain → use apply_patch to fix them.`;
 
-Left image: Original PDF (/mnt/user/original.pdf, /mnt/user/original_screenshot.png)
-Right image: Your V${currentVersion} (/mnt/user/current_v${currentVersion}.pdf, /mnt/user/current_v${currentVersion}.png)
-
-Compare:
-- Layout and positioning
-- Font sizes and colors
-- Spacing and margins
-- Missing elements
-
-Use patch_template_code for small fixes, write_template_code for major changes.
-Call mark_complete when it matches well.`;
-        }
-
-        // Build content array with comparison images
-        // The Agents SDK uses `image` property (not `image_url`) for InputImage type
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const content: any[] = [
           { type: "input_text", text: comparisonText },
-          { type: "input_image", image: pageImages[0] }, // First page for comparison
         ];
+        if (pageImages[0]) {
+          content.push({ type: "input_image", image: pageImages[0] });
+        }
 
         if (lastRenderPngBase64) {
           content.push({ type: "input_image", image: lastRenderPngBase64 });
+          const originalLen = pageImages[0] ? pageImages[0].length : 0;
+          log.info(`Sending comparison: original reference (${originalLen} chars) + current render (${lastRenderPngBase64.length} chars)`);
+        } else {
+          log.error(`WARNING: No lastRenderPngBase64 available for iteration ${iteration + 1}! Model won't see current template.`);
         }
 
-        input = [
-          ...conversationHistory,
-          { role: "user", content },
-        ];
+        input = [...conversationHistory, { role: "user", content }];
       }
 
-      log.info(`Running agent iteration ${iteration + 1}`, { inputLength: Array.isArray(input) ? input.length : 1 });
-      if (iteration === 0 && isContinuation) {
-        onEvent?.({ type: "status", content: "Processing feedback..." });
-      } else if (iteration === 0) {
-        onEvent?.({ type: "status", content: "Analyzing PDF and generating template..." });
-      } else {
-        onEvent?.({ type: "status", content: `Refining template (iteration ${iteration + 1})...` });
-      }
-
-      // Run agent - maxTurns is tool calls per run, not total iterations
-      const result = await run(agent, input, { maxTurns: 15 });
-
-      // Update conversation history
+      log.info(`Running agent iteration ${iteration + 1}`);
+      const result = await runner.run(agent, input, { maxTurns: 15 });
       conversationHistory = result.history || [];
 
-      // Extract traces for UI - log everything for debugging
-      log.info(`Processing ${result.newItems?.length || 0} new items from agent`);
-
+      // Process reasoning and message output traces
+      // (tool_call and tool_result are now handled via Runner hooks for real-time updates)
       for (const item of result.newItems || []) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const anyItem = item as any;
 
-        // Log the item type for debugging
-        log.debug(`Item type: ${anyItem.type}`);
-
-        // Handle reasoning items
         if (anyItem.type === "reasoning_item" && anyItem.rawItem) {
           const reasoningText = extractReasoningText(anyItem.rawItem);
           if (reasoningText) {
-            log.info(`[REASONING] ${reasoningText.substring(0, 200)}${reasoningText.length > 200 ? "..." : ""}`);
+            log.info(`[REASONING] ${reasoningText.substring(0, 200)}...`);
             onEvent?.({ type: "reasoning", content: reasoningText });
           }
         }
 
-        // Handle message items (text output from the model)
         if (anyItem.type === "message_output_item" && anyItem.rawItem) {
           const content = anyItem.rawItem.content;
           if (Array.isArray(content)) {
             for (const part of content) {
               if (part.type === "output_text" && part.text) {
-                log.info(`[MODEL OUTPUT] ${part.text.substring(0, 300)}${part.text.length > 300 ? "..." : ""}`);
+                log.info(`[MODEL OUTPUT] ${part.text.substring(0, 300)}...`);
                 onEvent?.({ type: "reasoning", content: part.text });
               }
             }
           }
         }
-
-        // Handle tool calls
-        if (anyItem.type === "tool_call_item" && anyItem.rawItem) {
-          const toolName = anyItem.rawItem.name || "unknown";
-          const args = anyItem.rawItem.arguments ? JSON.stringify(anyItem.rawItem.arguments).substring(0, 200) : "";
-          log.info(`[TOOL CALL] ${toolName}: ${args}${args.length >= 200 ? "..." : ""}`);
-        }
-
-        // Handle tool outputs
-        if (anyItem.type === "tool_call_output_item") {
-          const toolName = anyItem.rawItem?.name || "unknown";
-          const output = typeof anyItem.output === "string"
-            ? anyItem.output.substring(0, 150) + (anyItem.output.length > 150 ? "..." : "")
-            : String(anyItem.output).substring(0, 150);
-          log.info(`[TOOL RESULT] ${toolName}: ${output}`);
-          onEvent?.({ type: "tool_result", content: output, toolName });
-        }
       }
 
-      // Render if code was updated
-      if (currentCode && !isComplete) {
+      // Render if SVG exists (always render, even if mark_complete was called, to get final output)
+      if (currentSvg) {
         currentVersion++;
         log.info(`\n--- RENDERING VERSION ${currentVersion} ---`);
         onEvent?.({ type: "status", content: `Rendering version ${currentVersion}...` });
 
-        // Build fields object for render - generate type-appropriate placeholders
-        const fieldsForRender: Record<string, unknown> = currentJson
-          ? Object.fromEntries((currentJson as TemplateJson).fields.map((f) => [f.name, generatePlaceholderValue(f)]))
-          : {};
-        log.info(`Render fields: ${JSON.stringify(fieldsForRender)}`);
+        try {
+          // Generate placeholder values for preview
+          const fieldsForRender: Record<string, unknown> = {};
+          if (currentJson) {
+            for (const field of currentJson.fields) {
+              if (field.type === "array") {
+                fieldsForRender[field.name] = [`{{${field.name}[0]}}`, `{{${field.name}[1]}}`];
+              } else {
+                fieldsForRender[field.name] = `{{${field.name}}}`;
+              }
+            }
+          }
 
-        const renderStartTime = Date.now();
-        const renderResult = await renderTemplateCode(currentCode, {
-          fields: fieldsForRender,
-          assets: {},
-          templateRoot: path.join(process.cwd(), "templates", "default"),
-          outputFormat: "both",
-          dpi: 150,
-        });
-        const renderDuration = Date.now() - renderStartTime;
-        log.info(`Render completed in ${renderDuration}ms`, { success: renderResult.success });
+          // Render SVG with placeholders shown
+          const renderedSvg = renderSVGTemplate(currentSvg, fieldsForRender, {});
 
-        if (renderResult.success && renderResult.pngBase64) {
-          log.info(`VERSION ${currentVersion} RENDER SUCCESS`);
-          const pdfBase64 = renderResult.pdfBuffer
-            ? `data:application/pdf;base64,${renderResult.pdfBuffer.toString("base64")}`
-            : undefined;
-          versions.push({ version: currentVersion, previewBase64: renderResult.pngBase64, pdfBase64 });
-          lastRenderPngBase64 = renderResult.pngBase64;
-          lastRenderError = null; // Clear any previous error
+          // Convert to PNG for preview
+          const pngBuffer = await svgToPng(renderedSvg);
+          const pngBase64 = `data:image/png;base64,${pngBuffer.toString("base64")}`;
 
-          // Emit version event for frontend (includes code so Accept can use it)
+          // Try to convert to PDF
+          let pdfBase64: string | undefined;
+          try {
+            const pdfBuffer = await svgToPdf(renderedSvg);
+            pdfBase64 = `data:application/pdf;base64,${pdfBuffer.toString("base64")}`;
+          } catch (pdfErr) {
+            log.error("PDF conversion failed (continuing)", pdfErr);
+          }
+
+          log.info(`VERSION ${currentVersion} RENDER SUCCESS - PNG size: ${pngBase64.length} chars`);
+          versions.push({ version: currentVersion, previewBase64: pngBase64, pdfBase64 });
+          lastRenderPngBase64 = pngBase64;
+          log.info(`Set lastRenderPngBase64 for next iteration comparison`);
+
+          // Emit version event
           onEvent?.({
             type: "version",
             content: `Version ${currentVersion} rendered`,
             version: currentVersion,
-            previewUrl: renderResult.pngBase64,
+            previewUrl: pngBase64,
             pdfUrl: pdfBase64,
-            templateCode: currentCode,
+            templateCode: currentSvg,
           });
 
-          // Upload current version to container for code_interpreter access
-          if (renderResult.pdfBuffer) {
-            log.info(`Uploading V${currentVersion} files to container...`);
-
-            // Upload PDF
-            const currentPdfPath = path.join(os.tmpdir(), `current_v${currentVersion}.pdf`);
-            fsSync.writeFileSync(currentPdfPath, renderResult.pdfBuffer);
-            const pdfStream = fsSync.createReadStream(currentPdfPath);
-            try {
-              await openai.containers.files.create(containerId!, { file: pdfStream });
-              log.info(`V${currentVersion} PDF uploaded`);
-            } catch (e) {
-              log.error(`Failed to upload V${currentVersion} PDF`, e);
-            }
-            fsSync.unlinkSync(currentPdfPath);
-
-            // Upload screenshot PNG
-            const pngBase64Data = renderResult.pngBase64.split(",")[1];
-            const pngBuffer = Buffer.from(pngBase64Data, "base64");
-            const currentPngPath = path.join(os.tmpdir(), `current_v${currentVersion}.png`);
-            fsSync.writeFileSync(currentPngPath, pngBuffer);
-            const pngStream = fsSync.createReadStream(currentPngPath);
-            try {
-              await openai.containers.files.create(containerId!, { file: pngStream });
-              log.info(`V${currentVersion} screenshot uploaded`);
-            } catch (e) {
-              log.error(`Failed to upload V${currentVersion} screenshot`, e);
-            }
-            fsSync.unlinkSync(currentPngPath);
+          // Upload PNG to container (OpenAI doesn't support SVG files)
+          const pngData = pngBase64.split(",")[1];
+          const versionPngPath = path.join(os.tmpdir(), `current_v${currentVersion}.png`);
+          fsSync.writeFileSync(versionPngPath, Buffer.from(pngData, "base64"));
+          const versionPngStream = fsSync.createReadStream(versionPngPath);
+          try {
+            await openai.containers.files.create(containerId!, { file: versionPngStream });
+            log.info(`V${currentVersion} PNG uploaded to container`);
+          } catch (e) {
+            log.error(`Failed to upload V${currentVersion} PNG`, e);
           }
-        } else {
-          log.error(`VERSION ${currentVersion} RENDER FAILED: ${renderResult.error}`);
-          onEvent?.({ type: "status", content: `Render failed: ${renderResult.error}` });
-          // Store the error so we can tell the model about it in the next iteration
-          lastRenderError = renderResult.error || "Unknown render error";
+          fsSync.unlinkSync(versionPngPath);
+
+        } catch (renderError) {
+          log.error(`VERSION ${currentVersion} RENDER FAILED`, renderError);
+          onEvent?.({ type: "status", content: `Render failed: ${renderError}` });
         }
       }
 
@@ -827,22 +834,24 @@ Call mark_complete when it matches well.`;
       log.error("Failed to delete container", e);
     }
 
-    if (currentCode && currentJson) {
+    if (currentSvg && currentJson) {
       log.info("Template generation SUCCESS", { totalVersions: currentVersion });
       return {
         success: true,
         templateJson: currentJson,
-        templateCode: currentCode,
-        message: `Template generated with ${currentVersion} version(s)`,
+        templateCode: currentSvg,
+        message: `SVG template generated with ${currentVersion} version(s)`,
         versions,
+        conversationHistory,
       };
     }
 
-    log.error("Template generation FAILED - no valid output produced");
+    log.error("Template generation FAILED - no valid output");
     return {
       success: false,
       message: "Failed to generate template - no valid output produced",
       versions,
+      conversationHistory,
     };
   } catch (error) {
     log.error("Template generation EXCEPTION", error);
@@ -859,9 +868,10 @@ Call mark_complete when it matches well.`;
       success: false,
       message: `Generation failed: ${error}`,
       versions,
+      conversationHistory,
     };
   }
 }
 
-// Re-export the original function name for compatibility
+// Re-export for compatibility
 export { runTemplateGeneratorAgent as runTemplateGenerator };

@@ -5,11 +5,47 @@
 
 import fs from "fs/promises";
 import path from "path";
+import os from "os";
 import { exec } from "child_process";
 import { promisify } from "util";
-import os from "os";
+import puppeteer from "puppeteer-core";
+import chromium from "@sparticuz/chromium-min";
 
 const execAsync = promisify(exec);
+
+// Build chromium pack URL - use production URL to avoid auth on preview deployments
+function getChromiumPackUrl(): string {
+  const prodUrl = process.env.VERCEL_PROJECT_PRODUCTION_URL;
+  if (prodUrl) {
+    const url = `https://${prodUrl}/chromium-pack.tar`;
+    console.log(`[chromium] Using production URL: ${url}`);
+    return url;
+  }
+  console.log(`[chromium] No VERCEL_PROJECT_PRODUCTION_URL, using localhost`);
+  return "http://localhost:3000/chromium-pack.tar";
+}
+
+// Helper to launch Puppeteer with correct Chrome for environment
+async function launchBrowser() {
+  const isServerless = process.env.VERCEL === "1" || process.env.AWS_LAMBDA_FUNCTION_NAME;
+
+  if (isServerless) {
+    return puppeteer.launch({
+      args: chromium.args,
+      executablePath: await chromium.executablePath(getChromiumPackUrl()),
+      headless: true,
+    });
+  }
+
+  // Local development
+  return puppeteer.launch({
+    args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    executablePath: process.platform === "darwin"
+      ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+      : "/usr/bin/google-chrome",
+    headless: true,
+  });
+}
 
 // Logger for template renderer
 const log = {
@@ -220,12 +256,9 @@ export async function renderTemplateCode(
       const pdfBuffer = await fs.readFile(pdfPath);
       log.debug("PDF buffer size", pdfBuffer.length);
 
-      log.info("Converting PDF to PNG...");
-      const pngCmd = `pdftoppm -png -f 1 -l 1 -r ${dpi} "${pdfPath}" "${pngPathBase}"`;
-      await execAsync(pngCmd);
-      const pngBuffer = await fs.readFile(`${pngPathBase}-1.png`);
-      const pngBase64 = `data:image/png;base64,${pngBuffer.toString("base64")}`;
-      log.info("PNG generated", { pngSize: pngBuffer.length, base64Length: pngBase64.length });
+      log.info("Converting PDF to PNG using Puppeteer...");
+      const pngBase64 = await pdfToPng(pdfBuffer, dpi);
+      log.info("PNG generated", { base64Length: pngBase64.length });
 
       await cleanup();
       log.info("Template render complete - SUCCESS");
@@ -261,26 +294,31 @@ export async function renderTemplateCode(
 }
 
 /**
- * Convert PDF buffer to PNG base64
+ * Convert PDF buffer to PNG base64 using Puppeteer
+ * Uses data URL to avoid file:// protocol issues on serverless
  */
-export async function pdfToPng(pdfBuffer: Buffer, dpi: number = 200): Promise<string> {
-  const tempDir = os.tmpdir();
-  const tempId = `pdf_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-  const pdfPath = path.join(tempDir, `${tempId}.pdf`);
-  const pngPathBase = path.join(tempDir, tempId);
-
+export async function pdfToPng(pdfBuffer: Buffer, _dpi: number = 200): Promise<string> {
+  let browser;
   try {
-    await fs.writeFile(pdfPath, pdfBuffer);
-    await execAsync(`pdftoppm -png -f 1 -l 1 -r ${dpi} "${pdfPath}" "${pngPathBase}"`);
-    const pngBuffer = await fs.readFile(`${pngPathBase}-1.png`);
+    // Launch Puppeteer with correct Chrome for environment
+    browser = await launchBrowser();
 
-    // Cleanup
-    await fs.unlink(pdfPath).catch(() => {});
-    await fs.unlink(`${pngPathBase}-1.png`).catch(() => {});
+    const page = await browser.newPage();
+    await page.setViewport({ width: 816, height: 1056, deviceScaleFactor: 2 });
 
-    return `data:image/png;base64,${pngBuffer.toString("base64")}`;
+    // Use data URL to load PDF (avoids file:// protocol issues on serverless)
+    const pdfBase64 = pdfBuffer.toString("base64");
+    const pdfDataUrl = `data:application/pdf;base64,${pdfBase64}`;
+
+    await page.goto(pdfDataUrl, { waitUntil: "networkidle0", timeout: 30000 });
+
+    const screenshot = await page.screenshot({ type: "png", fullPage: false });
+
+    await browser.close();
+
+    return `data:image/png;base64,${Buffer.from(screenshot).toString("base64")}`;
   } catch (error) {
-    await fs.unlink(pdfPath).catch(() => {});
+    if (browser) await browser.close().catch(() => {});
     throw new Error(`PDF conversion failed: ${error}`);
   }
 }

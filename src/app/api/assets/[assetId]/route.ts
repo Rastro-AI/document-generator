@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { promises as fs } from "fs";
 import path from "path";
-import { ASSET_BANK_DIR, ensureBaseDirs } from "@/lib/paths";
+import { getAssetBankFile, deleteAssetBankFile } from "@/lib/fs-utils";
 
 // GET /api/assets/[assetId] - Get asset file
 export async function GET(
@@ -9,16 +8,19 @@ export async function GET(
   { params }: { params: Promise<{ assetId: string }> }
 ) {
   try {
-    ensureBaseDirs();
     const { assetId } = await params;
-    const filePath = path.join(ASSET_BANK_DIR, assetId);
 
     // Security check - prevent path traversal
-    if (!filePath.startsWith(ASSET_BANK_DIR)) {
+    if (assetId.includes("..") || assetId.includes("/")) {
       return NextResponse.json({ error: "Invalid asset ID" }, { status: 400 });
     }
 
-    const fileBuffer = await fs.readFile(filePath);
+    const fileBuffer = await getAssetBankFile(assetId);
+
+    if (!fileBuffer) {
+      return NextResponse.json({ error: "Asset not found" }, { status: 404 });
+    }
+
     const ext = path.extname(assetId).toLowerCase();
 
     // Determine content type
@@ -28,6 +30,7 @@ export async function GET(
       ".jpeg": "image/jpeg",
       ".gif": "image/gif",
       ".webp": "image/webp",
+      ".svg": "image/svg+xml",
       ".pdf": "application/pdf",
       ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
       ".xls": "application/vnd.ms-excel",
@@ -36,7 +39,7 @@ export async function GET(
 
     const contentType = contentTypes[ext] || "application/octet-stream";
 
-    return new NextResponse(fileBuffer, {
+    return new NextResponse(fileBuffer as Buffer<ArrayBuffer>, {
       headers: {
         "Content-Type": contentType,
         "Cache-Control": "public, max-age=31536000",
@@ -53,16 +56,14 @@ export async function DELETE(
   { params }: { params: Promise<{ assetId: string }> }
 ) {
   try {
-    ensureBaseDirs();
     const { assetId } = await params;
-    const filePath = path.join(ASSET_BANK_DIR, assetId);
 
     // Security check - prevent path traversal
-    if (!filePath.startsWith(ASSET_BANK_DIR)) {
+    if (assetId.includes("..") || assetId.includes("/")) {
       return NextResponse.json({ error: "Invalid asset ID" }, { status: 400 });
     }
 
-    await fs.unlink(filePath);
+    await deleteAssetBankFile(assetId);
 
     return NextResponse.json({ success: true });
   } catch (error) {

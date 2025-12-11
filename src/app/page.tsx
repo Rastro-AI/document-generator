@@ -19,12 +19,17 @@ interface InitialJobData {
 export default function Home() {
   const [currentJob, setCurrentJob] = useState<InitialJobData | null>(null);
   const [showNewDocument, setShowNewDocument] = useState(true);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
 
   if (currentJob) {
     return (
       <>
-        <Sidebar onNewDocument={() => { setCurrentJob(null); setShowNewDocument(true); }} />
-        <div className="lg:pl-64 h-screen flex flex-col transition-all duration-300">
+        <Sidebar
+          onNewDocument={() => { setCurrentJob(null); setShowNewDocument(true); }}
+          collapsed={sidebarCollapsed}
+          onCollapsedChange={setSidebarCollapsed}
+        />
+        <div className={`h-screen flex flex-col transition-all duration-300 ${sidebarCollapsed ? "lg:pl-16" : "lg:pl-64"}`}>
           <JobEditor
             jobId={currentJob.jobId}
             templateId={currentJob.templateId}
@@ -41,8 +46,12 @@ export default function Home() {
 
   return (
     <>
-      <Sidebar onNewDocument={() => setShowNewDocument(true)} />
-      <div className="lg:pl-64 min-h-screen bg-[#f5f5f7] flex items-center justify-center p-6 transition-all duration-300">
+      <Sidebar
+        onNewDocument={() => setShowNewDocument(true)}
+        collapsed={sidebarCollapsed}
+        onCollapsedChange={setSidebarCollapsed}
+      />
+      <div className={`min-h-screen bg-[#f5f5f7] flex items-center justify-center p-6 transition-all duration-300 ${sidebarCollapsed ? "lg:pl-16" : "lg:pl-64"}`}>
         <div className="w-full max-w-2xl">
           {/* Brand */}
           <div className="text-center mb-10">

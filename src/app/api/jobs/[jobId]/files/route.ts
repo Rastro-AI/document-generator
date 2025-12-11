@@ -11,11 +11,10 @@ import {
 } from "@/lib/fs-utils";
 import { extractFieldsAndAssetsFromFiles } from "@/lib/llm";
 import { UploadedFile } from "@/lib/types";
-import { getJobInputPath, getJobAssetPath } from "@/lib/paths";
 
 // Check if a file is an image
 function isImageFile(filename: string): boolean {
-  const imageExtensions = [".png", ".jpg", ".jpeg", ".gif", ".webp"];
+  const imageExtensions = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"];
   const ext = filename.toLowerCase().slice(filename.lastIndexOf("."));
   return imageExtensions.includes(ext);
 }
@@ -63,16 +62,18 @@ export async function POST(
     for (const file of files) {
       const buffer = Buffer.from(await file.arrayBuffer());
       const filename = file.name || "input";
+      const storagePath = isImageFile(filename)
+        ? `${jobId}/assets/${filename}`
+        : `${jobId}/${filename}`;
 
       if (isImageFile(filename)) {
         // Save image as asset
         await saveAssetFile(jobId, filename, buffer);
-        const assetPath = getJobAssetPath(jobId, filename);
-        imageFiles.push({ path: assetPath, filename });
+        imageFiles.push({ path: storagePath, filename });
 
         const uploadedFile: UploadedFile = {
           filename,
-          path: assetPath,
+          path: storagePath,
           type: "image",
           uploadedAt: now,
         };
@@ -80,12 +81,11 @@ export async function POST(
       } else {
         // Save as input document
         await saveUploadedFile(jobId, filename, buffer);
-        const filePath = getJobInputPath(jobId, filename);
-        documentFiles.push({ path: filePath, filename });
+        documentFiles.push({ path: storagePath, filename });
 
         const uploadedFile: UploadedFile = {
           filename,
-          path: filePath,
+          path: storagePath,
           type: "document",
           uploadedAt: now,
         };
@@ -129,6 +129,7 @@ export async function POST(
         }
       }
 
+      console.log(`[Files] Job ${jobId} - Updating fields:`, JSON.stringify(updatedFields, null, 2));
       await updateJobFields(jobId, updatedFields);
       await updateJobAssets(jobId, updatedAssets);
 
@@ -139,7 +140,11 @@ export async function POST(
       message = `Uploaded ${files.length} file(s) and re-extracted data. Found ${extractedCount} field values.`;
     }
 
+    // Small delay to allow Supabase to propagate the write
+    await new Promise(resolve => setTimeout(resolve, 500));
+
     const finalJob = await getJob(jobId);
+    console.log(`[Files] Job ${jobId} - Final job fields:`, JSON.stringify(finalJob?.fields, null, 2));
 
     return NextResponse.json({
       success: true,

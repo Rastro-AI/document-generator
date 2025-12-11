@@ -1,0 +1,468 @@
+{
+  "version": 1,
+  "pages": [
+    {
+      "pageNumber": 1,
+      "fields": [
+        {
+          "name": "PRODUCT_TITLE",
+          "type": "text",
+          "description": "The main product title displayed prominently near the top left (e.g., 'BAFFLE 5/6” LED DOWNLIGHT').",
+          "bbox": {
+            "x": 28.346500396728516,
+            "y": 110.90875244140625,
+            "width": 243.6816062927246,
+            "height": 21.7890625
+          },
+          "style": {
+            "fontFamily": "OpenSans-Bold",
+            "fontWeight": 700,
+            "fontSize": 16,
+            "color": "#221F1F",
+            "alignment": "left"
+          },
+          "objectFit": null
+        },
+        {
+          "name": "PRODUCT_DESCRIPTION",
+          "type": "text",
+          "description": "Marketing description paragraph under the product title describing features, lumen output, can sizes, power consumption, and equivalency.",
+          "bbox": {
+            "x": 28.78580093383789,
+            "y": 135.881103515625,
+            "width": 283.4583396911621,
+            "height": 70.546875
+          },
+          "style": {
+            "fontFamily": "Roboto-Light",
+            "fontWeight": 300,
+            "fontSize": 9,
+            "color": "#221F1F",
+            "alignment": "left"
+          },
+          "objectFit": null
+        },
+        {
+          "name": "MODEL_LIST",
+          "type": "text",
+          "description": "List of product model numbers shown in two columns under the MODELS heading.",
+          "bbox": {
+            "x": 28.346500396728516,
+            "y": 260.0262451171875,
+            "width": 190.1291160583496,
+            "height": 28.574981689453125
+          },
+          "style": {
+            "fontFamily": "Roboto-Light",
+            "fontWeight": 300,
+            "fontSize": 8,
+            "color": "#221F1F",
+            "alignment": "left"
+          },
+          "objectFit": null
+        },
+        {
+          "name": "SPEC_VOLTAGE",
+          "type": "text",
+          "description": "Operating voltage value next to 'Voltage' label (e.g., '120V').",
+          "bbox": {
+            "x": 515.3477172851562,
+            "y": 330.8432312011719,
+            "width": 19.52777099609375,
+            "height": 9.375
+          },
+          "style": {
+            "fontFamily": "Roboto-Medium",
+            "fontWeight": 500,
+            "fontSize": 8,
+            "color": "#221F1F",
+            "alignment": "left"
+          },
+          "objectFit": null
+        },
+        {
+          "name": "SPEC_WATTAGE",
+          "type": "text",
+          "description": "Power consumption in watts next to 'Wattage' label (e.g., '13W').",
+          "bbox": {
+            "x": 515.3477172851562,
+            "y": 345.9823303222656,
+            "width": 16.6070556640625,
+            "height": 9.375
+          },
+          "style": {
+            "fontFamily": "Roboto-Medium",
+            "fontWeight": 500,
+            "fontSize": 8,
+            "color": "#221F1F",
+            "alignment": "left"
+          },
+          "objectFit": null
+        },
+        {
+          "name": "SPEC_CURRENT",
+          "type": "text",
+          "description": "Operating current next to 'Current' label (e.g., '0.115A').",
+          "bbox": {
+            "x": 515.3477172851562,
+            "y": 360.7903137207031,
+            "width": 26.93218994140625,
+            "height": 9.375
+          },
+          "style": {
+            "fontFamily": "Roboto-Medium",
+            "fontWeight": 500,
+            "fontSize": 8,
+            "color": "#221F1F",
+            "alignment": "left"
+          },
+          "objectFit": null
+        },
+        {
+          "name": "SPEC_POWER_FACTOR",
+          "type": "text",
+          "description": "Power factor value next to 'Power Factor' label (e.g., '0.9').",
+          "bbox": {
+            "x": 515.3477172851562,
+            "y": 376.2605285644531,
+            "width": 11.8028564453125,
+            "height": 9.375
+          },
+          "style": {
+            "fontFamily": "Roboto-Medium",
+            "fontWeight": 500,
+            "fontSize": 8,
+            "color": "#221F1F",
+            "alignment": "left"
+          },
+          "objectFit": null
+        },
+        {
+          "name": "SPEC_LUMENS",
+          "type": "text",
+          "description": "Light output lumens value next to 'Lumens' label (e.g., '965').",
+          "bbox": {
+            "x": 515.3477172851562,
+            "y": 419.7597351074219,
+            "width": 14.1148681640625,
+            "height": 9.375
+          },
+          "style": {
+            "fontFamily": "Roboto-Medium",
+            "fontWeight": 500,
+            "fontSize": 8,
+            "color": "#221F1F",
+            "alignment": "left"
+          },
+          "objectFit": null
+        },
+        {
+          "name": "SPEC_EQUIVALENCY",
+          "type": "text",
+          "description": "Equivalent traditional bulb wattage next to 'Equivalency' (e.g., '75W').",
+          "bbox": {
+            "x": 515.3477172851562,
+            "y": 434.72943115234375,
+            "width": 16.6070556640625,
+            "height": 9.375
+          },
+          "style": {
+            "fontFamily": "Roboto-Medium",
+            "fontWeight": 500,
+            "fontSize": 8,
+            "color": "#221F1F",
+            "alignment": "left"
+          },
+          "objectFit": null
+        },
+        {
+          "name": "SPEC_COLOR_TEMPERATURE",
+          "type": "text",
+          "description": "Range of correlated color temperatures (e.g., '2700K-5000K').",
+          "bbox": {
+            "x": 515.3477172851562,
+            "y": 449.7568359375,
+            "width": 50.8214111328125,
+            "height": 9.375
+          },
+          "style": {
+            "fontFamily": "Roboto-Medium",
+            "fontWeight": 500,
+            "fontSize": 8,
+            "color": "#221F1F",
+            "alignment": "left"
+          },
+          "objectFit": null
+        },
+        {
+          "name": "SPEC_CRI",
+          "type": "text",
+          "description": "Color Rendering Index numerical value (e.g., '80').",
+          "bbox": {
+            "x": 515.3477172851562,
+            "y": 464.6689147949219,
+            "width": 9.33087158203125,
+            "height": 9.375
+          },
+          "style": {
+            "fontFamily": "Roboto-Medium",
+            "fontWeight": 500,
+            "fontSize": 8,
+            "color": "#221F1F",
+            "alignment": "left"
+          },
+          "objectFit": null
+        },
+        {
+          "name": "SPEC_BEAM_ANGLE",
+          "type": "text",
+          "description": "Beam angle in degrees (e.g., '90°').",
+          "bbox": {
+            "x": 515.3477172851562,
+            "y": 479.7540283203125,
+            "width": 12.6070556640625,
+            "height": 9.375
+          },
+          "style": {
+            "fontFamily": "Roboto-Medium",
+            "fontWeight": 500,
+            "fontSize": 8,
+            "color": "#221F1F",
+            "alignment": "left"
+          },
+          "objectFit": null
+        },
+        {
+          "name": "SPEC_DIMMABLE",
+          "type": "text",
+          "description": "Whether the product is dimmable, value next to 'Dimmable' label (e.g., 'Yes').",
+          "bbox": {
+            "x": 515.3477172851562,
+            "y": 494.6084289550781,
+            "width": 13.52337646484375,
+            "height": 9.374999999999943
+          },
+          "style": {
+            "fontFamily": "Roboto-Medium",
+            "fontWeight": 500,
+            "fontSize": 8,
+            "color": "#221F1F",
+            "alignment": "left"
+          },
+          "objectFit": null
+        },
+        {
+          "name": "SPEC_EFFICIENCY",
+          "type": "text",
+          "description": "Luminous efficacy in lumens per watt next to 'Efficiency (lm/w)' label (e.g., '74').",
+          "bbox": {
+            "x": 515.3477172851562,
+            "y": 509.751220703125,
+            "width": 9.33087158203125,
+            "height": 9.375
+          },
+          "style": {
+            "fontFamily": "Roboto-Medium",
+            "fontWeight": 500,
+            "fontSize": 8,
+            "color": "#221F1F",
+            "alignment": "left"
+          },
+          "objectFit": null
+        },
+        {
+          "name": "SPEC_FREQUENCY",
+          "type": "text",
+          "description": "Line frequency next to 'Frequency' label (e.g., '60Hz').",
+          "bbox": {
+            "x": 515.3477172851562,
+            "y": 524.5479125976562,
+            "width": 19.51141357421875,
+            "height": 9.375
+          },
+          "style": {
+            "fontFamily": "Roboto-Medium",
+            "fontWeight": 500,
+            "fontSize": 8,
+            "color": "#221F1F",
+            "alignment": "left"
+          },
+          "objectFit": null
+        },
+        {
+          "name": "ENV_OPERATING_TEMPERATURE_RANGE",
+          "type": "text",
+          "description": "Operating ambient temperature range next to 'Operating Temperature' label (e.g., '4°F to 104°F').",
+          "bbox": {
+            "x": 515.2977294921875,
+            "y": 569.30419921875,
+            "width": 46.76177978515625,
+            "height": 9.375
+          },
+          "style": {
+            "fontFamily": "Roboto-Medium",
+            "fontWeight": 500,
+            "fontSize": 8,
+            "color": "#221F1F",
+            "alignment": "left"
+          },
+          "objectFit": null
+        },
+        {
+          "name": "ENV_SUITABLE_FOR_DAMP_LOCATIONS",
+          "type": "text",
+          "description": "Ingress suitability statement value next to 'Suitable for Damp Locations Ingress' (e.g., 'Yes').",
+          "bbox": {
+            "x": 515.2977294921875,
+            "y": 584.285888671875,
+            "width": 13.52337646484375,
+            "height": 9.375
+          },
+          "style": {
+            "fontFamily": "Roboto-Medium",
+            "fontWeight": 500,
+            "fontSize": 8,
+            "color": "#221F1F",
+            "alignment": "left"
+          },
+          "objectFit": null
+        },
+        {
+          "name": "CONSTRUCTION_HOUSING_MATERIAL",
+          "type": "text",
+          "description": "Housing material value next to 'Housing' label (e.g., 'Polycarbonate').",
+          "bbox": {
+            "x": 515.1826171875,
+            "y": 629.59130859375,
+            "width": 54.4873046875,
+            "height": 9.375
+          },
+          "style": {
+            "fontFamily": "Roboto-Medium",
+            "fontWeight": 500,
+            "fontSize": 8,
+            "color": "#221F1F",
+            "alignment": "left"
+          },
+          "objectFit": null
+        },
+        {
+          "name": "CONSTRUCTION_WEIGHT",
+          "type": "text",
+          "description": "Fixture weight next to 'Weight' label (e.g., '0.45lbs').",
+          "bbox": {
+            "x": 515.1826171875,
+            "y": 644.7552490234375,
+            "width": 27.9769287109375,
+            "height": 9.375
+          },
+          "style": {
+            "fontFamily": "Roboto-Medium",
+            "fontWeight": 500,
+            "fontSize": 8,
+            "color": "#221F1F",
+            "alignment": "left"
+          },
+          "objectFit": null
+        },
+        {
+          "name": "LIFESPAN_AVERAGE_LIFE_HOURS",
+          "type": "text",
+          "description": "Average lifetime in hours next to 'Average Life (Hours)' label (e.g., '35,000+').",
+          "bbox": {
+            "x": 515.2977294921875,
+            "y": 688.27685546875,
+            "width": 30.37701416015625,
+            "height": 9.375
+          },
+          "style": {
+            "fontFamily": "Roboto-Medium",
+            "fontWeight": 500,
+            "fontSize": 8,
+            "color": "#221F1F",
+            "alignment": "left"
+          },
+          "objectFit": null
+        },
+        {
+          "name": "LIFESPAN_WARRANTY",
+          "type": "text",
+          "description": "Warranty duration next to 'Warranty' label (e.g., '7 years').",
+          "bbox": {
+            "x": 515.2977294921875,
+            "y": 703.1854248046875,
+            "width": 27.38812255859375,
+            "height": 9.375
+          },
+          "style": {
+            "fontFamily": "Roboto-Medium",
+            "fontWeight": 500,
+            "fontSize": 8,
+            "color": "#221F1F",
+            "alignment": "left"
+          },
+          "objectFit": null
+        },
+        {
+          "name": "LIFESPAN_SWITCHING_TIME",
+          "type": "text",
+          "description": "Rated number of switching cycles next to 'Switching Time' label (e.g., '>30,000').",
+          "bbox": {
+            "x": 515.2977294921875,
+            "y": 718.0941162109375,
+            "width": 30.08685302734375,
+            "height": 9.375
+          },
+          "style": {
+            "fontFamily": "Roboto-Medium",
+            "fontWeight": 500,
+            "fontSize": 8,
+            "color": "#221F1F",
+            "alignment": "left"
+          },
+          "objectFit": null
+        },
+        {
+          "name": "HERO_PRODUCT_IMAGE",
+          "type": "image",
+          "description": "Hero product photo of the recessed downlight with E26 base on the upper-right of the page.",
+          "bbox": {
+            "x": 421.6196594238281,
+            "y": 71.0113525390625,
+            "width": 144.34445190429688,
+            "height": 198.93890380859375
+          },
+          "style": null,
+          "objectFit": "contain"
+        },
+        {
+          "name": "SPECTRUM_DISTRIBUTION_CHART",
+          "type": "image",
+          "description": "Spectrum distribution curve chart illustrating relative intensity vs wavelength under 'SPECTRUM DISTRIBUTION'.",
+          "bbox": {
+            "x": 36.592037200927734,
+            "y": 355.0908508300781,
+            "width": 288.515323638916,
+            "height": 154.12786865234375
+          },
+          "style": null,
+          "objectFit": "contain"
+        },
+        {
+          "name": "CHROMATICITY_DIAGRAM_IMAGE",
+          "type": "image",
+          "description": "CIE1931 chromaticity diagram image located above the 'CERTIFICATIONS' section.",
+          "bbox": {
+            "x": 177.55917358398438,
+            "y": 524.2957763671875,
+            "width": 149.95986938476562,
+            "height": 145.9246826171875
+          },
+          "style": null,
+          "objectFit": "contain"
+        }
+      ]
+    }
+  ],
+  "fonts": []
+}

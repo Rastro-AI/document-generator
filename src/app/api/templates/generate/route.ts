@@ -1,12 +1,10 @@
 import { NextRequest } from "next/server";
 import { runTemplateGeneratorAgent, GeneratorTrace } from "@/lib/agents/template-generator";
-import { exec } from "child_process";
-import { promisify } from "util";
-import fs from "fs/promises";
+import puppeteer from "puppeteer-core";
+import chromium from "@sparticuz/chromium-min";
 import path from "path";
+import fs from "fs/promises";
 import os from "os";
-
-const execAsync = promisify(exec);
 
 // Logger for SSE route
 const log = {
@@ -20,70 +18,127 @@ const log = {
   },
 };
 
+// Build chromium pack URL - use production URL to avoid auth on preview deployments
+function getChromiumPackUrl(): string {
+  const prodUrl = process.env.VERCEL_PROJECT_PRODUCTION_URL;
+  if (prodUrl) {
+    const url = `https://${prodUrl}/chromium-pack.tar`;
+    log.info(`Using production URL for chromium: ${url}`);
+    return url;
+  }
+  log.info(`No VERCEL_PROJECT_PRODUCTION_URL, using localhost`);
+  return "http://localhost:3000/chromium-pack.tar";
+}
+
 export const runtime = "nodejs";
 export const maxDuration = 300; // 5 minutes for complex generation
 
 /**
- * Get PDF page count using pdfinfo (poppler)
+ * Convert PDF buffer to PNG image base64 using Puppeteer
+ * Only converts the first page - multi-page PDFs are not supported
  */
-async function getPdfPageCount(pdfPath: string): Promise<number> {
+async function pdfToImages(pdfBuffer: Buffer): Promise<string[]> {
+  const isServerless = process.env.VERCEL === "1" || process.env.AWS_LAMBDA_FUNCTION_NAME;
+  log.info(`pdfToImages starting`, { isServerless, pdfSize: pdfBuffer.length });
+
+  let browser;
   try {
-    const { stdout } = await execAsync(`pdfinfo "${pdfPath}" | grep "Pages:" | awk '{print $2}'`);
-    return parseInt(stdout.trim(), 10) || 1;
-  } catch {
-    return 1;
-  }
-}
+    // Launch browser
+    log.info(`Launching Puppeteer...`);
+    const launchStart = Date.now();
 
-/**
- * Convert PDF buffer to PNG images base64 using pdftoppm (poppler)
- * Returns array of base64 images, one per page (up to maxPages)
- */
-async function pdfToImages(pdfBuffer: Buffer, maxPages: number = 5): Promise<string[]> {
-  const tempDir = os.tmpdir();
-  const tempId = `pdf_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-  const pdfPath = path.join(tempDir, `${tempId}.pdf`);
-  const pngPathBase = path.join(tempDir, tempId);
+    if (isServerless) {
+      const chromiumPackUrl = getChromiumPackUrl();
+      log.info(`Serverless mode: fetching chromium pack from ${chromiumPackUrl}`);
+      const execPath = await chromium.executablePath(chromiumPackUrl);
+      log.info(`Chromium executable path: ${execPath}`);
+      log.info(`Chromium args: ${JSON.stringify(chromium.args)}`);
 
-  try {
-    await fs.writeFile(pdfPath, pdfBuffer);
+      browser = await puppeteer.launch({
+        args: chromium.args,
+        executablePath: execPath,
+        headless: true,
+      });
+    } else {
+      const localChrome = process.platform === "darwin"
+        ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+        : "/usr/bin/google-chrome";
+      log.info(`Local mode: using Chrome at ${localChrome}`);
 
-    // Get page count
-    const pageCount = await getPdfPageCount(pdfPath);
-    const pagesToConvert = Math.min(pageCount, maxPages);
-    log.info(`PDF has ${pageCount} pages, converting first ${pagesToConvert}`);
-
-    // Convert pages to PNG using pdftoppm
-    await execAsync(`pdftoppm -png -f 1 -l ${pagesToConvert} -r 200 "${pdfPath}" "${pngPathBase}"`);
-
-    // Read all generated PNGs
-    const images: string[] = [];
-    for (let i = 1; i <= pagesToConvert; i++) {
-      const pngPath = `${pngPathBase}-${i}.png`;
-      try {
-        const pngBuffer = await fs.readFile(pngPath);
-        images.push(`data:image/png;base64,${pngBuffer.toString("base64")}`);
-        await fs.unlink(pngPath).catch(() => {});
-      } catch {
-        // Page might not exist if PDF has fewer pages than expected
-        break;
-      }
+      browser = await puppeteer.launch({
+        args: ["--no-sandbox", "--disable-setuid-sandbox"],
+        executablePath: localChrome,
+        headless: true,
+      });
     }
 
-    // Clean up
-    await fs.unlink(pdfPath).catch(() => {});
+    log.info(`Browser launched in ${Date.now() - launchStart}ms`);
+
+    const page = await browser.newPage();
+    log.info(`New page created`);
+
+    // Listen for console messages and errors
+    page.on("console", (msg) => log.info(`Browser console [${msg.type()}]: ${msg.text()}`));
+    page.on("pageerror", (err) => log.error(`Browser page error: ${String(err)}`));
+    page.on("requestfailed", (req) => {
+      log.error(`Request failed: ${req.url()}`, {
+        failure: req.failure()?.errorText,
+        resourceType: req.resourceType(),
+      });
+    });
+
+    await page.setViewport({ width: 816, height: 1056, deviceScaleFactor: 2 });
+    log.info(`Viewport set`);
+
+    // Write PDF to /tmp and load via file:// protocol
+    const tempDir = os.tmpdir();
+    const tempPdfPath = path.join(tempDir, `pdf_${Date.now()}_${Math.random().toString(36).slice(2)}.pdf`);
+    await fs.writeFile(tempPdfPath, pdfBuffer);
+    log.info(`PDF written to ${tempPdfPath}`);
+
+    const pdfUrl = `file://${tempPdfPath}`;
+    log.info(`Navigating to ${pdfUrl}...`);
+    const navStart = Date.now();
+
+    const response = await page.goto(pdfUrl, {
+      waitUntil: "networkidle0",
+      timeout: 60000,
+    });
+
+    log.info(`Navigation complete in ${Date.now() - navStart}ms`, {
+      status: response?.status(),
+      ok: response?.ok(),
+      url: response?.url()?.substring(0, 100),
+    });
+
+    // Take screenshot
+    log.info(`Taking screenshot...`);
+    const screenshot = await page.screenshot({ type: "png", fullPage: false });
+    log.info(`Screenshot taken, size: ${screenshot.length} bytes`);
+
+    const images = [`data:image/png;base64,${Buffer.from(screenshot).toString("base64")}`];
+
+    await browser.close();
+    await fs.unlink(tempPdfPath).catch(() => {}); // Clean up temp file
+    log.info(`Browser closed, returning ${images.length} image(s)`);
 
     return images;
   } catch (error) {
-    await fs.unlink(pdfPath).catch(() => {});
-    throw new Error(`PDF conversion failed: ${error}`);
+    const err = error as Error;
+    log.error(`pdfToImages failed`, {
+      name: err.name,
+      message: err.message,
+      stack: err.stack,
+    });
+    if (browser) await browser.close().catch(() => {});
+    throw new Error(`PDF conversion failed: ${err.message}`);
   }
 }
 
 export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData();
-    const file = formData.get("pdf") as File | null;
+    const pdfFile = formData.get("pdf") as File | null;
     const userPrompt = formData.get("prompt") as string | null;
     const reasoning = (formData.get("reasoning") as "none" | "low" | "high" | null) || "none";
 
@@ -92,9 +147,19 @@ export async function POST(request: NextRequest) {
     const currentJson = formData.get("currentJson") as string | null;
     const feedback = formData.get("feedback") as string | null;
     const startVersion = parseInt(formData.get("startVersion") as string || "0", 10);
+    const conversationHistoryJson = formData.get("conversationHistory") as string | null;
 
-    if (!file) {
-      return new Response(JSON.stringify({ error: "PDF file is required" }), {
+    // Get all image files (for prompt-only mode)
+    const imageFiles: File[] = [];
+    for (const [key, value] of formData.entries()) {
+      if (key === "images" && value instanceof File) {
+        imageFiles.push(value);
+      }
+    }
+
+    // Either PDF or (prompt + optional images) is required
+    if (!pdfFile && !userPrompt) {
+      return new Response(JSON.stringify({ error: "Either a PDF file or a text prompt is required" }), {
         status: 400,
         headers: { "Content-Type": "application/json" },
       });
@@ -102,21 +167,35 @@ export async function POST(request: NextRequest) {
 
     const isContinuation = !!(currentCode && feedback);
     log.info(isContinuation ? "Continuing generation with feedback" : "Starting new generation");
+    log.info(`Mode: ${pdfFile ? "PDF reference" : "Prompt-only"}, Images: ${imageFiles.length}`);
 
-    // Convert PDF to buffer and screenshots (all pages)
-    const arrayBuffer = await file.arrayBuffer();
-    const pdfBuffer = Buffer.from(arrayBuffer);
+    let pageImages: string[] = [];
+    let pdfBuffer: Buffer | undefined;
 
-    let pageImages: string[];
-    try {
-      pageImages = await pdfToImages(pdfBuffer);
-      log.info(`Converted PDF to ${pageImages.length} page images`);
-    } catch (conversionError) {
-      console.error("PDF conversion error:", conversionError);
-      return new Response(
-        JSON.stringify({ error: "Failed to convert PDF to image", details: String(conversionError) }),
-        { status: 500, headers: { "Content-Type": "application/json" } }
-      );
+    // If PDF provided, convert to images
+    if (pdfFile) {
+      const arrayBuffer = await pdfFile.arrayBuffer();
+      pdfBuffer = Buffer.from(arrayBuffer);
+
+      try {
+        pageImages = await pdfToImages(pdfBuffer);
+        log.info(`Converted PDF to ${pageImages.length} page images`);
+      } catch (conversionError) {
+        console.error("PDF conversion error:", conversionError);
+        return new Response(
+          JSON.stringify({ error: "Failed to convert PDF to image", details: String(conversionError) }),
+          { status: 500, headers: { "Content-Type": "application/json" } }
+        );
+      }
+    }
+
+    // Add any directly uploaded images
+    for (const imageFile of imageFiles) {
+      const arrayBuffer = await imageFile.arrayBuffer();
+      const base64 = Buffer.from(arrayBuffer).toString("base64");
+      const mimeType = imageFile.type || "image/png";
+      pageImages.push(`data:${mimeType};base64,${base64}`);
+      log.info(`Added image: ${imageFile.name} (${mimeType})`);
     }
 
     // Create SSE stream for real-time updates
@@ -143,10 +222,21 @@ export async function POST(request: NextRequest) {
           sendEvent("trace", trace);
         };
 
+        // Parse conversation history if provided
+        let conversationHistory;
+        if (conversationHistoryJson) {
+          try {
+            conversationHistory = JSON.parse(conversationHistoryJson);
+            log.info(`Resuming with conversation history (${conversationHistory.length} items)`);
+          } catch (e) {
+            log.error("Failed to parse conversation history", e);
+          }
+        }
+
         const result = await runTemplateGeneratorAgent(
           pageImages,
+          pdfFile?.name || "prompt-based-template",
           pdfBuffer,
-          file.name,
           userPrompt || undefined,
           onEvent,
           reasoning,
@@ -154,7 +244,8 @@ export async function POST(request: NextRequest) {
           currentCode || undefined,
           currentJson ? JSON.parse(currentJson) : undefined,
           feedback || undefined,
-          startVersion
+          startVersion,
+          conversationHistory
         );
 
         sendEvent("result", result);

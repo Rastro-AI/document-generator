@@ -101,11 +101,76 @@ export function useUpdateJobFields() {
   });
 }
 
+export function useUpdateJobAssets() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({
+      jobId,
+      assets,
+    }: {
+      jobId: string;
+      assets: Record<string, string | null>;
+    }) => {
+      const res = await fetch(`/api/jobs/${jobId}/assets`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ assets }),
+      });
+
+      if (!res.ok) {
+        const error = await res.json();
+        throw new Error(error.error || "Failed to update assets");
+      }
+
+      return res.json() as Promise<Job>;
+    },
+    onSuccess: (data) => {
+      queryClient.setQueryData(["job", data.id], data);
+    },
+  });
+}
+
+export function useUploadJobAsset() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({
+      jobId,
+      slotName,
+      file,
+    }: {
+      jobId: string;
+      slotName: string;
+      file: File;
+    }) => {
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("slotName", slotName);
+
+      const res = await fetch(`/api/jobs/${jobId}/assets`, {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!res.ok) {
+        const error = await res.json();
+        throw new Error(error.error || "Failed to upload asset");
+      }
+
+      return res.json() as Promise<{ success: boolean; assetPath: string; job: Job }>;
+    },
+    onSuccess: (data) => {
+      queryClient.setQueryData(["job", data.job.id], data.job);
+    },
+  });
+}
+
 export function useRenderJob() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async (jobId: string) => {
+    mutationFn: async ({ jobId }: { jobId: string }) => {
       const res = await fetch(`/api/jobs/${jobId}/render`, {
         method: "POST",
       });
@@ -117,7 +182,7 @@ export function useRenderJob() {
 
       return res.json() as Promise<{ ok: boolean; renderedAt: string }>;
     },
-    onSuccess: (_, jobId) => {
+    onSuccess: (_, { jobId }) => {
       queryClient.invalidateQueries({ queryKey: ["job", jobId] });
     },
   });
@@ -131,7 +196,7 @@ interface AgentTrace {
 
 interface ChatResponse {
   success: boolean;
-  mode: "fields" | "template";
+  mode: "fields" | "template" | "both" | "none";
   message: string;
   fields?: Record<string, string | number | null>;
   traces?: AgentTrace[];

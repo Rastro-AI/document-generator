@@ -1,0 +1,138 @@
+{
+  "id": "generated-template",
+  "name": "Generated Template",
+  "canvas": {
+    "width": 612,
+    "height": 792
+  },
+  "fonts": [],
+  "fields": [
+    {
+      "name": "PRODUCT_TITLE",
+      "type": "string",
+      "description": "Text field on page 1"
+    },
+    {
+      "name": "PRODUCT_DESCRIPTION",
+      "type": "string",
+      "description": "Text field on page 1"
+    },
+    {
+      "name": "MODEL_LIST",
+      "type": "string",
+      "description": "Text field on page 1"
+    },
+    {
+      "name": "SPEC_VOLTAGE",
+      "type": "string",
+      "description": "Text field on page 1"
+    },
+    {
+      "name": "SPEC_WATTAGE",
+      "type": "string",
+      "description": "Text field on page 1"
+    },
+    {
+      "name": "SPEC_CURRENT",
+      "type": "string",
+      "description": "Text field on page 1"
+    },
+    {
+      "name": "SPEC_POWER_FACTOR",
+      "type": "string",
+      "description": "Text field on page 1"
+    },
+    {
+      "name": "SPEC_LUMENS",
+      "type": "string",
+      "description": "Text field on page 1"
+    },
+    {
+      "name": "SPEC_EQUIVALENCY",
+      "type": "string",
+      "description": "Text field on page 1"
+    },
+    {
+      "name": "SPEC_COLOR_TEMPERATURE",
+      "type": "string",
+      "description": "Text field on page 1"
+    },
+    {
+      "name": "SPEC_CRI",
+      "type": "string",
+      "description": "Text field on page 1"
+    },
+    {
+      "name": "SPEC_BEAM_ANGLE",
+      "type": "string",
+      "description": "Text field on page 1"
+    },
+    {
+      "name": "SPEC_DIMMABLE",
+      "type": "string",
+      "description": "Text field on page 1"
+    },
+    {
+      "name": "SPEC_EFFICIENCY",
+      "type": "string",
+      "description": "Text field on page 1"
+    },
+    {
+      "name": "SPEC_FREQUENCY",
+      "type": "string",
+      "description": "Text field on page 1"
+    },
+    {
+      "name": "ENV_OPERATING_TEMPERATURE_RANGE",
+      "type": "string",
+      "description": "Text field on page 1"
+    },
+    {
+      "name": "ENV_SUITABLE_FOR_DAMP_LOCATIONS",
+      "type": "string",
+      "description": "Text field on page 1"
+    },
+    {
+      "name": "CONSTRUCTION_HOUSING_MATERIAL",
+      "type": "string",
+      "description": "Text field on page 1"
+    },
+    {
+      "name": "CONSTRUCTION_WEIGHT",
+      "type": "string",
+      "description": "Text field on page 1"
+    },
+    {
+      "name": "LIFESPAN_AVERAGE_LIFE_HOURS",
+      "type": "string",
+      "description": "Text field on page 1"
+    },
+    {
+      "name": "LIFESPAN_WARRANTY",
+      "type": "string",
+      "description": "Text field on page 1"
+    },
+    {
+      "name": "LIFESPAN_SWITCHING_TIME",
+      "type": "string",
+      "description": "Text field on page 1"
+    }
+  ],
+  "assetSlots": [
+    {
+      "name": "HERO_PRODUCT_IMAGE",
+      "kind": "photo",
+      "description": "Image field on page 1"
+    },
+    {
+      "name": "SPECTRUM_DISTRIBUTION_CHART",
+      "kind": "photo",
+      "description": "Image field on page 1"
+    },
+    {
+      "name": "CHROMATICITY_DIAGRAM_IMAGE",
+      "kind": "photo",
+      "description": "Image field on page 1"
+    }
+  ]
+}

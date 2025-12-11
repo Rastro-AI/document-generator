@@ -1,15 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
 import { v4 as uuidv4 } from "uuid";
-import { createJob, getTemplate, saveUploadedFile, saveAssetFile, copyTemplateToJob } from "@/lib/fs-utils";
+import {
+  createJob,
+  getTemplate,
+  saveUploadedFile,
+  saveAssetFile,
+  copyTemplateToJob,
+  copySvgTemplateToJob,
+  getAssetBankFile,
+} from "@/lib/fs-utils";
 import { extractFieldsAndAssetsFromFiles } from "@/lib/llm";
 import { Job, UploadedFile } from "@/lib/types";
-import { getJobInputPath, getJobAssetPath, ASSET_BANK_DIR, ensureBaseDirs } from "@/lib/paths";
-import { promises as fs } from "fs";
-import path from "path";
 
 // Check if a file is an image
 function isImageFile(filename: string): boolean {
-  const imageExtensions = [".png", ".jpg", ".jpeg", ".gif", ".webp"];
+  const imageExtensions = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"];
   const ext = filename.toLowerCase().slice(filename.lastIndexOf("."));
   return imageExtensions.includes(ext);
 }
@@ -61,20 +66,23 @@ export async function POST(request: NextRequest) {
     // Track uploaded files
     const uploadedFiles: UploadedFile[] = [];
 
-    // Copy asset bank files to job folder
+    // Copy asset bank files to job storage
     if (assetIds.length > 0) {
-      ensureBaseDirs();
       const now = new Date().toISOString();
       for (const assetId of assetIds) {
         try {
-          const assetPath = path.join(ASSET_BANK_DIR, assetId);
-          const buffer = await fs.readFile(assetPath);
+          const buffer = await getAssetBankFile(assetId);
+          if (!buffer) continue;
+
+          const storagePath = isImageFile(assetId)
+            ? `${jobId}/assets/${assetId}`
+            : `${jobId}/${assetId}`;
 
           if (isImageFile(assetId)) {
             await saveAssetFile(jobId, assetId, buffer);
             uploadedFiles.push({
               filename: assetId,
-              path: getJobAssetPath(jobId, assetId),
+              path: storagePath,
               type: "image",
               uploadedAt: now,
             });
@@ -82,7 +90,7 @@ export async function POST(request: NextRequest) {
             await saveUploadedFile(jobId, assetId, buffer);
             uploadedFiles.push({
               filename: assetId,
-              path: getJobInputPath(jobId, assetId),
+              path: storagePath,
               type: "document",
               uploadedAt: now,
             });
@@ -114,26 +122,27 @@ export async function POST(request: NextRequest) {
       for (const file of files) {
         const buffer = Buffer.from(await file.arrayBuffer());
         const filename = file.name || "input";
+        const storagePath = isImageFile(filename)
+          ? `${jobId}/assets/${filename}`
+          : `${jobId}/${filename}`;
 
         if (isImageFile(filename)) {
           // Save image as asset
           await saveAssetFile(jobId, filename, buffer);
-          const assetPath = getJobAssetPath(jobId, filename);
-          imageFiles.push({ path: assetPath, filename });
+          imageFiles.push({ path: storagePath, filename });
           uploadedFiles.push({
             filename,
-            path: assetPath,
+            path: storagePath,
             type: "image",
             uploadedAt: now,
           });
         } else {
           // Save as input document
           await saveUploadedFile(jobId, filename, buffer);
-          const filePath = getJobInputPath(jobId, filename);
-          documentFiles.push({ path: filePath, filename });
+          documentFiles.push({ path: storagePath, filename });
           uploadedFiles.push({
             filename,
-            path: filePath,
+            path: storagePath,
             type: "document",
             uploadedAt: now,
           });
@@ -205,8 +214,9 @@ export async function POST(request: NextRequest) {
 
     await createJob(job);
 
-    // Copy template.tsx to job folder for design editing
+    // Copy template files to job storage
     await copyTemplateToJob(templateId, jobId);
+    await copySvgTemplateToJob(templateId, jobId);
 
     return NextResponse.json({ jobId });
   } catch (error) {
