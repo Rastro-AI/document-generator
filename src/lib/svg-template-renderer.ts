@@ -19,8 +19,13 @@ import { PDFDocument } from "pdf-lib";
 import puppeteer from "puppeteer-core";
 import chromium from "@sparticuz/chromium-min";
 
-// Path to bundled chromium brotli files (included in repo for Vercel deployment)
-const CHROMIUM_PACK_PATH = path.join(process.cwd(), "bin", "chromium-pack");
+// Get the chromium pack URL - served from /public on Vercel
+function getChromiumPackUrl() {
+  const baseUrl = process.env.VERCEL_URL
+    ? `https://${process.env.VERCEL_URL}`
+    : process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
+  return `${baseUrl}/chromium-pack.tar`;
+}
 
 const execAsync = promisify(exec);
 
@@ -348,9 +353,10 @@ export async function svgToPdf(svgContent: string): Promise<Buffer> {
 
     let browser;
     if (isServerless) {
+      const chromiumPackUrl = getChromiumPackUrl();
       browser = await puppeteer.launch({
         args: chromium.args,
-        executablePath: await chromium.executablePath(CHROMIUM_PACK_PATH),
+        executablePath: await chromium.executablePath(chromiumPackUrl),
         headless: true,
       });
     } else {

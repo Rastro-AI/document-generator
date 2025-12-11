@@ -13,17 +13,23 @@ import chromium from "@sparticuz/chromium-min";
 
 const execAsync = promisify(exec);
 
-// Path to bundled chromium brotli files (included in repo for Vercel deployment)
-const CHROMIUM_PACK_PATH = path.join(process.cwd(), "bin", "chromium-pack");
+// Get the chromium pack URL - served from /public on Vercel
+function getChromiumPackUrl() {
+  const baseUrl = process.env.VERCEL_URL
+    ? `https://${process.env.VERCEL_URL}`
+    : process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
+  return `${baseUrl}/chromium-pack.tar`;
+}
 
 // Helper to launch Puppeteer with correct Chrome for environment
 async function launchBrowser() {
   const isServerless = process.env.VERCEL === "1" || process.env.AWS_LAMBDA_FUNCTION_NAME;
 
   if (isServerless) {
+    const chromiumPackUrl = getChromiumPackUrl();
     return puppeteer.launch({
       args: chromium.args,
-      executablePath: await chromium.executablePath(CHROMIUM_PACK_PATH),
+      executablePath: await chromium.executablePath(chromiumPackUrl),
       headless: true,
     });
   }

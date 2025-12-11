@@ -6,8 +6,13 @@ import path from "path";
 import fs from "fs/promises";
 import os from "os";
 
-// Path to bundled chromium brotli files (included in repo for Vercel deployment)
-const CHROMIUM_PACK_PATH = path.join(process.cwd(), "bin", "chromium-pack");
+// Get the chromium pack URL - served from /public on Vercel
+function getChromiumPackUrl() {
+  const baseUrl = process.env.VERCEL_URL
+    ? `https://${process.env.VERCEL_URL}`
+    : process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
+  return `${baseUrl}/chromium-pack.tar`;
+}
 
 // Logger for SSE route
 const log = {
@@ -39,8 +44,9 @@ async function pdfToImages(pdfBuffer: Buffer): Promise<string[]> {
     const launchStart = Date.now();
 
     if (isServerless) {
-      log.info(`Serverless mode: using bundled chromium pack at ${CHROMIUM_PACK_PATH}`);
-      const execPath = await chromium.executablePath(CHROMIUM_PACK_PATH);
+      const chromiumPackUrl = getChromiumPackUrl();
+      log.info(`Serverless mode: fetching chromium pack from ${chromiumPackUrl}`);
+      const execPath = await chromium.executablePath(chromiumPackUrl);
       log.info(`Chromium executable path: ${execPath}`);
       log.info(`Chromium args: ${JSON.stringify(chromium.args)}`);
 
