@@ -310,11 +310,13 @@ export async function POST(request: NextRequest) {
     const sendEvent = async (event: string, data: unknown) => {
       if (connectionClosed) return;
       try {
-        // Log version events specifically
-        if (event === "trace" && typeof data === "object" && data !== null && (data as GeneratorTrace).type === "version") {
-          log.info("SSE sending VERSION event", { version: (data as GeneratorTrace).version, hasPreview: !!(data as GeneratorTrace).previewUrl });
-        }
-        await writer.write(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+        // Log all events being sent
+        const traceData = data as GeneratorTrace;
+        log.info(`SSE SENDING: ${event} - type: ${traceData?.type || "unknown"}, content: ${String(traceData?.content || "").substring(0, 50)}...`);
+
+        const message = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+        await writer.write(encoder.encode(message));
+        log.info(`SSE SENT successfully (${message.length} bytes)`);
       } catch (err) {
         // Client disconnected - mark connection as closed and stop sending
         if (String(err).includes("ResponseAborted") || String(err).includes("WritableStream")) {

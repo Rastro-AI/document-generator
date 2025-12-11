@@ -405,15 +405,20 @@ export function TemplateEditorModal({
         for (const line of lines) {
           if (line.startsWith("event: ")) {
             currentEventType = line.slice(7);
+            console.log(`[SSE] Event type: ${currentEventType}`);
           } else if (line.startsWith("data: ")) {
             const data = line.slice(6);
+            console.log(`[SSE] Received data for ${currentEventType}:`, data.substring(0, 100));
             try {
               const parsed = JSON.parse(data);
+              console.log(`[SSE] Parsed event:`, { type: parsed.type, content: parsed.content?.substring?.(0, 50) });
               if (currentEventType === "trace") {
                 if (parsed.type === "status") {
+                  console.log(`[SSE] Setting status: ${parsed.content}`);
                   setGenerationStatus(parsed.content);
                 }
                 if (parsed.type === "version") {
+                  console.log(`[SSE] Received version event: V${parsed.version}`);
                   if (parsed.version && parsed.previewUrl) {
                     setVersions((prev) => [
                       ...prev,
@@ -429,6 +434,7 @@ export function TemplateEditorModal({
                 if (parsed.type === "template_json" && parsed.templateJson) {
                   setJsonText(JSON.stringify(parsed.templateJson, null, 2));
                 }
+                console.log(`[SSE] Adding trace to generationTraces:`, parsed.type);
                 setGenerationTraces((prev) => [...prev, parsed]);
               } else if (currentEventType === "result") {
                 // Always save conversation history for potential resume
@@ -546,25 +552,36 @@ export function TemplateEditorModal({
 
       while (true) {
         const { done, value } = await reader.read();
-        if (done) break;
+        if (done) {
+          console.log(`[SSE:generate] Stream done, remaining buffer: ${buffer}`);
+          break;
+        }
 
-        buffer += decoder.decode(value, { stream: true });
+        const chunk = decoder.decode(value, { stream: true });
+        console.log(`[SSE:generate] Received chunk (${chunk.length} chars):`, chunk.substring(0, 100));
+        buffer += chunk;
 
         const lines = buffer.split("\n");
         buffer = lines.pop() || "";
+        console.log(`[SSE:generate] Processing ${lines.length} lines, buffer remainder: ${buffer.length} chars`);
 
         for (const line of lines) {
           if (line.startsWith("event: ")) {
             currentEventType = line.slice(7);
+            console.log(`[SSE:generate] Event type: ${currentEventType}`);
           } else if (line.startsWith("data: ")) {
             const data = line.slice(6);
+            console.log(`[SSE:generate] Received data for ${currentEventType}:`, data.substring(0, 100));
             try {
               const parsed = JSON.parse(data);
+              console.log(`[SSE:generate] Parsed:`, { type: parsed.type, toolName: parsed.toolName, content: parsed.content?.substring?.(0, 50) });
               if (currentEventType === "trace") {
                 if (parsed.type === "status") {
+                  console.log(`[SSE:generate] Setting status: ${parsed.content}`);
                   setGenerationStatus(parsed.content);
                 }
                 if (parsed.type === "version") {
+                  console.log(`[SSE:generate] VERSION EVENT: V${parsed.version}, hasPreview: ${!!parsed.previewUrl}`);
                   if (parsed.version && parsed.previewUrl) {
                     setVersions((prev) => [
                       ...prev,
@@ -581,8 +598,10 @@ export function TemplateEditorModal({
                 if (parsed.type === "template_json" && parsed.templateJson) {
                   setJsonText(JSON.stringify(parsed.templateJson, null, 2));
                 }
+                console.log(`[SSE:generate] Adding to traces:`, parsed.type);
                 setGenerationTraces((prev) => [...prev, parsed]);
               } else if (currentEventType === "result") {
+                console.log(`[SSE:generate] RESULT EVENT:`, { success: parsed.success });
                 // Always save conversation history for potential resume
                 if (parsed.conversationHistory) {
                   setConversationHistory(parsed.conversationHistory);
@@ -1178,26 +1197,23 @@ export function TemplateEditorModal({
                                   {trace.content}
                                 </div>
                               )}
-                              {/* Tool call - collapsible */}
+                              {/* Tool call - always visible with spinner */}
                               {trace.type === "tool_call" && (
-                                <button
-                                  onClick={() => toggleTraceExpanded(idx)}
-                                  className="w-full flex items-center gap-1.5 py-1 text-left text-[#6e6e73] hover:text-[#1d1d1f]"
-                                >
-                                  <svg
-                                    className={`w-2.5 h-2.5 flex-shrink-0 transition-transform ${expandedTraces.has(idx) ? "rotate-90" : ""}`}
-                                    fill="currentColor"
-                                    viewBox="0 0 20 20"
-                                  >
-                                    <path fillRule="evenodd" d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z" clipRule="evenodd" />
+                                <div className="flex items-center gap-1.5 py-1 text-[#1d1d1f]">
+                                  <svg className="w-3 h-3 animate-spin text-[#86868b]" fill="none" viewBox="0 0 24 24">
+                                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
                                   </svg>
-                                  <span className="font-mono">{trace.toolName || trace.content}</span>
-                                </button>
+                                  <span className="font-mono font-medium">{trace.toolName || "tool"}</span>
+                                  {trace.content && !trace.content.includes(trace.toolName || "") && (
+                                    <span className="text-[#86868b] ml-1">{trace.content}</span>
+                                  )}
+                                </div>
                               )}
-                              {/* Tool result - shown when parent tool_call is expanded */}
-                              {trace.type === "tool_result" && expandedTraces.has(idx - 1) && (
-                                <div className="pl-4 pb-1 text-[10px] text-[#6e6e73] font-mono whitespace-pre-wrap">
-                                  {trace.content}
+                              {/* Tool result - always shown */}
+                              {trace.type === "tool_result" && (
+                                <div className="pl-4 pb-1 text-[10px] text-[#86868b] font-mono whitespace-pre-wrap border-l-2 border-[#e8e8ed] ml-1">
+                                  {trace.content.length > 200 ? trace.content.substring(0, 200) + "..." : trace.content}
                                 </div>
                               )}
                             </div>
