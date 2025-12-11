@@ -44,7 +44,7 @@ function convertXlsmToXlsx(xlsmPath: string): string {
   return xlsxPath;
 }
 
-// Extract fields from file using gpt-5.1 with container upload
+// Extract fields from file using gpt-5.2 with container upload
 export async function extractFieldsFromFile(
   template: Template,
   filePath: string,
@@ -109,9 +109,9 @@ No explanation text, just the JSON.
 
 Example: {"PRODUCT_NAME": "LED Bulb", "WATTAGE": "13W", "LUMENS": "1050", "CRI": "80"}`;
 
-    console.log("Calling gpt-5.1 with container...");
+    console.log("Calling gpt-5.2 with container...");
     const response = await openai.responses.create({
-      model: "gpt-5.1",
+      model: "gpt-5.2",
       reasoning: { effort: "none" },
       input: prompt,
       tools: [
@@ -374,7 +374,7 @@ Example:
       onEvent?.({ type: "status", content: "Analyzing images..." });
     }
 
-    console.log("Calling gpt-5.1...");
+    console.log("Calling gpt-5.2...");
 
     const tools: OpenAI.Responses.Tool[] = containerId
       ? [{ type: "code_interpreter", container: containerId }]
@@ -406,7 +406,7 @@ Example:
     }
 
     const response = await openai.responses.create({
-      model: "gpt-5.1",
+      model: "gpt-5.2",
       reasoning: { effort: reasoning },
       input: [{ role: "user", content: inputContent }],
       tools: tools.length > 0 ? tools : undefined,

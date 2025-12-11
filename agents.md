@@ -3,16 +3,16 @@
 ## Overview
 
 This document generator uses a multi-agent architecture combining:
-1. **OpenAI GPT-5.1** for intelligent data extraction from source files
+1. **OpenAI GPT-5.2** for intelligent data extraction from source files
 2. **OpenAI Agents SDK** for chat-based editing (fields & design)
 3. **React PDF** for document generation from templates
 4. **Next.js** as the orchestration layer
 
 ## Phase 1: File Extraction
 
-### Model: GPT-5.1
+### Model: GPT-5.2
 
-We use OpenAI's `gpt-5.1` model with the **Responses API** (not the legacy Assistants API).
+We use OpenAI's `gpt-5.2` model with the **Responses API** (not the legacy Assistants API).
 
 ### Container-Based File Processing
 
@@ -31,7 +31,7 @@ const containerFile = await openai.containers.files.create(container.id, {
 
 // 3. Call responses API with code_interpreter tool
 const response = await openai.responses.create({
-  model: "gpt-5.1",
+  model: "gpt-5.2",
   input: prompt,
   tools: [
     {
@@ -63,7 +63,7 @@ User uploads XLSM/XLSX/PDF
          ↓
    Upload file to container
          ↓
-   GPT-5.1 + code_interpreter
+   GPT-5.2 + code_interpreter
    - reads file with pandas
    - searches all sheets
    - extracts field values
@@ -102,7 +102,7 @@ setDefaultModelProvider(provider);
 const agent = new Agent({
   name: "TemplateEditor",
   instructions: TEMPLATE_AGENT_INSTRUCTIONS,
-  model: "gpt-5.1",
+  model: "gpt-5.2",
   modelSettings: { reasoning: { effort: "none" } },
   tools: [readTemplateTool, updateFieldsTool, editTemplateTool],
 });
@@ -375,7 +375,7 @@ templates/
 
 ## Cost Considerations
 
-- GPT-5.1 with code_interpreter has higher token costs
+- GPT-5.2 with code_interpreter has higher token costs
 - Container operations add latency (~5-30s per extraction)
 - Agent-based chat is fast (~2-10s)
 - Consider caching extracted fields for re-renders

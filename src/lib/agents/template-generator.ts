@@ -551,7 +551,7 @@ export async function runTemplateGeneratorAgent(
     const agent = new Agent({
       name: "SVGTemplateGenerator",
       instructions: SYSTEM_PROMPT,
-      model: "gpt-5.1",
+      model: "gpt-5.2",
       modelSettings: {
         reasoning: { effort: reasoning },
       },

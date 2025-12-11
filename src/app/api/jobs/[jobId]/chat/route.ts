@@ -183,7 +183,7 @@ Only modify fields that the user explicitly mentions.
 Return ONLY valid JSON, no explanation text.`;
 
   const response = await openai.responses.create({
-    model: "gpt-5.1",
+    model: "gpt-5.2",
     reasoning: { effort: "none" },
     input: [
       { role: "system", content: systemPrompt },

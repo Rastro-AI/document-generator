@@ -390,7 +390,7 @@ export async function runTemplateAgent(
   console.log(`[Agent] ========== STARTING TEMPLATE AGENT ==========`);
   console.log(`[Agent] Job: ${jobId}`);
   console.log(`[Agent] Template: ${templateId}`);
-  console.log(`[Agent] Model: gpt-5.1`);
+  console.log(`[Agent] Model: gpt-5.2`);
   console.log(`[Agent] Reasoning: ${reasoning}`);
   console.log(`[Agent] User message: "${userMessage.substring(0, 100)}${userMessage.length > 100 ? '...' : ''}"`);
   console.log(`[Agent] Previous history: ${previousHistory.length} messages`);
@@ -456,7 +456,7 @@ export async function runTemplateAgent(
   const agent = new Agent({
     name: "TemplateAgent",
     instructions: AGENT_INSTRUCTIONS,
-    model: "gpt-5.1",
+    model: "gpt-5.2",
     modelSettings: { reasoning: { effort: reasoning } },
     tools,
   });
@@ -734,7 +734,7 @@ export async function runCodeTweakAgent(
   const agent = new Agent({
     name: "SVGCodeTweaker",
     instructions: CODE_TWEAK_INSTRUCTIONS,
-    model: "gpt-5.1",
+    model: "gpt-5.2",
     modelSettings: { reasoning: { effort: "none" } },
     tools: [applyPatchTool({ editor: codeTweakEditor })],
   });
