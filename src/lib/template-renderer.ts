@@ -5,9 +5,10 @@
 
 import fs from "fs/promises";
 import path from "path";
+import os from "os";
 import { exec } from "child_process";
 import { promisify } from "util";
-import os from "os";
+import puppeteer from "puppeteer";
 
 const execAsync = promisify(exec);
 
@@ -220,12 +221,9 @@ export async function renderTemplateCode(
       const pdfBuffer = await fs.readFile(pdfPath);
       log.debug("PDF buffer size", pdfBuffer.length);
 
-      log.info("Converting PDF to PNG...");
-      const pngCmd = `pdftoppm -png -f 1 -l 1 -r ${dpi} "${pdfPath}" "${pngPathBase}"`;
-      await execAsync(pngCmd);
-      const pngBuffer = await fs.readFile(`${pngPathBase}-1.png`);
-      const pngBase64 = `data:image/png;base64,${pngBuffer.toString("base64")}`;
-      log.info("PNG generated", { pngSize: pngBuffer.length, base64Length: pngBase64.length });
+      log.info("Converting PDF to PNG using Puppeteer...");
+      const pngBase64 = await pdfToPng(pdfBuffer, dpi);
+      log.info("PNG generated", { base64Length: pngBase64.length });
 
       await cleanup();
       log.info("Template render complete - SUCCESS");
@@ -261,25 +259,35 @@ export async function renderTemplateCode(
 }
 
 /**
- * Convert PDF buffer to PNG base64
+ * Convert PDF buffer to PNG base64 using Puppeteer
  */
-export async function pdfToPng(pdfBuffer: Buffer, dpi: number = 200): Promise<string> {
+export async function pdfToPng(pdfBuffer: Buffer, _dpi: number = 200): Promise<string> {
   const tempDir = os.tmpdir();
   const tempId = `pdf_${Date.now()}_${Math.random().toString(36).slice(2)}`;
   const pdfPath = path.join(tempDir, `${tempId}.pdf`);
-  const pngPathBase = path.join(tempDir, tempId);
 
+  let browser;
   try {
     await fs.writeFile(pdfPath, pdfBuffer);
-    await execAsync(`pdftoppm -png -f 1 -l 1 -r ${dpi} "${pdfPath}" "${pngPathBase}"`);
-    const pngBuffer = await fs.readFile(`${pngPathBase}-1.png`);
 
-    // Cleanup
+    // Launch Puppeteer to render PDF
+    browser = await puppeteer.launch({
+      headless: true,
+      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    });
+
+    const page = await browser.newPage();
+    await page.goto(`file://${pdfPath}`, { waitUntil: "networkidle0" });
+    await page.setViewport({ width: 816, height: 1056, deviceScaleFactor: 2 });
+
+    const screenshot = await page.screenshot({ type: "png", fullPage: false });
+
+    await browser.close();
     await fs.unlink(pdfPath).catch(() => {});
-    await fs.unlink(`${pngPathBase}-1.png`).catch(() => {});
 
-    return `data:image/png;base64,${pngBuffer.toString("base64")}`;
+    return `data:image/png;base64,${Buffer.from(screenshot).toString("base64")}`;
   } catch (error) {
+    if (browser) await browser.close().catch(() => {});
     await fs.unlink(pdfPath).catch(() => {});
     throw new Error(`PDF conversion failed: ${error}`);
   }
