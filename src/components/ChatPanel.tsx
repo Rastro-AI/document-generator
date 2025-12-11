@@ -341,12 +341,15 @@ export function ChatPanel({ jobId, initialMessage, uploadedFiles, initialUserPro
             },
             // onResult - final result
             (result) => {
+              // Use result.traces if available, otherwise use the liveTraces we collected
+              const finalTraces = (result.traces && result.traces.length > 0) ? result.traces : [...liveTraces];
+
               const assistantMessage: ChatMessage = {
                 id: (Date.now() + 1).toString(),
                 role: "assistant",
                 content: result.message || "Done",
                 timestamp: new Date(),
-                traces: result.traces,
+                traces: finalTraces.length > 0 ? finalTraces : undefined,
               };
 
               setMessages((prev) => [...prev, assistantMessage]);

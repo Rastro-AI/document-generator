@@ -382,6 +382,15 @@ export async function runTemplateAgent(
   ensureProvider();
   const openai = getOpenAI();
 
+  // Log agent startup with all settings
+  console.log(`[Agent] ========== STARTING TEMPLATE AGENT ==========`);
+  console.log(`[Agent] Job: ${jobId}`);
+  console.log(`[Agent] Template: ${templateId}`);
+  console.log(`[Agent] Model: gpt-5.1`);
+  console.log(`[Agent] Reasoning: ${reasoning}`);
+  console.log(`[Agent] User message: "${userMessage.substring(0, 100)}${userMessage.length > 100 ? '...' : ''}"`);
+  console.log(`[Agent] Previous history: ${previousHistory.length} messages`);
+
   onEvent?.({ type: "status", content: "Starting..." });
 
   // Reset session state
@@ -510,7 +519,17 @@ Request: ${userMessage}`;
         await saveAssetFile(jobId, screenshotFilename, pngBuffer);
         const storagePath = `${jobId}/assets/${screenshotFilename}`;
         initialScreenshotUrl = getPublicUrl(BUCKETS.JOBS, storagePath);
-        console.log(`[Agent] Uploaded screenshot to ${storagePath}, URL: ${initialScreenshotUrl}`);
+        console.log(`[Agent] Uploaded screenshot to storage: ${storagePath}`);
+
+        // Also upload to container if we have one (so code_interpreter can see it)
+        if (containerId) {
+          const tmpScreenshotPath = path.join(os.tmpdir(), "current_render.png");
+          fsSync.writeFileSync(tmpScreenshotPath, pngBuffer);
+          const screenshotStream = fsSync.createReadStream(tmpScreenshotPath);
+          await openai.containers.files.create(containerId, { file: screenshotStream });
+          fsSync.unlinkSync(tmpScreenshotPath);
+          console.log(`[Agent] Uploaded screenshot to container as current_render.png`);
+        }
       } catch (err) {
         console.error("Failed to render initial screenshot:", err);
       }

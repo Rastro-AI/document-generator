@@ -147,7 +147,7 @@ export async function POST(
       await timing.save();
 
       // Log what we're sending back to the client
-      console.log(`[Chat] Job ${jobId} - Sending result: mode=${agentResult.mode}, templateChanged=${agentResult.templateChanged}`);
+      console.log(`[Chat] Job ${jobId} - Sending result: mode=${agentResult.mode}, templateChanged=${agentResult.templateChanged}, traces=${agentResult.traces?.length || 0}`);
 
       // Send final result
       sendEvent("result", {
