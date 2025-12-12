@@ -415,19 +415,21 @@ export async function runTemplateAgent(
   console.log(`[Agent] User message: "${userMessage.substring(0, 100)}${userMessage.length > 100 ? '...' : ''}"`);
   console.log(`[Agent] Previous history: ${previousHistory.length} messages`);
 
-  onEvent?.({ type: "status", content: "Starting..." });
+  onEvent?.({ type: "status", content: "Analyzing request..." });
 
   // Reset session state
   sessionTemplateChanged = false;
   sessionAssetsChanged = false;
 
   // Get job data
+  onEvent?.({ type: "status", content: "Loading job data..." });
   const job = await getJob(jobId);
   const liveAssets = { ...(job?.assets || {}) };
   const uploadedFiles = job?.uploadedFiles || [];
   const liveFields = { ...currentFields };
 
   // Load SVG template
+  onEvent?.({ type: "status", content: "Loading template..." });
   currentSvgContent = await getSvgTemplateContentForJob(jobId, templateId);
 
   // Timing helper
@@ -451,6 +453,7 @@ export async function runTemplateAgent(
   if (documentFiles.length > 0) {
     if (containerId) {
       // Try to reuse existing container
+      onEvent?.({ type: "status", content: "Reconnecting to file processor..." });
       console.log(`[Agent] Attempting to reuse existing container: ${containerId}`);
       try {
         // Verify container still exists by trying to list files
@@ -517,6 +520,7 @@ Request: ${userMessage}`;
     let initialScreenshotUrl: string | null = null;
     let screenshotBuffer: Buffer | null = null;
     if (previousHistory.length === 0) {
+      onEvent?.({ type: "status", content: "Preparing document preview..." });
       const screenshotTotalStart = Date.now();
       try {
         // Load assets for rendering
@@ -564,6 +568,7 @@ Request: ${userMessage}`;
     // Now wait for container (if new) and upload files
     // Container creation was started in parallel with screenshot preparation
     if (containerPromise) {
+      onEvent?.({ type: "status", content: "Initializing file processor..." });
       const containerWaitStart = Date.now();
       const container = await containerPromise;
       containerId = container.id;
@@ -574,6 +579,7 @@ Request: ${userMessage}`;
       console.log(`[Agent] Saved container ID ${containerId} to job for reuse`);
 
       // Upload document files to container in parallel (only for new containers)
+      onEvent?.({ type: "status", content: "Uploading files for analysis..." });
       const uploadStart = Date.now();
       const uploadPromises = documentFiles.map(async (file) => {
         const fileStart = Date.now();
@@ -719,6 +725,9 @@ Request: ${userMessage}`;
     }
 
     // Run agent
+    onEvent?.({ type: "status", content: "Connecting to AI..." });
+    // Small delay to show the "Connecting" message before it changes to "Thinking"
+    await new Promise(resolve => setTimeout(resolve, 100));
     onEvent?.({ type: "status", content: "Thinking..." });
     const agentRunStart = Date.now();
     const result = await runner.run(agent, input, { maxTurns: 10 });
