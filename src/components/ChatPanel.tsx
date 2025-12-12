@@ -583,16 +583,34 @@ export function ChatPanel({ jobId, initialMessage, uploadedFiles, initialUserPro
                     </div>
                   );
                 }
-                // No tool traces yet, show simple spinner with "Starting..."
-                return (
-                  <div className="flex items-center gap-2">
-                    <svg className="animate-spin h-4 w-4 text-[#86868b] flex-shrink-0" viewBox="0 0 24 24">
+                // No tool traces yet, show status with progress bar
+              const currentStatus = (isCreating ? creationStatus : liveStatus) || "Starting...";
+              return (
+                <div className="min-w-[200px]">
+                  <div className="flex items-center gap-2 mb-2">
+                    <svg className="animate-spin h-4 w-4 text-[#0066CC] flex-shrink-0" viewBox="0 0 24 24">
                       <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
                       <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                     </svg>
-                    <span className="text-[13px] text-[#86868b]">Starting...</span>
+                    <span className="text-[13px] text-[#1d1d1f]">{currentStatus}</span>
                   </div>
-                );
+                  {/* Progress bar that fills over ~60 seconds */}
+                  <div className="h-1 bg-[#e8e8ed] rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-[#0066CC] rounded-full transition-all duration-1000 ease-linear"
+                      style={{
+                        animation: "progressFill 60s linear forwards"
+                      }}
+                    />
+                  </div>
+                  <style jsx>{`
+                    @keyframes progressFill {
+                      from { width: 0%; }
+                      to { width: 100%; }
+                    }
+                  `}</style>
+                </div>
+              );
               })()}
             </div>
           </div>
