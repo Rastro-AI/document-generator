@@ -79,13 +79,13 @@ function TracesDisplay({ traces }: { traces: AgentTrace[] }) {
               )}
               {trace.type === "tool_call" && (
                 <div className="flex items-center gap-1">
-                  <span className="text-[#0066CC] font-mono">{trace.toolName}</span>
+                  <span className="text-[#1d1d1f] font-mono">{trace.toolName}</span>
                   <span className="text-[#86868b]">()</span>
                 </div>
               )}
               {trace.type === "tool_result" && (
-                <div className="text-[#00aa00] font-mono text-[10px] bg-white/50 px-1.5 py-0.5 rounded">
-                  {trace.content}
+                <div className="text-[#86868b] font-mono text-[10px] bg-white/50 px-1.5 py-0.5 rounded">
+                  ✓ {trace.content}
                 </div>
               )}
             </div>
@@ -536,81 +536,82 @@ export function ChatPanel({ jobId, initialMessage, uploadedFiles, initialUserPro
                 const tracesToShow = isCreating && creationTraces && creationTraces.length > 0 ? creationTraces : liveTraces;
                 // Filter to only tool_call and tool_result traces
                 const toolTraces = tracesToShow.filter(t => t.type === "tool_call" || t.type === "tool_result");
+                const currentStatus = (isCreating ? creationStatus : liveStatus) || "Starting...";
 
-                if (toolTraces.length > 0) {
-                  // Find the last tool call that doesn't have a result yet
-                  const lastToolCall = [...toolTraces].reverse().find(t => t.type === "tool_call");
-                  const completedTraces = toolTraces.slice(0, -1); // All but the last
-                  const isLastPending = toolTraces[toolTraces.length - 1]?.type === "tool_call";
+                // Find the last tool call that doesn't have a result yet
+                const lastToolCall = [...toolTraces].reverse().find(t => t.type === "tool_call");
+                const completedTraces = toolTraces.slice(0, -1); // All but the last
+                const isLastPending = toolTraces.length > 0 && toolTraces[toolTraces.length - 1]?.type === "tool_call";
 
-                  return (
-                    <div>
-                      {/* Show all completed traces expanded */}
-                      {completedTraces.length > 0 && (
-                        <div className="mb-2 pl-2 border-l-2 border-[#e8e8ed] space-y-0.5">
-                          {completedTraces.map((trace, idx) => (
-                            <div key={idx} className="text-[11px] flex items-center gap-1">
-                              {trace.type === "tool_call" && (
-                                <span className="text-[#86868b] font-mono">{trace.toolName}()</span>
-                              )}
-                              {trace.type === "tool_result" && (
-                                <span className="text-[#00aa00]">✓ {trace.toolName}</span>
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                      {/* Current/last tool call with spinner if pending */}
-                      {isLastPending && lastToolCall && (
-                        <div className="flex items-center gap-2">
-                          <svg className="animate-spin h-3.5 w-3.5 text-[#0066CC] flex-shrink-0" viewBox="0 0 24 24">
-                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                          </svg>
-                          <span className="text-[12px] text-[#0066CC] font-mono">{lastToolCall.toolName}()</span>
-                        </div>
-                      )}
-                      {/* If last was a result, show waiting for response */}
-                      {!isLastPending && (
-                        <div className="flex items-center gap-2">
-                          <svg className="animate-spin h-3.5 w-3.5 text-[#86868b] flex-shrink-0" viewBox="0 0 24 24">
-                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                          </svg>
-                          <span className="text-[12px] text-[#86868b]">Thinking...</span>
-                        </div>
-                      )}
+                return (
+                  <div className="min-w-[200px]">
+                    {/* Tool traces if any */}
+                    {toolTraces.length > 0 && (
+                      <div className="mb-2">
+                        {/* Show all completed traces */}
+                        {completedTraces.length > 0 && (
+                          <div className="mb-1.5 pl-2 border-l-2 border-[#e8e8ed] space-y-0.5">
+                            {completedTraces.map((trace, idx) => (
+                              <div key={idx} className="text-[11px] flex items-center gap-1">
+                                {trace.type === "tool_call" && (
+                                  <span className="text-[#86868b] font-mono">{trace.toolName}()</span>
+                                )}
+                                {trace.type === "tool_result" && (
+                                  <span className="text-[#86868b]">✓ {trace.toolName}</span>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        {/* Current/last tool call with spinner if pending */}
+                        {isLastPending && lastToolCall && (
+                          <div className="flex items-center gap-2 mb-2">
+                            <svg className="animate-spin h-3.5 w-3.5 text-[#1d1d1f] flex-shrink-0" viewBox="0 0 24 24">
+                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                            </svg>
+                            <span className="text-[12px] text-[#1d1d1f] font-mono">{lastToolCall.toolName}()</span>
+                          </div>
+                        )}
+                        {/* If last was a result, show current status */}
+                        {!isLastPending && (
+                          <div className="flex items-center gap-2 mb-2">
+                            <svg className="animate-spin h-3.5 w-3.5 text-[#1d1d1f] flex-shrink-0" viewBox="0 0 24 24">
+                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                            </svg>
+                            <span className="text-[12px] text-[#1d1d1f]">{currentStatus}</span>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {/* No tool traces yet - show status */}
+                    {toolTraces.length === 0 && (
+                      <div className="flex items-center gap-2 mb-2">
+                        <svg className="animate-spin h-4 w-4 text-[#1d1d1f] flex-shrink-0" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                        </svg>
+                        <span className="text-[13px] text-[#1d1d1f]">{currentStatus}</span>
+                      </div>
+                    )}
+                    {/* Progress bar - always visible during processing */}
+                    <div className="h-1 bg-[#e8e8ed] rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-[#1d1d1f] rounded-full"
+                        style={{
+                          animation: "progressFill 60s linear forwards"
+                        }}
+                      />
                     </div>
-                  );
-                }
-                // No tool traces yet, show status with progress bar
-              const currentStatus = (isCreating ? creationStatus : liveStatus) || "Starting...";
-              return (
-                <div className="min-w-[200px]">
-                  <div className="flex items-center gap-2 mb-2">
-                    <svg className="animate-spin h-4 w-4 text-[#0066CC] flex-shrink-0" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                    </svg>
-                    <span className="text-[13px] text-[#1d1d1f]">{currentStatus}</span>
+                    <style jsx>{`
+                      @keyframes progressFill {
+                        from { width: 0%; }
+                        to { width: 100%; }
+                      }
+                    `}</style>
                   </div>
-                  {/* Progress bar that fills over ~60 seconds */}
-                  <div className="h-1 bg-[#e8e8ed] rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-[#0066CC] rounded-full transition-all duration-1000 ease-linear"
-                      style={{
-                        animation: "progressFill 60s linear forwards"
-                      }}
-                    />
-                  </div>
-                  <style jsx>{`
-                    @keyframes progressFill {
-                      from { width: 0%; }
-                      to { width: 100%; }
-                    }
-                  `}</style>
-                </div>
-              );
+                );
               })()}
             </div>
           </div>

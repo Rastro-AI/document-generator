@@ -497,6 +497,9 @@ export async function runTemplateAgent(
     onEvent?.({ type: "tool_result", content: output, toolName });
   });
 
+  // Declare status interval outside try block so it can be cleared in catch
+  let statusInterval: ReturnType<typeof setInterval> | null = null;
+
   try {
     // Build context
     const fileList = documentFiles.length > 0
@@ -724,13 +727,46 @@ Request: ${userMessage}`;
       });
     }
 
-    // Run agent
+    // Run agent with rotating status messages
     onEvent?.({ type: "status", content: "Connecting to AI..." });
-    // Small delay to show the "Connecting" message before it changes to "Thinking"
+
+    // Rotating status messages to show activity during long LLM thinking
+    const thinkingMessages = [
+      "Analyzing your request...",
+      "Processing document...",
+      "Examining template...",
+      "Planning changes...",
+      "Reviewing content...",
+      "Preparing response...",
+      "Working on it...",
+      "Almost ready...",
+    ];
+    let statusIndex = 0;
+    let lastToolCallTime = Date.now();
+
+    // Update status every 3 seconds while thinking (not during tool calls)
+    statusInterval = setInterval(() => {
+      // Only rotate if no tool calls in the last 2 seconds
+      const timeSinceLastTool = Date.now() - lastToolCallTime;
+      if (timeSinceLastTool > 2000) {
+        onEvent?.({ type: "status", content: thinkingMessages[statusIndex % thinkingMessages.length] });
+        statusIndex++;
+      }
+    }, 3000);
+
+    // Track when tool calls happen to pause rotation
+    runner.on("agent_tool_start", () => {
+      lastToolCallTime = Date.now();
+    });
+
+    // Send initial thinking status
     await new Promise(resolve => setTimeout(resolve, 100));
-    onEvent?.({ type: "status", content: "Thinking..." });
+    onEvent?.({ type: "status", content: thinkingMessages[0] });
+    statusIndex++;
+
     const agentRunStart = Date.now();
     const result = await runner.run(agent, input, { maxTurns: 10 });
+    clearInterval(statusInterval);
     logTiming("Agent run (LLM + tools)", agentRunStart);
 
     // NOTE: Container is intentionally NOT deleted to allow reuse across conversation turns
@@ -787,6 +823,10 @@ Request: ${userMessage}`;
       history: result.history,
     };
   } catch (error) {
+    // Clear the status interval on error
+    if (statusInterval) {
+      clearInterval(statusInterval);
+    }
     // NOTE: Container is kept alive even on error for potential reuse
     // It will be cleaned up by OpenAI after inactivity timeout
     console.error("Template agent error:", error);
