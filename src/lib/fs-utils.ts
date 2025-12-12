@@ -251,10 +251,20 @@ export async function updateJobTemplateContent(
 export async function getJobSvgContent(jobId: string): Promise<string | null> {
   try {
     const path = getJobFilePath(jobId, "template.svg");
-    console.log(`[getJobSvgContent] Loading SVG for job ${jobId} from ${path}`);
+    const timestamp = new Date().toISOString();
+    console.log(`[getJobSvgContent] [${timestamp}] Loading SVG for job ${jobId} from ${path}`);
     const buffer = await downloadFile(BUCKETS.JOBS, path);
-    console.log(`[getJobSvgContent] Loaded SVG (${buffer.length} bytes)`);
-    return buffer.toString("utf-8");
+    const content = buffer.toString("utf-8");
+    // Use inline hash calculation to avoid circular dependency
+    let hash = 0;
+    for (let i = 0; i < content.length; i++) {
+      const char = content.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash = hash & hash;
+    }
+    const hashStr = hash.toString(16);
+    console.log(`[getJobSvgContent] [${timestamp}] Loaded SVG (${buffer.length} bytes, ${content.length} chars, hash=${hashStr})`);
+    return content;
   } catch (error) {
     console.log(`[getJobSvgContent] No SVG found for job ${jobId}:`, error);
     return null;
@@ -262,17 +272,30 @@ export async function getJobSvgContent(jobId: string): Promise<string | null> {
 }
 
 // Update job SVG template content
+// Simple hash for SVG content comparison (for debugging sync issues)
+function svgHash(content: string): string {
+  let hash = 0;
+  for (let i = 0; i < content.length; i++) {
+    const char = content.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash; // Convert to 32bit integer
+  }
+  return hash.toString(16);
+}
+
 export async function updateJobSvgContent(
   jobId: string,
   content: string
 ): Promise<void> {
   const path = getJobFilePath(jobId, "template.svg");
-  console.log(`[updateJobSvgContent] Saving SVG for job ${jobId} to ${path} (${content.length} chars)`);
+  const hash = svgHash(content);
+  const timestamp = new Date().toISOString();
+  console.log(`[updateJobSvgContent] [${timestamp}] Saving SVG for job ${jobId} to ${path} (${content.length} chars, hash=${hash})`);
   await uploadFile(BUCKETS.JOBS, path, content, {
     contentType: "image/svg+xml",
     upsert: true,
   });
-  console.log(`[updateJobSvgContent] SVG saved successfully`);
+  console.log(`[updateJobSvgContent] [${timestamp}] SVG saved successfully (hash=${hash})`);
 }
 
 // Copy template.svg from template folder to job storage

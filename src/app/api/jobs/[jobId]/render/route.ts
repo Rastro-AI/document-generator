@@ -51,7 +51,16 @@ export async function POST(
       );
     }
 
-    console.log(`[Render] Job ${jobId} - Using ${usedJobSvg ? "job-specific" : "template"} SVG (${svgContent.length} chars)`);
+    // Calculate hash for debugging sync issues
+    let svgHash = 0;
+    for (let i = 0; i < svgContent.length; i++) {
+      const char = svgContent.charCodeAt(i);
+      svgHash = ((svgHash << 5) - svgHash) + char;
+      svgHash = svgHash & svgHash;
+    }
+    const hashStr = svgHash.toString(16);
+    const timestamp = new Date().toISOString();
+    console.log(`[Render] [${timestamp}] Job ${jobId} - Using ${usedJobSvg ? "job-specific" : "template"} SVG (${svgContent.length} chars, hash=${hashStr})`);
     console.log(`[Render] Job ${jobId} - SVG preview: ${svgContent.substring(0, 200)}...`);
     // Log title font-size to debug state mismatch
     const titleFontMatch = svgContent.match(/\.title-main\s*\{[^}]*font-size:\s*([^;]+)/);
