@@ -78,10 +78,18 @@ export async function POST(
   (async () => {
     const timing = createTimingLogger(`stream_${jobId}`);
 
+    // Helper to send status updates
+    const sendStatus = (content: string) => {
+      sendEvent("trace", { type: "status", content });
+    };
+
     try {
+      sendStatus("Starting...");
+
       timing.start("add_history_entry");
       // Save current state to history before any changes
       // Skip the expensive preview generation - just save the SVG snapshot
+      sendStatus("Saving current state...");
       let svgSnapshot: string | undefined;
       try {
         svgSnapshot = await getJobSvgContent(jobId) || undefined;
@@ -92,9 +100,12 @@ export async function POST(
       timing.end();
 
       timing.start("get_agent_history");
+      sendStatus("Loading conversation history...");
       // Get the full agent thread history for this job
       const previousHistory = await getAgentHistory(jobId);
       timing.end();
+
+      sendStatus("Preparing AI agent...");
 
       // Event callback for real-time updates (synchronous - fire and forget)
       const onEvent = (trace: AgentTrace) => {
