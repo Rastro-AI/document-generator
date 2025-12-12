@@ -28,6 +28,7 @@ import {
   addUploadedFileToJobInDb,
   addJobHistoryEntryInDb,
   updateAgentHistoryInDb,
+  updateContainerIdInDb,
   restoreJobFromHistoryInDb,
   deleteJobFromDb,
 } from "./db";
@@ -304,13 +305,23 @@ export async function addJobHistoryEntry(
   return job?.history?.[job.history.length - 1] || null;
 }
 
-// Restore job from history entry
+// Restore job from history entry (including SVG content)
 export async function restoreJobFromHistory(
   jobId: string,
   historyId: string
 ): Promise<Job | null> {
   if (!isDbConfigured()) return null;
-  return await restoreJobFromHistoryInDb(jobId, historyId);
+
+  const result = await restoreJobFromHistoryInDb(jobId, historyId);
+  if (!result) return null;
+
+  // Restore SVG content to storage if it was captured
+  if (result.svgContent) {
+    await updateJobSvgContent(jobId, result.svgContent);
+    console.log(`[restoreJobFromHistory] Restored SVG content for job ${jobId}`);
+  }
+
+  return result.job;
 }
 
 // Add uploaded file to job
@@ -368,6 +379,15 @@ export async function getAgentHistory(
 ): Promise<any[]> {
   const job = await getJob(jobId);
   return job?.agentHistory || [];
+}
+
+// Update container ID for a job (for container reuse across turns)
+export async function updateContainerId(
+  jobId: string,
+  containerId: string | null
+): Promise<void> {
+  if (!isDbConfigured()) return;
+  await updateContainerIdInDb(jobId, containerId);
 }
 
 // Save output PDF to job storage

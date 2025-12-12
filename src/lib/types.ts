@@ -94,6 +94,8 @@ export interface Job {
   // Full agent thread history - preserves all tool calls, results, and messages
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   agentHistory?: any[];
+  // OpenAI container ID for code interpreter (reused across conversation turns)
+  containerId?: string;
 }
 
 // API response types

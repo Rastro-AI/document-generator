@@ -1,7 +1,21 @@
 "use client";
 
 import { useState, useRef } from "react";
-import { useAssets, useUploadAssets, useDeleteAsset, Asset } from "@/hooks/useAssetBank";
+import {
+  useAssets,
+  useUploadAssets,
+  useDeleteAsset,
+  useCreateColor,
+  useCreateFont,
+  Asset,
+  isFileAsset,
+  isColorAsset,
+  isFontAsset,
+  ColorAsset,
+  FontAsset,
+} from "@/hooks/useAssetBank";
+import { FontPicker } from "./FontPicker";
+import { GoogleFont, GOOGLE_FONTS } from "@/lib/google-fonts";
 
 interface AssetBankModalProps {
   isOpen: boolean;
@@ -15,14 +29,33 @@ interface UploadDialogFile {
   customName: string;
 }
 
+interface NewColorForm {
+  name: string;
+  value: string;
+  usage: ColorAsset["usage"] | "";
+}
+
+interface NewFontForm {
+  name: string;
+  family: string;
+  weights: string[];
+  usage: FontAsset["usage"] | "";
+}
+
 export function AssetBankModal({ isOpen, onClose, selectedAssets, onToggleAsset }: AssetBankModalProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [uploadDialogFiles, setUploadDialogFiles] = useState<UploadDialogFile[] | null>(null);
+  const [showColorDialog, setShowColorDialog] = useState(false);
+  const [showFontDialog, setShowFontDialog] = useState(false);
+  const [newColor, setNewColor] = useState<NewColorForm>({ name: "", value: "#000000", usage: "" });
+  const [newFont, setNewFont] = useState<NewFontForm>({ name: "", family: "", weights: ["400"], usage: "" });
   const assetInputRef = useRef<HTMLInputElement>(null);
 
   const { data: assets, isLoading: assetsLoading } = useAssets();
   const uploadAssets = useUploadAssets();
   const deleteAsset = useDeleteAsset();
+  const createColor = useCreateColor();
+  const createFont = useCreateFont();
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFiles = Array.from(e.target.files || []);
@@ -65,9 +98,52 @@ export function AssetBankModal({ isOpen, onClose, selectedAssets, onToggleAsset 
     }
   };
 
+  const handleCreateColor = async () => {
+    if (!newColor.name.trim() || !newColor.value) return;
+    await createColor.mutateAsync({
+      name: newColor.name.trim(),
+      value: newColor.value,
+      usage: newColor.usage || undefined,
+    });
+    setNewColor({ name: "", value: "#000000", usage: "" });
+    setShowColorDialog(false);
+  };
+
+  const handleCreateFont = async () => {
+    if (!newFont.name.trim() || !newFont.family.trim()) return;
+    await createFont.mutateAsync({
+      name: newFont.name.trim(),
+      family: newFont.family.trim(),
+      weights: newFont.weights.length > 0 ? newFont.weights : ["400"],
+      usage: newFont.usage || undefined,
+    });
+    setNewFont({ name: "", family: "", weights: ["400"], usage: "" });
+    setShowFontDialog(false);
+  };
+
+  const handleFontSelect = (font: GoogleFont) => {
+    setNewFont({
+      ...newFont,
+      family: font.family,
+      weights: font.weights,
+      // Auto-set name if empty
+      name: newFont.name || font.family,
+    });
+  };
+
   const filteredAssets = assets?.filter((asset) => {
-    return searchQuery === "" ||
-      asset.filename.toLowerCase().includes(searchQuery.toLowerCase());
+    if (searchQuery === "") return true;
+    const query = searchQuery.toLowerCase();
+    if (isFileAsset(asset)) {
+      return asset.filename.toLowerCase().includes(query);
+    }
+    if (isColorAsset(asset)) {
+      return asset.name.toLowerCase().includes(query) || asset.value.toLowerCase().includes(query);
+    }
+    if (isFontAsset(asset)) {
+      return asset.name.toLowerCase().includes(query) || asset.family.toLowerCase().includes(query);
+    }
+    return false;
   });
 
   if (!isOpen) return null;
@@ -90,8 +166,8 @@ export function AssetBankModal({ isOpen, onClose, selectedAssets, onToggleAsset 
               </svg>
             </div>
             <div>
-              <h2 className="text-[17px] font-semibold text-[#1d1d1f]">Asset Bank</h2>
-              <p className="text-[12px] text-[#86868b]">Reusable assets for your documents</p>
+              <h2 className="text-[17px] font-semibold text-[#1d1d1f]">Brand Bank</h2>
+              <p className="text-[12px] text-[#86868b]">Colors, fonts, and assets for your brand</p>
             </div>
           </div>
           <button
@@ -107,7 +183,7 @@ export function AssetBankModal({ isOpen, onClose, selectedAssets, onToggleAsset 
 
         {/* Content */}
         <div className="flex-1 overflow-hidden flex flex-col">
-          {/* Search + Upload */}
+          {/* Search + Actions */}
           <div className="p-4 border-b border-[#e8e8ed] flex items-center gap-3">
             <div className="flex-1 relative">
               <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#86868b]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -121,6 +197,24 @@ export function AssetBankModal({ isOpen, onClose, selectedAssets, onToggleAsset 
                 className="w-full pl-10 pr-4 py-2 text-[13px] bg-[#f5f5f7] rounded-lg border-0 focus:outline-none focus:ring-2 focus:ring-[#1d1d1f]/20"
               />
             </div>
+            <button
+              type="button"
+              onClick={() => setShowColorDialog(true)}
+              className="px-3 py-2 text-[13px] font-medium text-[#1d1d1f] bg-[#f5f5f7] rounded-lg hover:bg-[#e8e8ed] transition-colors flex items-center gap-1.5"
+            >
+              <div className="w-4 h-4 rounded-full bg-gradient-to-br from-red-500 via-yellow-500 to-blue-500" />
+              Color
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowFontDialog(true)}
+              className="px-3 py-2 text-[13px] font-medium text-[#1d1d1f] bg-[#f5f5f7] rounded-lg hover:bg-[#e8e8ed] transition-colors flex items-center gap-1.5"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h8m-8 6h16" />
+              </svg>
+              Font
+            </button>
             <input
               ref={assetInputRef}
               type="file"
@@ -151,12 +245,105 @@ export function AssetBankModal({ isOpen, onClose, selectedAssets, onToggleAsset 
                   <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 001.5-1.5V6a1.5 1.5 0 00-1.5-1.5H3.75A1.5 1.5 0 002.25 6v12a1.5 1.5 0 001.5 1.5z" />
                 </svg>
                 <p className="text-[13px] text-[#86868b]">No assets found</p>
-                <p className="text-[12px] text-[#aeaeb2] mt-1">Upload files to add them to your asset bank</p>
+                <p className="text-[12px] text-[#aeaeb2] mt-1">Add colors, fonts, or upload files to your brand bank</p>
               </div>
             ) : (
               <div className="grid grid-cols-4 gap-3">
                 {filteredAssets.map((asset) => {
                   const isSelected = selectedAssets.some(a => a.id === asset.id);
+
+                  // Color asset
+                  if (isColorAsset(asset)) {
+                    return (
+                      <button
+                        key={asset.id}
+                        type="button"
+                        onClick={() => onToggleAsset(asset)}
+                        className={`group relative bg-white rounded-lg border-2 overflow-hidden transition-all hover:shadow-md ${
+                          isSelected
+                            ? "border-[#1d1d1f] ring-2 ring-[#1d1d1f]/10"
+                            : "border-[#e8e8ed] hover:border-[#d2d2d7]"
+                        }`}
+                      >
+                        {/* Color swatch */}
+                        <div className="aspect-square flex items-center justify-center p-3">
+                          <div
+                            className="w-full h-full rounded-lg shadow-inner"
+                            style={{ backgroundColor: asset.value }}
+                          />
+                        </div>
+                        {/* Color info */}
+                        <div className="px-2 py-1.5 border-t border-[#e8e8ed]">
+                          <p className="text-[11px] text-[#1d1d1f] truncate font-medium">{asset.name}</p>
+                          <p className="text-[10px] text-[#86868b] uppercase">{asset.value}</p>
+                        </div>
+                        {/* Delete button */}
+                        <button
+                          type="button"
+                          onClick={(e) => handleDeleteAsset(e, asset.id)}
+                          className="absolute top-1 right-1 w-6 h-6 bg-red-500 rounded-full items-center justify-center shadow-md opacity-0 group-hover:opacity-100 transition-opacity hidden group-hover:flex"
+                          title="Delete color"
+                        >
+                          <svg className="w-3.5 h-3.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        </button>
+                        {isSelected && (
+                          <div className="absolute top-1 left-1 w-5 h-5 bg-[#1d1d1f] rounded-full flex items-center justify-center shadow-md">
+                            <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                            </svg>
+                          </div>
+                        )}
+                      </button>
+                    );
+                  }
+
+                  // Font asset
+                  if (isFontAsset(asset)) {
+                    return (
+                      <button
+                        key={asset.id}
+                        type="button"
+                        onClick={() => onToggleAsset(asset)}
+                        className={`group relative bg-white rounded-lg border-2 overflow-hidden transition-all hover:shadow-md ${
+                          isSelected
+                            ? "border-[#1d1d1f] ring-2 ring-[#1d1d1f]/10"
+                            : "border-[#e8e8ed] hover:border-[#d2d2d7]"
+                        }`}
+                      >
+                        {/* Font preview */}
+                        <div className="aspect-square bg-[#f5f5f7] flex items-center justify-center p-3">
+                          <span className="text-3xl font-semibold text-[#1d1d1f]">Aa</span>
+                        </div>
+                        {/* Font info */}
+                        <div className="px-2 py-1.5 border-t border-[#e8e8ed]">
+                          <p className="text-[11px] text-[#1d1d1f] truncate font-medium">{asset.name}</p>
+                          <p className="text-[10px] text-[#86868b] truncate">{asset.family}</p>
+                        </div>
+                        {/* Delete button */}
+                        <button
+                          type="button"
+                          onClick={(e) => handleDeleteAsset(e, asset.id)}
+                          className="absolute top-1 right-1 w-6 h-6 bg-red-500 rounded-full items-center justify-center shadow-md opacity-0 group-hover:opacity-100 transition-opacity hidden group-hover:flex"
+                          title="Delete font"
+                        >
+                          <svg className="w-3.5 h-3.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        </button>
+                        {isSelected && (
+                          <div className="absolute top-1 left-1 w-5 h-5 bg-[#1d1d1f] rounded-full flex items-center justify-center shadow-md">
+                            <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                            </svg>
+                          </div>
+                        )}
+                      </button>
+                    );
+                  }
+
+                  // File asset (image or document)
                   return (
                     <button
                       key={asset.id}
@@ -310,6 +497,190 @@ export function AssetBankModal({ isOpen, onClose, selectedAssets, onToggleAsset 
                 className="px-4 py-2 text-[13px] font-medium text-white bg-[#1d1d1f] rounded-lg hover:bg-[#000] transition-colors disabled:opacity-50"
               >
                 {uploadAssets.isPending ? "Uploading..." : "Upload"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Add Color Dialog */}
+      {showColorDialog && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50"
+          onClick={() => setShowColorDialog(false)}
+        >
+          <div
+            className="bg-white rounded-xl shadow-2xl w-[400px] overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-5 py-4 border-b border-[#e8e8ed]">
+              <h3 className="text-[15px] font-semibold text-[#1d1d1f]">Add Brand Color</h3>
+              <p className="text-[12px] text-[#86868b] mt-1">Define a color for your brand guidelines</p>
+            </div>
+
+            <div className="p-5 space-y-4">
+              {/* Color picker */}
+              <div className="flex items-center gap-4">
+                <input
+                  type="color"
+                  value={newColor.value}
+                  onChange={(e) => setNewColor({ ...newColor, value: e.target.value })}
+                  className="w-16 h-16 rounded-lg cursor-pointer border-2 border-[#e8e8ed]"
+                />
+                <div className="flex-1 space-y-2">
+                  <input
+                    type="text"
+                    value={newColor.name}
+                    onChange={(e) => setNewColor({ ...newColor, name: e.target.value })}
+                    placeholder="Color name (e.g., Primary Blue)"
+                    className="w-full px-3 py-2 text-[13px] bg-[#f5f5f7] rounded-lg border-0 focus:outline-none focus:ring-2 focus:ring-[#1d1d1f]/20"
+                  />
+                  <input
+                    type="text"
+                    value={newColor.value}
+                    onChange={(e) => setNewColor({ ...newColor, value: e.target.value })}
+                    placeholder="#000000"
+                    className="w-full px-3 py-2 text-[13px] bg-[#f5f5f7] rounded-lg border-0 focus:outline-none focus:ring-2 focus:ring-[#1d1d1f]/20 font-mono"
+                  />
+                </div>
+              </div>
+
+              {/* Usage selector */}
+              <div>
+                <label className="text-[12px] text-[#86868b] mb-1.5 block">Usage (optional)</label>
+                <select
+                  value={newColor.usage}
+                  onChange={(e) => setNewColor({ ...newColor, usage: e.target.value as ColorAsset["usage"] | "" })}
+                  className="w-full px-3 py-2 text-[13px] bg-[#f5f5f7] rounded-lg border-0 focus:outline-none focus:ring-2 focus:ring-[#1d1d1f]/20"
+                >
+                  <option value="">Select usage...</option>
+                  <option value="primary">Primary</option>
+                  <option value="secondary">Secondary</option>
+                  <option value="accent">Accent</option>
+                  <option value="text">Text</option>
+                  <option value="background">Background</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="px-5 py-4 border-t border-[#e8e8ed] flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setShowColorDialog(false)}
+                className="px-4 py-2 text-[13px] font-medium text-[#1d1d1f] hover:bg-[#f5f5f7] rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleCreateColor}
+                disabled={createColor.isPending || !newColor.name.trim()}
+                className="px-4 py-2 text-[13px] font-medium text-white bg-[#1d1d1f] rounded-lg hover:bg-[#000] transition-colors disabled:opacity-50"
+              >
+                {createColor.isPending ? "Adding..." : "Add Color"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Add Font Dialog */}
+      {showFontDialog && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50"
+          onClick={() => setShowFontDialog(false)}
+        >
+          <div
+            className="bg-white rounded-xl shadow-2xl w-[400px] overflow-visible"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-5 py-4 border-b border-[#e8e8ed]">
+              <h3 className="text-[15px] font-semibold text-[#1d1d1f]">Add Brand Font</h3>
+            </div>
+
+            <div className="p-5 space-y-4 overflow-visible">
+              <div className="relative">
+                <label className="text-[12px] text-[#86868b] mb-1.5 block">Font Family</label>
+                <FontPicker
+                  value={newFont.family}
+                  onChange={handleFontSelect}
+                  placeholder="Search fonts..."
+                />
+              </div>
+
+              {newFont.family && (
+                <>
+                  <div>
+                    <label className="text-[12px] text-[#86868b] mb-1.5 block">Display Name</label>
+                    <input
+                      type="text"
+                      value={newFont.name}
+                      onChange={(e) => setNewFont({ ...newFont, name: e.target.value })}
+                      placeholder="e.g., Heading Font"
+                      className="w-full px-3 py-2 text-[13px] bg-[#f5f5f7] rounded-lg border-0 focus:outline-none focus:ring-2 focus:ring-[#1d1d1f]/20"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-[12px] text-[#86868b] mb-1.5 block">Weights</label>
+                    <div className="flex flex-wrap gap-1.5">
+                      {(GOOGLE_FONTS.find(f => f.family === newFont.family)?.weights || ["400"]).map(weight => (
+                        <button
+                          key={weight}
+                          type="button"
+                          onClick={() => {
+                            const isSelected = newFont.weights.includes(weight);
+                            setNewFont({
+                              ...newFont,
+                              weights: isSelected
+                                ? newFont.weights.filter(w => w !== weight)
+                                : [...newFont.weights, weight],
+                            });
+                          }}
+                          className={`px-2.5 py-1 text-[12px] rounded-md transition-colors ${
+                            newFont.weights.includes(weight)
+                              ? "bg-[#1d1d1f] text-white"
+                              : "bg-[#f5f5f7] text-[#86868b] hover:bg-[#e8e8ed]"
+                          }`}
+                        >
+                          {weight}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="text-[12px] text-[#86868b] mb-1.5 block">Usage (optional)</label>
+                    <select
+                      value={newFont.usage}
+                      onChange={(e) => setNewFont({ ...newFont, usage: e.target.value as FontAsset["usage"] | "" })}
+                      className="w-full px-3 py-2 text-[13px] bg-[#f5f5f7] rounded-lg border-0 focus:outline-none focus:ring-2 focus:ring-[#1d1d1f]/20"
+                    >
+                      <option value="">Select usage...</option>
+                      <option value="heading">Heading</option>
+                      <option value="body">Body</option>
+                      <option value="accent">Accent</option>
+                    </select>
+                  </div>
+                </>
+              )}
+            </div>
+
+            <div className="px-5 py-4 border-t border-[#e8e8ed] flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setShowFontDialog(false)}
+                className="px-4 py-2 text-[13px] font-medium text-[#1d1d1f] hover:bg-[#f5f5f7] rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleCreateFont}
+                disabled={createFont.isPending || !newFont.name.trim() || !newFont.family.trim()}
+                className="px-4 py-2 text-[13px] font-medium text-white bg-[#1d1d1f] rounded-lg hover:bg-[#000] transition-colors disabled:opacity-50"
+              >
+                {createFont.isPending ? "Adding..." : "Add Font"}
               </button>
             </div>
           </div>

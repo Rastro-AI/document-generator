@@ -3,8 +3,8 @@
 import { useState, useRef, useEffect } from "react";
 import { useUploadFiles, useRemoveUploadedFile, streamChat } from "@/hooks/useJobs";
 import { UploadedFile } from "@/lib/types";
-import { AssetBankModal } from "./AssetBankModal";
-import { Asset } from "@/hooks/useAssetBank";
+import { BrandBankDropdown } from "./BrandBankDropdown";
+import { Asset, isFileAsset } from "@/hooks/useAssetBank";
 
 interface AgentTrace {
   type: "reasoning" | "tool_call" | "tool_result" | "status";
@@ -35,6 +35,7 @@ interface ChatPanelProps {
   onTemplateUpdated: () => void;
   onFilesChanged?: () => void;
   onBack?: () => void;
+  selectedTemplateName?: string;
 }
 
 /**
@@ -97,22 +98,28 @@ function TracesDisplay({ traces }: { traces: AgentTrace[] }) {
 
 type ReasoningMode = "none" | "low";
 
-export function ChatPanel({ jobId, initialMessage, uploadedFiles, initialUserPrompt, initialUserFiles, isCreating, creationStatus, creationTraces, initialReasoningMode, onFieldsUpdated, onTemplateUpdated, onFilesChanged, onBack }: ChatPanelProps) {
+export function ChatPanel({ jobId, initialMessage, uploadedFiles, initialUserPrompt, initialUserFiles, isCreating, creationStatus, creationTraces, initialReasoningMode, onFieldsUpdated, onTemplateUpdated, onFilesChanged, onBack, selectedTemplateName }: ChatPanelProps) {
   const [reasoningMode, setReasoningMode] = useState<ReasoningMode>(initialReasoningMode || "none");
   const [messages, setMessages] = useState<ChatMessage[]>(() => {
     const msgs: ChatMessage[] = [];
 
     // Show initial user message immediately (before server response)
     if (initialUserPrompt || (initialUserFiles && initialUserFiles.length > 0)) {
-      const fileNames = initialUserFiles?.map(f => f.name) || [];
-      const content = initialUserPrompt
-        ? (fileNames.length > 0 ? `${initialUserPrompt} [${fileNames.join(", ")}]` : initialUserPrompt)
-        : `Uploaded files [${fileNames.join(", ")}]`;
+      // Build attachments from files
+      const attachments = initialUserFiles?.map(f => ({
+        filename: f.name,
+        type: (f.type.startsWith("image/") ? "image" : "document") as "document" | "image",
+      })) || [];
+
+      // Content is just the prompt, or a default if only files were uploaded
+      const content = initialUserPrompt || "";
+
       msgs.push({
         id: "initial-user",
         role: "user",
         content,
         timestamp: new Date(),
+        attachments: attachments.length > 0 ? attachments : undefined,
       });
     }
 
@@ -143,6 +150,7 @@ export function ChatPanel({ jobId, initialMessage, uploadedFiles, initialUserPro
   const fileInputRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const brandBankButtonRef = useRef<HTMLButtonElement>(null);
 
   const uploadFilesHook = useUploadFiles();
   const removeFile = useRemoveUploadedFile();
@@ -267,16 +275,19 @@ export function ChatPanel({ jobId, initialMessage, uploadedFiles, initialUserPro
       setSelectedAssets(prev => prev.filter(a => a.id !== asset.id));
     } else {
       setSelectedAssets(prev => [...prev, asset]);
-      // Fetch the asset file and add to attachedFiles
-      try {
-        const response = await fetch(`/api/assets/${asset.id}`);
-        if (response.ok) {
-          const blob = await response.blob();
-          const file = new File([blob], asset.filename, { type: blob.type });
-          setAttachedFiles(prev => [...prev, file]);
+      // Only fetch file assets (images, documents) and add to attachedFiles
+      // Colors and fonts are metadata, not files
+      if (isFileAsset(asset)) {
+        try {
+          const response = await fetch(`/api/assets/${asset.id}`);
+          if (response.ok) {
+            const blob = await response.blob();
+            const file = new File([blob], asset.filename, { type: blob.type });
+            setAttachedFiles(prev => [...prev, file]);
+          }
+        } catch (err) {
+          console.error("Failed to fetch asset:", err);
         }
-      } catch (err) {
-        console.error("Failed to fetch asset:", err);
       }
     }
   };
@@ -436,17 +447,21 @@ export function ChatPanel({ jobId, initialMessage, uploadedFiles, initialUserPro
       onClick={() => setIsFocused(true)}
       className="flex flex-col h-full bg-white transition-all duration-200 cursor-text overflow-visible"
     >
-      {/* Back button */}
+      {/* Header with back button */}
       {onBack && (
-        <div className="flex-shrink-0 px-3 pt-3">
+        <div className="flex-shrink-0 px-4 py-3 border-b border-[#e8e8ed] flex items-center justify-between">
           <button
             onClick={onBack}
-            className="w-7 h-7 flex items-center justify-center rounded-full hover:bg-[#f5f5f7] transition-colors"
+            className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-[#f5f5f7] transition-colors text-[13px] text-[#86868b] hover:text-[#1d1d1f]"
           >
-            <svg className="w-4 h-4 text-[#1d1d1f]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
             </svg>
+            Back
           </button>
+          {selectedTemplateName && (
+            <span className="text-[13px] text-[#86868b]">{selectedTemplateName}</span>
+          )}
         </div>
       )}
 
@@ -476,34 +491,40 @@ export function ChatPanel({ jobId, initialMessage, uploadedFiles, initialUserPro
             >
               {msg.attachments && msg.attachments.length > 0 && (
                 <div className="flex flex-wrap gap-1.5 mb-2">
-                  {msg.attachments.map((att, i) => (
-                    <div
-                      key={`${att.filename}-${i}`}
-                      className={`flex items-center gap-1.5 px-2 py-1 rounded-md text-[11px] ${
-                        msg.role === "user"
-                          ? "bg-white/20 text-white"
-                          : "bg-white text-[#1d1d1f]"
-                      }`}
-                    >
-                      {att.type === "image" ? (
-                        <svg className="w-3 h-3 opacity-70" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                        </svg>
-                      ) : (
-                        <svg className="w-3 h-3 opacity-70" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                        </svg>
-                      )}
-                      <span className="max-w-[100px] truncate">{att.filename}</span>
-                    </div>
-                  ))}
+                  {msg.attachments.map((att, i) => {
+                    // Check if it's a PDF file
+                    const isPdf = att.filename.toLowerCase().endsWith('.pdf');
+                    const displayName = isPdf ? 'attached pdf' : att.filename;
+
+                    return (
+                      <div
+                        key={`${att.filename}-${i}`}
+                        className={`flex items-center gap-1.5 px-2 py-1 rounded-md text-[11px] ${
+                          msg.role === "user"
+                            ? "bg-white/20 text-white"
+                            : "bg-white text-[#1d1d1f]"
+                        }`}
+                      >
+                        {att.type === "image" ? (
+                          <svg className="w-3 h-3 opacity-70" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                          </svg>
+                        ) : (
+                          <svg className="w-3 h-3 opacity-70" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                          </svg>
+                        )}
+                        <span className="max-w-[100px] truncate">{displayName}</span>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
               {/* Traces display - o3-style reasoning UI */}
               {msg.traces && msg.traces.length > 0 && (
                 <TracesDisplay traces={msg.traces} />
               )}
-              <p className="whitespace-pre-wrap">{msg.content}</p>
+              {msg.content && <p className="whitespace-pre-wrap">{msg.content}</p>}
             </div>
           </div>
         ))}
@@ -717,22 +738,32 @@ export function ChatPanel({ jobId, initialMessage, uploadedFiles, initialUserPro
                 Attach
               </button>
 
-              {/* Asset Bank Button */}
-              <button
-                type="button"
-                onClick={() => setShowAssetBank(true)}
-                disabled={isProcessing}
-                className="h-8 px-2.5 flex items-center gap-1.5 rounded-lg text-[12px] font-medium text-[#86868b]
-                          hover:bg-white hover:text-[#1d1d1f]
-                          disabled:opacity-40 disabled:cursor-not-allowed
-                          transition-all duration-200"
-                title="Select from Asset Bank"
-              >
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
-                </svg>
-                Asset Bank
-              </button>
+              {/* Brand Bank Button + Dropdown */}
+              <div className="relative">
+                <button
+                  ref={brandBankButtonRef}
+                  type="button"
+                  onClick={() => setShowAssetBank(!showAssetBank)}
+                  disabled={isProcessing}
+                  className="h-8 px-2.5 flex items-center gap-1.5 rounded-lg text-[12px] font-medium text-[#86868b]
+                            hover:bg-white hover:text-[#1d1d1f]
+                            disabled:opacity-40 disabled:cursor-not-allowed
+                            transition-all duration-200"
+                  title="Open Brand Bank"
+                >
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
+                  </svg>
+                  Brand Bank
+                </button>
+                <BrandBankDropdown
+                  isOpen={showAssetBank}
+                  onClose={() => setShowAssetBank(false)}
+                  selectedAssets={selectedAssets}
+                  onToggleAsset={handleToggleAsset}
+                  anchorRef={brandBankButtonRef}
+                />
+              </div>
             </div>
 
             <div className="flex items-center gap-2">
@@ -835,13 +866,49 @@ export function ChatPanel({ jobId, initialMessage, uploadedFiles, initialUserPro
         </div>
       )}
 
-      {/* Asset Bank Modal */}
-      <AssetBankModal
-        isOpen={showAssetBank}
-        onClose={() => setShowAssetBank(false)}
-        selectedAssets={selectedAssets}
-        onToggleAsset={handleToggleAsset}
-      />
+      {/* Attachment preview modal */}
+      {previewAttachment && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+          onClick={closeAttachmentPreview}
+        >
+          <div
+            className="relative bg-white rounded-2xl shadow-xl max-w-2xl max-h-[80vh] overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-4 py-3 border-b border-[#e8e8ed]">
+              <span className="text-[14px] font-medium text-[#1d1d1f] truncate max-w-[300px]">
+                {previewAttachment.file.name}
+              </span>
+              <button
+                onClick={closeAttachmentPreview}
+                className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-[#f5f5f7] transition-colors"
+              >
+                <svg className="w-5 h-5 text-[#86868b]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <div className="p-4 overflow-auto max-h-[60vh]">
+              {previewAttachment.file.type.startsWith("image/") ? (
+                <img
+                  src={previewAttachment.url}
+                  alt={previewAttachment.file.name}
+                  className="max-w-full h-auto rounded-lg"
+                />
+              ) : (
+                <div className="flex flex-col items-center justify-center py-12 text-[#86868b]">
+                  <svg className="w-16 h-16 mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  </svg>
+                  <p className="text-[14px]">Preview not available</p>
+                  <p className="text-[12px] mt-1">{previewAttachment.file.name}</p>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

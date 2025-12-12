@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect } from "react";
 import { useTemplates, useSaveTemplate, useTemplate, useDeleteTemplate } from "@/hooks/useTemplates";
-import { Asset } from "@/hooks/useAssetBank";
+import { Asset, isFileAsset, isColorAsset, isFontAsset } from "@/hooks/useAssetBank";
 import { TemplateEditorModal } from "./TemplateEditorModal";
 import { AssetBankModal } from "./AssetBankModal";
 import { Template } from "@/lib/types";
@@ -349,19 +349,19 @@ export function CreateJobForm({ onJobCreated }: CreateJobFormProps) {
                 Attach
               </button>
 
-              {/* Asset Bank Button */}
+              {/* Brand Bank Button */}
               <button
                 type="button"
                 onClick={() => setShowAssetModal(true)}
                 className="h-8 px-2.5 flex items-center gap-1.5 rounded-lg text-[12px] font-medium text-[#86868b]
                           hover:bg-white hover:text-[#1d1d1f]
                           transition-all duration-200"
-                title="Select from Asset Bank"
+                title="Open Brand Bank"
               >
                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
                 </svg>
-                Asset Bank
+                Brand Bank
               </button>
 
               {/* Inline attachment thumbnails - clickable to preview */}
@@ -375,7 +375,17 @@ export function CreateJobForm({ onJobCreated }: CreateJobFormProps) {
                       onClick={() => setPreviewFile({ type: 'asset', asset })}
                       className="relative flex-shrink-0 w-8 h-8 rounded-md overflow-hidden bg-white shadow-sm ring-1 ring-[#86868b]/30 hover:ring-[#1d1d1f]/50 transition-all cursor-pointer"
                     >
-                      {asset.type === "image" ? (
+                      {isColorAsset(asset) ? (
+                        <div
+                          className="w-full h-full"
+                          style={{ backgroundColor: asset.value }}
+                          title={`${asset.name}: ${asset.value}`}
+                        />
+                      ) : isFontAsset(asset) ? (
+                        <div className="w-full h-full flex items-center justify-center bg-[#f0f0f0]" title={`${asset.name}: ${asset.family}`}>
+                          <span className="text-xs font-semibold text-[#1d1d1f]">Aa</span>
+                        </div>
+                      ) : isFileAsset(asset) && asset.type === "image" ? (
                         <img
                           src={`/api/assets/${asset.id}`}
                           alt={asset.filename}
@@ -527,7 +537,15 @@ export function CreateJobForm({ onJobCreated }: CreateJobFormProps) {
             {/* Header */}
             <div className="flex items-center justify-between px-5 py-4 border-b border-[#e8e8ed]">
               <span className="text-[15px] font-medium text-[#1d1d1f] truncate max-w-[400px]">
-                {previewFile.type === 'asset' ? previewFile.asset?.filename : previewFile.file?.name}
+                {previewFile.type === 'asset' && previewFile.asset
+                  ? (isFileAsset(previewFile.asset)
+                      ? previewFile.asset.filename
+                      : isColorAsset(previewFile.asset)
+                        ? `Color: ${previewFile.asset.name}`
+                        : isFontAsset(previewFile.asset)
+                          ? `Font: ${previewFile.asset.name}`
+                          : "Asset")
+                  : previewFile.file?.name}
               </span>
               <div className="flex items-center gap-2">
                 <button
@@ -557,7 +575,31 @@ export function CreateJobForm({ onJobCreated }: CreateJobFormProps) {
             </div>
             {/* Content */}
             <div className="p-6 bg-[#f5f5f7] flex items-center justify-center min-h-[300px]">
-              {previewFile.type === 'asset' && previewFile.asset?.type === 'image' ? (
+              {previewFile.type === 'asset' && previewFile.asset && isColorAsset(previewFile.asset) ? (
+                <div className="text-center">
+                  <div
+                    className="w-32 h-32 rounded-xl shadow-lg mx-auto mb-4"
+                    style={{ backgroundColor: previewFile.asset.value }}
+                  />
+                  <p className="text-[16px] font-medium text-[#1d1d1f]">{previewFile.asset.name}</p>
+                  <p className="text-[14px] text-[#86868b] mt-1 uppercase font-mono">{previewFile.asset.value}</p>
+                  {previewFile.asset.usage && (
+                    <p className="text-[12px] text-[#86868b] mt-1 capitalize">Usage: {previewFile.asset.usage}</p>
+                  )}
+                </div>
+              ) : previewFile.type === 'asset' && previewFile.asset && isFontAsset(previewFile.asset) ? (
+                <div className="text-center">
+                  <div className="w-32 h-32 rounded-xl bg-white shadow-lg mx-auto mb-4 flex items-center justify-center">
+                    <span className="text-5xl font-semibold text-[#1d1d1f]">Aa</span>
+                  </div>
+                  <p className="text-[16px] font-medium text-[#1d1d1f]">{previewFile.asset.name}</p>
+                  <p className="text-[14px] text-[#86868b] mt-1">{previewFile.asset.family}</p>
+                  <p className="text-[12px] text-[#86868b] mt-1">Weights: {previewFile.asset.weights.join(", ")}</p>
+                  {previewFile.asset.usage && (
+                    <p className="text-[12px] text-[#86868b] mt-1 capitalize">Usage: {previewFile.asset.usage}</p>
+                  )}
+                </div>
+              ) : previewFile.type === 'asset' && previewFile.asset && isFileAsset(previewFile.asset) && previewFile.asset.type === 'image' ? (
                 <img
                   src={`/api/assets/${previewFile.asset.id}`}
                   alt={previewFile.asset.filename}
@@ -575,7 +617,9 @@ export function CreateJobForm({ onJobCreated }: CreateJobFormProps) {
                     <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                   </svg>
                   <p className="text-[14px] font-medium text-[#1d1d1f]">
-                    {previewFile.type === 'asset' ? previewFile.asset?.filename : previewFile.file?.name}
+                    {previewFile.type === 'asset' && previewFile.asset
+                      ? (isFileAsset(previewFile.asset) ? previewFile.asset.filename : "Asset")
+                      : previewFile.file?.name}
                   </p>
                   <p className="text-[12px] text-[#86868b] mt-1">
                     {previewFile.type === 'file' && previewFile.file

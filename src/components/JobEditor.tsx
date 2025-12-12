@@ -312,6 +312,7 @@ export function JobEditor({ jobId, templateId, onBack, initialPrompt, initialFil
               onTemplateUpdated={handleTemplateUpdated}
               onFilesChanged={() => refetch()}
               onBack={onBack}
+              selectedTemplateName={template?.name}
             />
           </div>
         </div>
@@ -706,6 +707,7 @@ export function JobEditor({ jobId, templateId, onBack, initialPrompt, initialFil
           </div>
         </div>
       )}
+
     </div>
   );
 }

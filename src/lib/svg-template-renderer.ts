@@ -188,21 +188,51 @@ export function renderSVGTemplate(
     return defaultValue !== undefined ? escapeXml(defaultValue) : `{{${fieldPath}}}`;
   });
 
-  // Process asset placeholders in xlink:href or href attributes
-  // Look for patterns like href="{{ASSET_NAME}}" or xlink:href="{{ASSET_NAME}}"
+  // Process asset placeholders in image elements
+  // Look for <image> elements with href="{{ASSET_NAME}}" or xlink:href="{{ASSET_NAME}}"
+  // When no asset is provided, replace the entire image element with a gray placeholder rect
+  const imageElementRegex = /<image\s+([^>]*?)(xlink:href|href)=["']\{\{(\w+)\}\}["']([^>]*?)\s*\/?>/g;
+  rendered = rendered.replace(imageElementRegex, (match, beforeAttr, hrefAttr, assetName, afterAttr) => {
+    const assetValue = assets[assetName];
+
+    // Ensure proper spacing - beforeAttr and afterAttr may or may not have spaces
+    const spaceBefore = beforeAttr && !beforeAttr.endsWith(' ') ? beforeAttr + ' ' : beforeAttr;
+    const spaceAfter = afterAttr && !afterAttr.startsWith(' ') ? ' ' + afterAttr : afterAttr;
+
+    if (assetValue) {
+      // Build properly spaced attributes
+      const attrs = `${spaceBefore}href="${assetValue}"${spaceAfter}`.trim();
+      return `<image ${attrs}/>`;
+    }
+
+    // No asset - replace with a gray placeholder rectangle
+    // Extract x, y, width, height from the image attributes
+    const allAttrs = beforeAttr + ' ' + afterAttr;
+    const xMatch = allAttrs.match(/x=["']([^"']+)["']/);
+    const yMatch = allAttrs.match(/y=["']([^"']+)["']/);
+    const widthMatch = allAttrs.match(/width=["']([^"']+)["']/);
+    const heightMatch = allAttrs.match(/height=["']([^"']+)["']/);
+
+    const x = xMatch ? xMatch[1] : "0";
+    const y = yMatch ? yMatch[1] : "0";
+    const width = widthMatch ? widthMatch[1] : "100";
+    const height = heightMatch ? heightMatch[1] : "100";
+
+    // Return a gray rectangle as placeholder
+    return `<rect x="${x}" y="${y}" width="${width}" height="${height}" fill="#e5e5e5" stroke="#d0d0d0" stroke-width="1"/>`;
+  });
+
+  // Also handle any remaining href placeholders that might not be in image elements
   const assetHrefRegex = /(xlink:href|href)=["']\{\{(\w+)\}\}["']/g;
   rendered = rendered.replace(assetHrefRegex, (match, attr, assetName) => {
     const assetValue = assets[assetName];
     if (assetValue) {
-      // If it's already a data URL, use it directly
       if (assetValue.startsWith("data:")) {
-        // Use href instead of xlink:href for better compatibility
         return `href="${assetValue}"`;
       }
-      // Otherwise it's a file path - we'll handle this in the render function
       return `href="${assetValue}"`;
     }
-    // No asset - use a transparent 1x1 PNG to avoid empty href issues with some renderers
+    // Fallback to transparent PNG for non-image elements
     return `href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="`;
   });
 

@@ -32,6 +32,7 @@ import {
   getAssetBankFile,
   getUploadedFile,
   saveAssetFile,
+  updateContainerId,
 } from "@/lib/fs-utils";
 import { renderSVGTemplate, prepareAssets, svgToPng } from "@/lib/svg-template-renderer";
 import { getPublicUrl, BUCKETS } from "@/lib/supabase";
@@ -75,6 +76,12 @@ You are a document generation assistant. You help users create spec sheets by:
 4. Editing the SVG template if needed
 5. Verifying the output looks correct visually
 
+## DOCUMENT FORMAT
+You are generating A4-sized documents (612x792 pixels at 72 DPI).
+- Page width: 612px
+- Page height: 792px
+- Keep all content within these bounds
+
 ## TOOLS
 - code_interpreter: Use Python to read Excel/PDF files uploaded to /mnt/user/. Use pandas for Excel, PyMuPDF for PDFs.
 - update_fields: Set field values. Pass JSON {"FIELD_NAME": "value"}.
@@ -87,19 +94,26 @@ You are a document generation assistant. You help users create spec sheets by:
 2. Use update_fields to fill in all template fields with extracted data
 3. Use update_assets to assign uploaded images to the appropriate slots (PRODUCT_IMAGE, LOGO_IMAGE, etc.)
 4. Call render_preview to see the result
-5. If there are visual issues (text overflow, misalignment, ugly layout), use apply_patch to fix the SVG
-6. Call render_preview again to verify fixes
+5. MANDATORY: After viewing the first preview, you MUST call apply_patch at least once to improve the layout
+   - Look for: text overflow, cut-off text, misalignment, spacing issues, font sizes too large/small
+   - Even if it looks "okay", there's always something to polish - be proactive
+   - Common fixes: reduce font-size, adjust x/y positions, shorten text, change text-anchor
+6. Call render_preview again to verify your SVG fixes worked
 7. ALWAYS end with a text response summarizing what you did
 
 ## CRITICAL REQUIREMENTS
 1. ALWAYS call render_preview at least once before your final response to verify the output visually
-2. ALWAYS end your response with a text message summarizing what you did (this is REQUIRED, not optional)
-3. Match images to slots by analyzing their content (product photos → PRODUCT_IMAGE, logos → LOGO_IMAGE, etc.)
-4. NEVER claim to have made changes without actually calling the appropriate tool
+2. MANDATORY: After viewing the preview, you MUST call apply_patch at least once before responding
+   - Do NOT skip this step even if the preview looks acceptable
+   - There is ALWAYS room for improvement: better alignment, tighter spacing, cleaner layout
+   - If you truly cannot find anything to fix, make at least a minor improvement (adjust padding, tweak font size, etc.)
+3. ALWAYS end your response with a text message summarizing what you did (this is REQUIRED, not optional)
+4. Match images to slots by analyzing their content (product photos → PRODUCT_IMAGE, logos → LOGO_IMAGE, etc.)
+5. NEVER claim to have made changes without actually calling the appropriate tool
    - If you say you edited the SVG, you MUST have called apply_patch
    - If you say you updated fields, you MUST have called update_fields
    - If you say you assigned assets, you MUST have called update_assets
-5. Only describe actions you ACTUALLY performed via tool calls
+6. Only describe actions you ACTUALLY performed via tool calls
 
 Your final message MUST accurately summarize ONLY the actions you actually took. Examples:
 - "I've filled in 15 fields from the spreadsheet and assigned the product image. The spec sheet is ready."
@@ -108,6 +122,7 @@ Your final message MUST accurately summarize ONLY the actions you actually took.
 
 DO NOT claim to have fixed visual issues unless you actually called apply_patch.
 DO NOT end with just a tool call - you MUST provide a text response after your last tool call.
+DO NOT return after render_preview without calling apply_patch at least once.
 `.trim();
 
 /**
@@ -415,58 +430,54 @@ export async function runTemplateAgent(
   // Load SVG template
   currentSvgContent = await getSvgTemplateContentForJob(jobId, templateId);
 
-  // Create container for code_interpreter if there are document files
-  let containerId: string | null = null;
+  // Timing helper
+  const timings: Record<string, number> = {};
+  const startTime = Date.now();
+  const logTiming = (label: string, start: number) => {
+    const elapsed = Date.now() - start;
+    timings[label] = elapsed;
+    console.log(`[Agent] TIMING: ${label} took ${elapsed}ms`);
+  };
+
+  // Categorize files
   const documentFiles = uploadedFiles.filter(f => f.type === "document");
   const imageFiles = uploadedFiles.filter(f => f.type === "image");
 
-  if (documentFiles.length > 0) {
-    onEvent?.({ type: "status", content: "Setting up file analysis..." });
-    const container = await openai.containers.create({ name: `template-agent-${Date.now()}` });
-    containerId = container.id;
+  // Container reuse: check if job already has a container
+  let containerId: string | null = job?.containerId || null;
+  let containerIsNew = false;
+  let containerPromise: Promise<{ id: string }> | null = null;
 
-    // Upload document files to container
-    for (const file of documentFiles) {
+  if (documentFiles.length > 0) {
+    if (containerId) {
+      // Try to reuse existing container
+      console.log(`[Agent] Attempting to reuse existing container: ${containerId}`);
       try {
-        const buffer = await getUploadedFile(jobId, file.filename);
-        if (buffer) {
-          const tmpPath = path.join(os.tmpdir(), file.filename);
-          fsSync.writeFileSync(tmpPath, buffer);
-          const stream = fsSync.createReadStream(tmpPath);
-          await openai.containers.files.create(containerId, { file: stream });
-          fsSync.unlinkSync(tmpPath);
-          console.log(`[Agent] Uploaded ${file.filename} to container`);
-        }
+        // Verify container still exists by trying to list files
+        const verifyStart = Date.now();
+        await openai.containers.files.list(containerId);
+        logTiming("Container verification (reuse)", verifyStart);
+        console.log(`[Agent] Container ${containerId} is still valid, reusing`);
       } catch (err) {
-        console.error(`[Agent] Failed to upload ${file.filename}:`, err);
+        console.log(`[Agent] Container ${containerId} no longer exists, creating new one`);
+        containerId = null;
       }
+    }
+
+    if (!containerId) {
+      // Need to create a new container
+      onEvent?.({ type: "status", content: "Setting up file analysis..." });
+      const containerStart = Date.now();
+      containerPromise = openai.containers.create({ name: `template-agent-${Date.now()}` })
+        .then(container => {
+          logTiming("Container creation", containerStart);
+          containerIsNew = true;
+          return container;
+        });
     }
   }
 
-  // Create tools - use explicit any[] type to allow mixing tool types
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const tools: any[] = [
-    createUpdateFieldsTool(jobId, liveFields, templateFields, onEvent),
-    createUpdateAssetsTool(jobId, liveAssets, uploadedFiles, onEvent),
-    applyPatchTool({ editor: createSvgEditor(jobId, onEvent) }),
-    createRenderPreviewTool(jobId, () => liveFields, () => liveAssets, onEvent),
-  ];
-
-  // Add code_interpreter if we have a container
-  if (containerId) {
-    tools.unshift(codeInterpreterTool({ container: containerId }));
-  }
-
-  // Create agent
-  const agent = new Agent({
-    name: "TemplateAgent",
-    instructions: AGENT_INSTRUCTIONS,
-    model: "gpt-5.2",
-    modelSettings: { reasoning: { effort: reasoning } },
-    tools,
-  });
-
-  // Create runner with hooks
+  // Create runner with hooks (agent will be created after container is ready)
   const runner = new Runner();
   const traces: AgentTrace[] = [];
 
@@ -504,8 +515,12 @@ Request: ${userMessage}`;
 
     // Build input with optional initial screenshot (uploaded to storage, referenced by URL)
     let initialScreenshotUrl: string | null = null;
+    let screenshotBuffer: Buffer | null = null;
     if (previousHistory.length === 0) {
+      const screenshotTotalStart = Date.now();
       try {
+        // Load assets for rendering
+        const assetLoadStart = Date.now();
         const initialAssets: Record<string, string | null> = {};
         for (const [key, value] of Object.entries(liveAssets)) {
           if (value) {
@@ -519,30 +534,103 @@ Request: ${userMessage}`;
             }
           }
         }
+        logTiming("Load assets for screenshot", assetLoadStart);
+
+        // Render SVG to PNG
+        const renderStart = Date.now();
         const preparedAssets = await prepareAssets(initialAssets);
         const renderedSvg = renderSVGTemplate(currentSvgContent, liveFields, preparedAssets);
         const pngBuffer = await svgToPng(renderedSvg, 1200);
+        logTiming("Render SVG to PNG", renderStart);
 
         // Upload screenshot to storage and get public URL (avoids bloating history with base64)
+        const storageUploadStart = Date.now();
         const screenshotFilename = `screenshot-${Date.now()}.png`;
         await saveAssetFile(jobId, screenshotFilename, pngBuffer);
         const storagePath = `${jobId}/assets/${screenshotFilename}`;
         initialScreenshotUrl = getPublicUrl(BUCKETS.JOBS, storagePath);
+        logTiming("Upload screenshot to storage", storageUploadStart);
         console.log(`[Agent] Uploaded screenshot to storage: ${storagePath}`);
 
-        // Also upload to container if we have one (so code_interpreter can see it)
-        if (containerId) {
-          const tmpScreenshotPath = path.join(os.tmpdir(), "current_render.png");
-          fsSync.writeFileSync(tmpScreenshotPath, pngBuffer);
-          const screenshotStream = fsSync.createReadStream(tmpScreenshotPath);
-          await openai.containers.files.create(containerId, { file: screenshotStream });
-          fsSync.unlinkSync(tmpScreenshotPath);
-          console.log(`[Agent] Uploaded screenshot to container as current_render.png`);
-        }
+        // Store pngBuffer for later container upload (after container is ready)
+        screenshotBuffer = pngBuffer;
+
+        logTiming("Total screenshot preparation", screenshotTotalStart);
       } catch (err) {
         console.error("Failed to render initial screenshot:", err);
       }
     }
+
+    // Now wait for container (if new) and upload files
+    // Container creation was started in parallel with screenshot preparation
+    if (containerPromise) {
+      const containerWaitStart = Date.now();
+      const container = await containerPromise;
+      containerId = container.id;
+      logTiming("Wait for container (if not already done)", containerWaitStart);
+
+      // Save container ID to job for future reuse
+      await updateContainerId(jobId, containerId);
+      console.log(`[Agent] Saved container ID ${containerId} to job for reuse`);
+
+      // Upload document files to container in parallel (only for new containers)
+      const uploadStart = Date.now();
+      const uploadPromises = documentFiles.map(async (file) => {
+        const fileStart = Date.now();
+        try {
+          const buffer = await getUploadedFile(jobId, file.filename);
+          if (buffer) {
+            const tmpPath = path.join(os.tmpdir(), file.filename);
+            fsSync.writeFileSync(tmpPath, buffer);
+            const stream = fsSync.createReadStream(tmpPath);
+            await openai.containers.files.create(containerId!, { file: stream });
+            fsSync.unlinkSync(tmpPath);
+            console.log(`[Agent] Uploaded ${file.filename} to container (${Date.now() - fileStart}ms)`);
+          }
+        } catch (err) {
+          console.error(`[Agent] Failed to upload ${file.filename}:`, err);
+        }
+      });
+
+      await Promise.all(uploadPromises);
+      logTiming(`Upload ${documentFiles.length} document files`, uploadStart);
+    }
+
+    // Upload screenshot to container if we have one (for both new and reused containers)
+    if (containerId && screenshotBuffer) {
+      const containerScreenshotStart = Date.now();
+      const tmpScreenshotPath = path.join(os.tmpdir(), "current_render.png");
+      fsSync.writeFileSync(tmpScreenshotPath, screenshotBuffer);
+      const screenshotStream = fsSync.createReadStream(tmpScreenshotPath);
+      await openai.containers.files.create(containerId!, { file: screenshotStream });
+      fsSync.unlinkSync(tmpScreenshotPath);
+      logTiming("Upload screenshot to container", containerScreenshotStart);
+      console.log(`[Agent] Uploaded screenshot to container as current_render.png`);
+    }
+
+    // Create tools - now that containerId is resolved
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const tools: any[] = [
+      createUpdateFieldsTool(jobId, liveFields, templateFields, onEvent),
+      createUpdateAssetsTool(jobId, liveAssets, uploadedFiles, onEvent),
+      applyPatchTool({ editor: createSvgEditor(jobId, onEvent) }),
+      createRenderPreviewTool(jobId, () => liveFields, () => liveAssets, onEvent),
+    ];
+
+    // Add code_interpreter if we have a container
+    if (containerId) {
+      tools.unshift(codeInterpreterTool({ container: containerId }));
+      console.log(`[Agent] Added code_interpreter tool with container ${containerId}`);
+    }
+
+    // Create agent
+    const agent = new Agent({
+      name: "TemplateAgent",
+      instructions: AGENT_INSTRUCTIONS,
+      model: "gpt-5.2",
+      modelSettings: { reasoning: { effort: reasoning } },
+      tools,
+    });
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let inputMessage: any;
@@ -632,16 +720,14 @@ Request: ${userMessage}`;
 
     // Run agent
     onEvent?.({ type: "status", content: "Thinking..." });
+    const agentRunStart = Date.now();
     const result = await runner.run(agent, input, { maxTurns: 10 });
+    logTiming("Agent run (LLM + tools)", agentRunStart);
 
-    // Cleanup container
+    // NOTE: Container is intentionally NOT deleted to allow reuse across conversation turns
+    // Container ID is saved in job.containerId and will be reused on next agent run
     if (containerId) {
-      try {
-        await openai.containers.delete(containerId);
-        console.log("[Agent] Container deleted");
-      } catch {
-        // Ignore cleanup errors
-      }
+      console.log(`[Agent] Container ${containerId} kept alive for reuse`);
     }
 
     // Determine what changed
@@ -664,6 +750,16 @@ Request: ${userMessage}`;
     console.log(`[Agent] Tools used for job ${jobId}:`, toolsUsed);
     console.log(`[Agent] Session state: templateChanged=${sessionTemplateChanged}, assetsChanged=${sessionAssetsChanged}, fieldsChanged=${fieldsChanged}`);
 
+    // Log timing summary
+    const totalTime = Date.now() - startTime;
+    console.log(`[Agent] ========== TIMING SUMMARY for ${jobId} ==========`);
+    console.log(`[Agent] Total time: ${totalTime}ms`);
+    for (const [label, elapsed] of Object.entries(timings)) {
+      const pct = ((elapsed / totalTime) * 100).toFixed(1);
+      console.log(`[Agent]   ${label}: ${elapsed}ms (${pct}%)`);
+    }
+    console.log(`[Agent] =================================================`);
+
     // Detect potential hallucination: model claims SVG changes but didn't call apply_patch
     if (result.finalOutput && !sessionTemplateChanged) {
       const mentionsSvgChanges = /SVG|foreignObject|layout|overflow|wrap|template.*edit|edit.*template/i.test(result.finalOutput);
@@ -682,15 +778,8 @@ Request: ${userMessage}`;
       history: result.history,
     };
   } catch (error) {
-    // Cleanup container on error
-    if (containerId) {
-      try {
-        await openai.containers.delete(containerId);
-      } catch {
-        // Ignore
-      }
-    }
-
+    // NOTE: Container is kept alive even on error for potential reuse
+    // It will be cleaned up by OpenAI after inactivity timeout
     console.error("Template agent error:", error);
     return {
       success: false,

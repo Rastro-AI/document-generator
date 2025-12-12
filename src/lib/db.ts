@@ -49,6 +49,7 @@ interface JobRow {
     description: string;
   }> | null;
   agent_history: unknown[] | null;
+  container_id: string | null;
 }
 
 // Convert DB row to Job type
@@ -64,6 +65,7 @@ function rowToJob(row: JobRow): Job {
     uploadedFiles: row.uploaded_files || [],
     history: row.history || [],
     agentHistory: row.agent_history || undefined,
+    containerId: row.container_id || undefined,
   };
 }
 
@@ -80,6 +82,7 @@ function jobToRow(job: Job): Omit<JobRow, "created_at"> & { created_at?: string 
     uploaded_files: job.uploadedFiles || null,
     history: job.history || null,
     agent_history: job.agentHistory || null,
+    container_id: job.containerId || null,
   };
 }
 
@@ -319,6 +322,26 @@ export async function updateAgentHistoryInDb(
 }
 
 /**
+ * Update container ID for a job
+ */
+export async function updateContainerIdInDb(
+  jobId: string,
+  containerId: string | null
+): Promise<void> {
+  if (!isDbConfigured()) return;
+
+  const supabase = getSupabase();
+  const { error } = await supabase
+    .from("jobs")
+    .update({ container_id: containerId })
+    .eq("id", jobId);
+
+  if (error) {
+    console.error("Error updating container ID:", error);
+  }
+}
+
+/**
  * Delete a job
  */
 export async function deleteJobFromDb(jobId: string): Promise<void> {
@@ -354,11 +377,12 @@ export async function listJobsFromDb(): Promise<Job[]> {
 
 /**
  * Restore job from history entry
+ * Returns the restored job and the SVG content to restore (if any)
  */
 export async function restoreJobFromHistoryInDb(
   jobId: string,
   historyId: string
-): Promise<Job | null> {
+): Promise<{ job: Job; svgContent?: string } | null> {
   if (!isDbConfigured()) return null;
 
   const job = await getJobFromDb(jobId);
@@ -383,5 +407,8 @@ export async function restoreJobFromHistoryInDb(
     return null;
   }
 
-  return rowToJob(data as JobRow);
+  return {
+    job: rowToJob(data as JobRow),
+    svgContent: historyEntry.svgContent,
+  };
 }

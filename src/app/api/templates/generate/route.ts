@@ -257,6 +257,29 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // Parse brand kit (colors and fonts)
+    const brandColorsJson = formData.get("brandColors") as string | null;
+    const brandFontsJson = formData.get("brandFonts") as string | null;
+    let brandColors: Array<{ name: string; value: string; usage?: string }> = [];
+    let brandFonts: Array<{ name: string; family: string; weights: string[]; usage?: string }> = [];
+
+    if (brandColorsJson) {
+      try {
+        brandColors = JSON.parse(brandColorsJson);
+        log.info(`Parsed ${brandColors.length} brand colors`);
+      } catch (e) {
+        log.error("Failed to parse brand colors", e);
+      }
+    }
+    if (brandFontsJson) {
+      try {
+        brandFonts = JSON.parse(brandFontsJson);
+        log.info(`Parsed ${brandFonts.length} brand fonts`);
+      } catch (e) {
+        log.error("Failed to parse brand fonts", e);
+      }
+    }
+
     // Either PDF or (prompt + optional images) is required
     if (!pdfFile && !userPrompt) {
       return new Response(JSON.stringify({ error: "Either a PDF file or a text prompt is required" }), {
@@ -362,7 +385,10 @@ export async function POST(request: NextRequest) {
           currentJson ? JSON.parse(currentJson) : undefined,
           feedback || undefined,
           startVersion,
-          conversationHistory
+          conversationHistory,
+          // Pass brand kit
+          brandColors.length > 0 ? brandColors : undefined,
+          brandFonts.length > 0 ? brandFonts : undefined
         );
 
         await sendEvent("result", result);

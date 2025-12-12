@@ -2,6 +2,8 @@
 
 import { useState, useEffect, useRef } from "react";
 import { Template } from "@/lib/types";
+import { AssetBankModal } from "./AssetBankModal";
+import { Asset, isColorAsset, isFontAsset, isFileAsset } from "@/hooks/useAssetBank";
 
 // Default SVG template code
 const DEFAULT_TEMPLATE_CODE = `<svg xmlns="http://www.w3.org/2000/svg" width="612" height="792" viewBox="0 0 612 792">
@@ -132,7 +134,39 @@ export function TemplateEditorModal({
   const [versions, setVersions] = useState<Array<{ version: number; previewBase64: string; pdfBase64?: string; templateCode?: string }>>([]);
   const [selectedVersion, setSelectedVersion] = useState<number>(0);
   const [showAssetModal, setShowAssetModal] = useState(false);
-  const [selectedAssets, setSelectedAssets] = useState<Array<{ id: string; filename: string; type: string }>>([]);
+  const [selectedAssets, setSelectedAssets] = useState<Asset[]>([]);
+
+  // Right panel state (matching JobEditor)
+  const [rightPanelTab, setRightPanelTab] = useState<"preview" | "assets" | "data">("preview");
+  const [showExportMenu, setShowExportMenu] = useState(false);
+  const [showHistoryMenu, setShowHistoryMenu] = useState(false);
+  const exportMenuRef = useRef<HTMLDivElement>(null);
+  const historyMenuRef = useRef<HTMLDivElement>(null);
+  const [showCodeModal, setShowCodeModal] = useState(false);
+
+  // Close dropdown menus when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(event.target as Node)) {
+        setShowExportMenu(false);
+      }
+      if (historyMenuRef.current && !historyMenuRef.current.contains(event.target as Node)) {
+        setShowHistoryMenu(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  // Handle asset bank selection toggle
+  const handleToggleAsset = (asset: Asset) => {
+    const isSelected = selectedAssets.some(a => a.id === asset.id);
+    if (isSelected) {
+      setSelectedAssets(prev => prev.filter(a => a.id !== asset.id));
+    } else {
+      setSelectedAssets(prev => [...prev, asset]);
+    }
+  };
   const allInputRef = useRef<HTMLInputElement>(null);
 
   const [feedbackInput, setFeedbackInput] = useState("");
@@ -339,7 +373,7 @@ export function TemplateEditorModal({
   };
 
   const handleSendFeedback = async () => {
-    if (!feedbackInput.trim() || !selectedPdf) return;
+    if (!feedbackInput.trim()) return;
 
     const feedbackText = feedbackInput.trim();
     setFeedbackInput("");
@@ -362,7 +396,9 @@ export function TemplateEditorModal({
 
       // Send feedback with current state to continue generation
       const formData = new FormData();
-      formData.append("pdf", selectedPdf);
+      if (selectedPdf) {
+        formData.append("pdf", selectedPdf);
+      }
       formData.append("reasoning", "none");
       formData.append("feedback", feedbackText);
       formData.append("currentCode", code);
@@ -492,7 +528,29 @@ export function TemplateEditorModal({
     setGenerationStartTime(Date.now());
     setElapsedTime(0);
     setGenerationStatus("Starting generation...");
-    setGenerationTraces([]);
+    // Show user's initial message in traces (prompt + attachments)
+    const initialTraces: GeneratorTrace[] = [];
+    const attachmentNames: string[] = [];
+    if (selectedPdf) attachmentNames.push(selectedPdf.name);
+    selectedImages.forEach(img => attachmentNames.push(img.name));
+    selectedAssets.forEach(asset => {
+      if (isFileAsset(asset)) {
+        attachmentNames.push(asset.filename);
+      } else if (isColorAsset(asset)) {
+        attachmentNames.push(`Color: ${asset.name}`);
+      } else if (isFontAsset(asset)) {
+        attachmentNames.push(`Font: ${asset.name}`);
+      }
+    });
+
+    const promptText = userPrompt.trim();
+    const attachmentText = attachmentNames.length > 0 ? `[${attachmentNames.join(", ")}]` : "";
+    const fullMessage = promptText
+      ? (attachmentText ? `${promptText} ${attachmentText}` : promptText)
+      : (attachmentText || "Generate template");
+
+    initialTraces.push({ type: "user_feedback", content: fullMessage });
+    setGenerationTraces(initialTraces);
     setVersions([]);
     setSelectedVersion(0);
 
@@ -516,7 +574,7 @@ export function TemplateEditorModal({
 
       // Add asset bank images - fetch them and add as files
       for (const asset of selectedAssets) {
-        if (asset.type === "image") {
+        if (isFileAsset(asset) && asset.type === "image") {
           try {
             const response = await fetch(`/api/assets/${asset.id}`);
             if (response.ok) {
@@ -527,6 +585,16 @@ export function TemplateEditorModal({
             console.error(`Failed to fetch asset ${asset.id}:`, e);
           }
         }
+      }
+
+      // Add brand kit colors and fonts
+      const brandColors = selectedAssets.filter(isColorAsset);
+      const brandFonts = selectedAssets.filter(isFontAsset);
+      if (brandColors.length > 0) {
+        formData.append("brandColors", JSON.stringify(brandColors));
+      }
+      if (brandFonts.length > 0) {
+        formData.append("brandFonts", JSON.stringify(brandFonts));
       }
 
       formData.append("reasoning", "none"); // Enable reasoning for better quality
@@ -816,16 +884,22 @@ export function TemplateEditorModal({
                   type="text"
                   value={userPrompt}
                   onChange={(e) => setUserPrompt(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey && canGenerate && !isGenerating) {
+                      e.preventDefault();
+                      handleGenerate();
+                    }
+                  }}
                   placeholder="Describe the template..."
                   className="flex-1 px-3 py-2 bg-[#f5f5f7] rounded-lg text-[14px] text-[#1d1d1f] placeholder-[#86868b] border-0 focus:outline-none focus:ring-2 focus:ring-[#1d1d1f] focus:ring-offset-1"
                 />
                 <button
                   type="button"
                   onClick={() => allInputRef.current?.click()}
-                  className="h-8 px-2.5 flex items-center gap-1.5 rounded-lg text-[12px] font-medium text-[#86868b] hover:bg-white hover:text-[#1d1d1f] transition-all"
+                  className="h-8 px-3 flex items-center gap-1.5 rounded-lg text-[13px] font-medium bg-[#f5f5f7] text-[#1d1d1f] hover:bg-[#e8e8ed] transition-all"
                   title="Attach files"
                 >
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M18.375 12.739l-7.693 7.693a4.5 4.5 0 01-6.364-6.364l10.94-10.94A3 3 0 1119.5 7.372L8.552 18.32m.009-.01l-.01.01m5.699-9.941l-7.81 7.81a1.5 1.5 0 002.112 2.13" />
                   </svg>
                   Attach
@@ -833,23 +907,24 @@ export function TemplateEditorModal({
                 <button
                   type="button"
                   onClick={() => setShowAssetModal(true)}
-                  className="h-8 px-2.5 flex items-center gap-1.5 rounded-lg text-[12px] font-medium text-[#86868b] hover:bg-white hover:text-[#1d1d1f] transition-all"
-                  title="Select from Asset Bank"
+                  className="h-8 px-3 flex items-center gap-1.5 rounded-lg text-[13px] font-medium bg-[#f5f5f7] text-[#1d1d1f] hover:bg-[#e8e8ed] transition-all"
+                  title="Open Brand Bank"
                 >
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
                   </svg>
-                  Asset Bank
+                  Brand Bank
                 </button>
                 <button
                   type="button"
                   onClick={handleGenerate}
                   disabled={!canGenerate || isGenerating}
-                  className="w-8 h-8 flex items-center justify-center rounded-lg bg-[#1d1d1f] text-white hover:bg-[#424245] active:scale-[0.95] disabled:opacity-50 disabled:cursor-not-allowed transition-all"
-                  title="Send"
+                  className="h-8 px-3 flex items-center justify-center gap-1.5 rounded-lg bg-[#1d1d1f] text-white hover:bg-[#424245] active:scale-[0.95] disabled:opacity-50 disabled:cursor-not-allowed transition-all text-[13px] font-medium"
+                  title="Generate template"
                 >
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 12h14M12 5l7 7-7 7" />
+                  Go
+                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3" />
                   </svg>
                 </button>
               </div>
@@ -880,7 +955,24 @@ export function TemplateEditorModal({
                     {/* Asset bank */}
                     {selectedAssets.map((asset) => (
                       <div key={`asset-${asset.id}`} className="relative group">
-                        {asset.type === "image" ? (
+                        {isColorAsset(asset) ? (
+                          /* Color swatch */
+                          <div className="w-24 h-24 rounded-lg border border-[#d2d2d7] flex flex-col items-center justify-center p-2">
+                            <div
+                              className="w-12 h-12 rounded-lg shadow-inner mb-1"
+                              style={{ backgroundColor: asset.value }}
+                            />
+                            <span className="text-[10px] text-[#1d1d1f] truncate max-w-[80px] font-medium">{asset.name}</span>
+                            <span className="text-[9px] text-[#86868b] uppercase">{asset.value}</span>
+                          </div>
+                        ) : isFontAsset(asset) ? (
+                          /* Font preview */
+                          <div className="w-24 h-24 rounded-lg bg-[#f5f5f7] border border-[#d2d2d7] flex flex-col items-center justify-center">
+                            <span className="text-2xl font-semibold text-[#1d1d1f] mb-1">Aa</span>
+                            <span className="text-[10px] text-[#1d1d1f] truncate max-w-[80px] font-medium">{asset.name}</span>
+                            <span className="text-[9px] text-[#86868b] truncate max-w-[80px]">{asset.family}</span>
+                          </div>
+                        ) : isFileAsset(asset) && asset.type === "image" ? (
                           <img
                             src={`/api/assets/${asset.id}`}
                             alt={asset.filename}
@@ -891,7 +983,7 @@ export function TemplateEditorModal({
                             <svg className="w-8 h-8 text-[#86868b] mb-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                             </svg>
-                            <span className="text-[10px] text-[#86868b] truncate max-w-[80px]">{asset.filename}</span>
+                            <span className="text-[10px] text-[#86868b] truncate max-w-[80px]">{isFileAsset(asset) ? asset.filename : "Asset"}</span>
                           </div>
                         )}
                         <button
@@ -914,200 +1006,17 @@ export function TemplateEditorModal({
         );
       }
 
-      // Step 2 & 3: Generation in progress or complete - unified two-pane layout
-      // Left: Tabs (Source | V1 PDF | V1 Fields | V2 PDF | V2 Fields | ...)
-      // Right: Always shows logs/reasoning
-      // selectedVersion: 0 = source, integer = PDF view, X.5 = Fields view
+      // Step 2 & 3: Generation in progress or complete - JobEditor-style two-pane layout
+      // Left: Chat panel with traces
+      // Right: Preview/Assets/Data tabs with Export/History buttons
+
+      const latestVersion = versions.length > 0 ? versions[versions.length - 1] : null;
 
       return (
         <div className="h-[600px] flex flex-col">
           <div className="flex-1 flex min-h-0">
-            {/* Left: Source PDF + Version tabs (PDF/Fields for each) */}
+            {/* Left: Chat panel with traces */}
             <div className="w-1/2 border-r border-[#d2d2d7] flex flex-col">
-              {/* Tabs - compact with borders */}
-              <div className="flex items-center gap-1.5 border-b border-[#e8e8ed] px-3 py-2">
-                {/* Input tab (formerly Source) */}
-                <button
-                  onClick={() => setSelectedVersion(0)}
-                  className={`px-3 py-1.5 text-[11px] font-medium rounded-md transition-colors whitespace-nowrap border ${
-                    selectedVersion === 0
-                      ? "bg-[#1d1d1f] text-white border-[#1d1d1f]"
-                      : "text-[#1d1d1f] border-[#d2d2d7] hover:bg-[#f5f5f7]"
-                  }`}
-                >
-                  Input
-                </button>
-
-                {/* History dropdown - show if more than 1 version */}
-                {versions.length > 1 && (() => {
-                  const latestVer = Math.max(...versions.map(v => v.version));
-                  // Check if an older version is selected (not latest, not source)
-                  const isOlderVersionSelected = selectedVersion !== 0 &&
-                    (Number.isInteger(selectedVersion)
-                      ? selectedVersion < latestVer
-                      : Math.floor(selectedVersion) < latestVer);
-                  return (
-                    <div className="relative group">
-                      <button
-                        className={`px-3 py-1.5 text-[11px] font-medium rounded-md transition-colors whitespace-nowrap flex items-center gap-1 border ${
-                          isOlderVersionSelected
-                            ? "bg-[#1d1d1f] text-white border-[#1d1d1f]"
-                            : "text-[#1d1d1f] border-[#d2d2d7] hover:bg-[#f5f5f7]"
-                        }`}
-                      >
-                        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                        </svg>
-                        History
-                      </button>
-                      {/* Dropdown */}
-                      <div className="absolute left-0 top-full mt-1 bg-white rounded-lg shadow-lg border border-[#d2d2d7] py-1 min-w-[120px] opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-10">
-                        {versions.slice(0, -1).reverse().map((v) => (
-                          <div key={v.version} className="px-1">
-                            <button
-                              onClick={() => setSelectedVersion(v.version)}
-                              className={`w-full text-left px-2 py-1 text-[11px] rounded transition-colors ${
-                                selectedVersion === v.version
-                                  ? "bg-[#e8e8ed] text-[#1d1d1f]"
-                                  : "text-[#6e6e73] hover:bg-[#f5f5f7]"
-                              }`}
-                            >
-                              V{v.version} PDF
-                            </button>
-                            <button
-                              onClick={() => setSelectedVersion(v.version + 0.5)}
-                              className={`w-full text-left px-2 py-1 text-[11px] rounded transition-colors ${
-                                selectedVersion === v.version + 0.5
-                                  ? "bg-[#e8e8ed] text-[#1d1d1f]"
-                                  : "text-[#6e6e73] hover:bg-[#f5f5f7]"
-                              }`}
-                            >
-                              V{v.version} Fields
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  );
-                })()}
-
-                {/* Current/Latest version tabs - only show if there are versions */}
-                {versions.length > 0 && (() => {
-                  const latestVersion = versions[versions.length - 1];
-                  return (
-                    <div className="flex items-center">
-                      <button
-                        onClick={() => setSelectedVersion(latestVersion.version)}
-                        className={`px-3 py-1.5 text-[11px] font-medium rounded-l-md transition-colors whitespace-nowrap border border-r-0 ${
-                          selectedVersion === latestVersion.version
-                            ? "bg-[#1d1d1f] text-white border-[#1d1d1f]"
-                            : "text-[#1d1d1f] border-[#d2d2d7] hover:bg-[#f5f5f7]"
-                        }`}
-                      >
-                        V{latestVersion.version} PDF
-                      </button>
-                      <button
-                        onClick={() => setSelectedVersion(latestVersion.version + 0.5)}
-                        className={`px-3 py-1.5 text-[11px] font-medium rounded-r-md transition-colors whitespace-nowrap border ${
-                          selectedVersion === latestVersion.version + 0.5
-                            ? "bg-[#1d1d1f] text-white border-[#1d1d1f]"
-                            : "text-[#1d1d1f] border-[#d2d2d7] hover:bg-[#f5f5f7]"
-                        }`}
-                      >
-                        V{latestVersion.version} Fields
-                      </button>
-                    </div>
-                  );
-                })()}
-              </div>
-
-              {/* Content */}
-              <div className="flex-1 p-4 min-h-0 overflow-y-auto">
-                {selectedVersion === 0 ? (
-                  /* Source PDF */
-                  <div className="h-full rounded-xl overflow-hidden border border-[#d2d2d7]">
-                    <iframe
-                      src={pdfPreviewUrl!}
-                      className="w-full h-full"
-                      title="Source PDF"
-                    />
-                  </div>
-                ) : Number.isInteger(selectedVersion) ? (
-                  /* Version PDF preview */
-                  <div className="h-full rounded-xl overflow-hidden border border-[#d2d2d7] bg-white">
-                    {versions.find((v) => v.version === selectedVersion)?.pdfBase64 ? (
-                      <iframe
-                        src={versions.find((v) => v.version === selectedVersion)!.pdfBase64}
-                        className="w-full h-full"
-                        title={`Version ${selectedVersion} PDF`}
-                      />
-                    ) : versions.find((v) => v.version === selectedVersion)?.previewBase64 ? (
-                      <img
-                        src={versions.find((v) => v.version === selectedVersion)!.previewBase64}
-                        alt={`Version ${selectedVersion} preview`}
-                        className="w-full h-full object-contain"
-                      />
-                    ) : (
-                      <div className="h-full flex items-center justify-center text-[#86868b] text-[13px]">
-                        No preview available
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  /* Version Fields view (selectedVersion is X.5) */
-                  <div className="space-y-4">
-                    {/* Assets section */}
-                    {parsedTemplate?.assetSlots && parsedTemplate.assetSlots.length > 0 && (
-                      <div>
-                        <h3 className="text-[13px] font-semibold text-[#1d1d1f] mb-2">
-                          Assets
-                        </h3>
-                        <div className="space-y-2">
-                          {parsedTemplate.assetSlots.map((slot) => (
-                            <div key={slot.name} className="p-3 border border-[#e8e8ed] rounded-lg">
-                              <p className="text-[12px] font-medium text-[#1d1d1f]">{slot.name}</p>
-                              <p className="text-[11px] text-[#6e6e73] mt-1">{slot.description}</p>
-                              <span className="inline-block mt-1.5 px-2 py-0.5 text-[10px] font-medium text-[#6e6e73] bg-[#f5f5f7] rounded">
-                                {slot.kind}
-                              </span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Fields section */}
-                    {parsedTemplate?.fields && parsedTemplate.fields.length > 0 && (
-                      <div>
-                        <h3 className="text-[13px] font-semibold text-[#1d1d1f] mb-2">
-                          Fields
-                        </h3>
-                        <div className="space-y-2">
-                          {parsedTemplate.fields.map((field) => (
-                            <div key={field.name} className="p-3 border border-[#e8e8ed] rounded-lg">
-                              <p className="text-[12px] font-medium text-[#1d1d1f]">{field.name}</p>
-                              <p className="text-[11px] text-[#6e6e73] mt-1">{field.description}</p>
-                              {field.example !== undefined && (
-                                <p className="text-[10px] text-[#86868b] mt-1 italic">e.g. {typeof field.example === 'object' ? JSON.stringify(field.example) : String(field.example)}</p>
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Empty state */}
-                    {(!parsedTemplate?.fields || parsedTemplate.fields.length === 0) &&
-                     (!parsedTemplate?.assetSlots || parsedTemplate.assetSlots.length === 0) && (
-                      <p className="text-[12px] text-[#86868b] text-center py-8">No fields or assets extracted</p>
-                    )}
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Right: Always shows logs/reasoning */}
-            <div className="w-1/2 flex flex-col">
               <div className="flex-1 flex flex-col p-4 min-h-0">
                 {!isGenerating && !generationStatus && !generationComplete ? (
                   /* Ready state */
@@ -1234,7 +1143,7 @@ export function TemplateEditorModal({
                           handleSendFeedback();
                         }
                       }}
-                      placeholder={isGenerating ? "Send feedback to interrupt and refine..." : "Add feedback to guide generation..."}
+                      placeholder="Add feedback..."
                       className="flex-1 px-3 py-2 text-[12px] bg-[#f5f5f7] border-0 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#424245] resize-none min-h-[36px] max-h-[120px]"
                       rows={1}
                       style={{ height: 'auto', overflow: 'hidden' }}
@@ -1247,13 +1156,297 @@ export function TemplateEditorModal({
                     <button
                       onClick={handleSendFeedback}
                       disabled={!feedbackInput.trim()}
-                      className="px-3 py-2 text-[11px] font-medium text-white bg-[#1d1d1f] rounded-lg hover:bg-[#424245] disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex-shrink-0"
+                      className="h-8 px-3 flex items-center justify-center gap-1.5 rounded-lg bg-[#1d1d1f] text-white hover:bg-[#424245] active:scale-[0.95] disabled:opacity-40 disabled:cursor-not-allowed transition-all text-[13px] font-medium flex-shrink-0"
                     >
-                      {isGenerating ? "Interrupt & Send" : "Send"}
+                      Go
+                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3" />
+                      </svg>
                     </button>
                   </div>
                 </div>
               )}
+            </div>
+
+            {/* Right: Preview/Assets/Data tabs - matching JobEditor */}
+            <div className="w-1/2 flex flex-col">
+              {/* Tabs - centered with icons, black active state */}
+              <div className="flex-shrink-0 px-4 pt-3 pb-2 flex items-center justify-center border-b border-[#e8e8ed]">
+                <div className="flex gap-1 p-1 bg-[#f5f5f7] rounded-lg">
+                  <button
+                    onClick={() => setRightPanelTab("preview")}
+                    className={`px-3 py-1.5 text-[13px] font-medium rounded-md transition-colors flex items-center gap-1.5 ${
+                      rightPanelTab === "preview"
+                        ? "bg-[#1d1d1f] text-white shadow-sm"
+                        : "text-[#86868b] hover:text-[#1d1d1f] hover:bg-white/50"
+                    }`}
+                  >
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                    </svg>
+                    Preview
+                  </button>
+                  <button
+                    onClick={() => setRightPanelTab("assets")}
+                    className={`px-3 py-1.5 text-[13px] font-medium rounded-md transition-colors flex items-center gap-1.5 ${
+                      rightPanelTab === "assets"
+                        ? "bg-[#1d1d1f] text-white shadow-sm"
+                        : "text-[#86868b] hover:text-[#1d1d1f] hover:bg-white/50"
+                    }`}
+                  >
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 001.5-1.5V6a1.5 1.5 0 00-1.5-1.5H3.75A1.5 1.5 0 002.25 6v12a1.5 1.5 0 001.5 1.5zm10.5-11.25h.008v.008h-.008V8.25zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z" />
+                    </svg>
+                    Assets
+                  </button>
+                  <button
+                    onClick={() => setRightPanelTab("data")}
+                    className={`px-3 py-1.5 text-[13px] font-medium rounded-md transition-colors flex items-center gap-1.5 ${
+                      rightPanelTab === "data"
+                        ? "bg-[#1d1d1f] text-white shadow-sm"
+                        : "text-[#86868b] hover:text-[#1d1d1f] hover:bg-white/50"
+                    }`}
+                  >
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M3.375 19.5h17.25m-17.25 0a1.125 1.125 0 01-1.125-1.125M3.375 19.5h7.5c.621 0 1.125-.504 1.125-1.125m-9.75 0V5.625m0 12.75v-1.5c0-.621.504-1.125 1.125-1.125m18.375 2.625V5.625m0 12.75c0 .621-.504 1.125-1.125 1.125m1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125m0 3.75h-7.5A1.125 1.125 0 0112 18.375m9.75-12.75c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125m19.5 0v1.5c0 .621-.504 1.125-1.125 1.125M2.25 5.625v1.5c0 .621.504 1.125 1.125 1.125m0 0h17.25m-17.25 0h7.5c.621 0 1.125.504 1.125 1.125M3.375 8.25c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125m17.25-3.75h-7.5c-.621 0-1.125.504-1.125 1.125m8.625-1.125c.621 0 1.125.504 1.125 1.125v1.5c0 .621-.504 1.125-1.125 1.125m-17.25 0h7.5m-7.5 0c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125M12 10.875v-1.5m0 1.5c0 .621-.504 1.125-1.125 1.125M12 10.875c0 .621.504 1.125 1.125 1.125m-2.25 0c.621 0 1.125.504 1.125 1.125M13.125 12h7.5m-7.5 0c-.621 0-1.125.504-1.125 1.125M20.625 12c.621 0 1.125.504 1.125 1.125v1.5c0 .621-.504 1.125-1.125 1.125m-17.25 0h7.5M12 14.625v-1.5m0 1.5c0 .621-.504 1.125-1.125 1.125M12 14.625c0 .621.504 1.125 1.125 1.125m-2.25 0c.621 0 1.125.504 1.125 1.125m0 1.5v-1.5m0 0c0-.621.504-1.125 1.125-1.125m0 0h7.5" />
+                    </svg>
+                    Data
+                  </button>
+                </div>
+              </div>
+
+              {/* Tab content */}
+              <div className="flex-1 min-h-0 overflow-hidden">
+                {/* Preview tab */}
+                {rightPanelTab === "preview" && (
+                  <div className="h-full p-4 relative">
+                    {latestVersion ? (
+                      <>
+                        {/* PDF/PNG Preview */}
+                        <div className="h-full rounded-xl overflow-hidden border border-[#d2d2d7] bg-white">
+                          {latestVersion.pdfBase64 ? (
+                            <iframe
+                              src={`${latestVersion.pdfBase64}#toolbar=0&navpanes=0`}
+                              className="w-full h-full"
+                              title={`Version ${latestVersion.version} PDF`}
+                            />
+                          ) : latestVersion.previewBase64 ? (
+                            <img
+                              src={latestVersion.previewBase64}
+                              alt={`Version ${latestVersion.version} preview`}
+                              className="w-full h-full object-contain"
+                            />
+                          ) : (
+                            <div className="h-full flex items-center justify-center text-[#86868b] text-[13px]">
+                              No preview available
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Action buttons */}
+                        <div className="absolute top-6 right-6 flex gap-2">
+                          {/* Export dropdown */}
+                          <div className="relative" ref={exportMenuRef}>
+                            <button
+                              onClick={() => setShowExportMenu(!showExportMenu)}
+                              className="h-8 px-2.5 flex items-center justify-center gap-1.5 rounded-lg bg-white/90 hover:bg-white shadow-sm transition-colors text-[12px] font-medium text-[#1d1d1f]"
+                              title="Export"
+                            >
+                              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                              </svg>
+                              Export
+                            </button>
+
+                            {showExportMenu && (
+                              <div className="absolute right-0 top-full mt-1 w-36 bg-white rounded-lg shadow-lg border border-[#e8e8ed] py-1 z-50">
+                                {latestVersion.pdfBase64 && (
+                                  <a
+                                    href={latestVersion.pdfBase64}
+                                    download="template.pdf"
+                                    onClick={() => setShowExportMenu(false)}
+                                    className="block w-full px-3 py-2 text-left text-[12px] text-[#1d1d1f] hover:bg-[#f5f5f7] transition-colors"
+                                  >
+                                    PDF
+                                  </a>
+                                )}
+                                {latestVersion.templateCode && (
+                                  <>
+                                    <button
+                                      onClick={() => {
+                                        setShowExportMenu(false);
+                                        // Download SVG
+                                        const blob = new Blob([latestVersion.templateCode!], { type: 'image/svg+xml' });
+                                        const url = URL.createObjectURL(blob);
+                                        const a = document.createElement('a');
+                                        a.href = url;
+                                        a.download = 'template.svg';
+                                        a.click();
+                                        URL.revokeObjectURL(url);
+                                      }}
+                                      className="block w-full px-3 py-2 text-left text-[12px] text-[#1d1d1f] hover:bg-[#f5f5f7] transition-colors"
+                                    >
+                                      SVG
+                                    </button>
+                                    <button
+                                      onClick={() => {
+                                        setShowExportMenu(false);
+                                        setCode(latestVersion.templateCode!);
+                                        setShowCodeModal(true);
+                                      }}
+                                      className="block w-full px-3 py-2 text-left text-[12px] text-[#1d1d1f] hover:bg-[#f5f5f7] transition-colors"
+                                    >
+                                      Code
+                                    </button>
+                                  </>
+                                )}
+                              </div>
+                            )}
+                          </div>
+
+                          {/* History dropdown */}
+                          {versions.length >= 1 && (
+                            <div className="relative" ref={historyMenuRef}>
+                              <button
+                                onClick={() => setShowHistoryMenu(!showHistoryMenu)}
+                                className={`h-8 px-2.5 flex items-center justify-center gap-1.5 rounded-lg shadow-sm transition-colors text-[12px] font-medium ${
+                                  showHistoryMenu
+                                    ? "bg-white text-[#1d1d1f]"
+                                    : "bg-white/90 hover:bg-white text-[#1d1d1f]"
+                                }`}
+                                title="History"
+                              >
+                                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                </svg>
+                                History
+                              </button>
+
+                              {showHistoryMenu && (
+                                <div className="absolute right-0 top-full mt-1 w-48 bg-white rounded-lg shadow-lg border border-[#e8e8ed] py-1 z-50 max-h-60 overflow-y-auto">
+                                  {/* Input/Source */}
+                                  <button
+                                    onClick={() => {
+                                      setSelectedVersion(0);
+                                      setShowHistoryMenu(false);
+                                    }}
+                                    className={`w-full px-3 py-2 text-left text-[12px] hover:bg-[#f5f5f7] transition-colors flex items-center justify-between ${
+                                      selectedVersion === 0 ? "bg-[#f5f5f7]" : ""
+                                    }`}
+                                  >
+                                    <span>Input PDF</span>
+                                    {selectedVersion === 0 && <span className="text-[10px] text-[#86868b]">Viewing</span>}
+                                  </button>
+                                  {/* Versions - newest first */}
+                                  {[...versions].reverse().map((v, idx) => (
+                                    <button
+                                      key={v.version}
+                                      onClick={() => {
+                                        setSelectedVersion(v.version);
+                                        setShowHistoryMenu(false);
+                                      }}
+                                      className={`w-full px-3 py-2 text-left text-[12px] hover:bg-[#f5f5f7] transition-colors flex items-center justify-between ${
+                                        selectedVersion === v.version ? "bg-[#f5f5f7]" : ""
+                                      }`}
+                                    >
+                                      <span>Version {v.version}</span>
+                                      {idx === 0 && <span className="text-[10px] text-[#86868b]">Latest</span>}
+                                    </button>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </>
+                    ) : pdfPreviewUrl ? (
+                      /* Show source PDF when no versions yet */
+                      <div className="h-full rounded-xl overflow-hidden border border-[#d2d2d7]">
+                        <iframe
+                          src={`${pdfPreviewUrl}#toolbar=0&navpanes=0`}
+                          className="w-full h-full"
+                          title="Source PDF"
+                        />
+                      </div>
+                    ) : (
+                      <div className="h-full flex flex-col items-center justify-center text-center">
+                        <svg className="w-12 h-12 text-[#d2d2d7] mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                        </svg>
+                        <p className="text-[13px] text-[#86868b]">Preview will appear here</p>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Assets tab */}
+                {rightPanelTab === "assets" && (
+                  <div className="h-full overflow-y-auto p-4">
+                    {parsedTemplate?.assetSlots && parsedTemplate.assetSlots.length > 0 ? (
+                      <div className="space-y-3">
+                        {parsedTemplate.assetSlots.map((slot) => (
+                          <div key={slot.name} className="p-4 border border-[#e8e8ed] rounded-xl bg-white">
+                            <div className="flex items-start justify-between">
+                              <div>
+                                <p className="text-[13px] font-medium text-[#1d1d1f]">{slot.name}</p>
+                                <p className="text-[12px] text-[#6e6e73] mt-1">{slot.description}</p>
+                              </div>
+                              <span className="px-2 py-0.5 text-[10px] font-medium text-[#6e6e73] bg-[#f5f5f7] rounded">
+                                {slot.kind}
+                              </span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="h-full flex flex-col items-center justify-center text-center">
+                        <svg className="w-12 h-12 text-[#d2d2d7] mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                        </svg>
+                        <p className="text-[13px] text-[#86868b]">No asset slots defined</p>
+                        <p className="text-[11px] text-[#aeaeb2] mt-1">Assets will appear here after generation</p>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Data tab */}
+                {rightPanelTab === "data" && (
+                  <div className="h-full overflow-y-auto p-4">
+                    {parsedTemplate?.fields && parsedTemplate.fields.length > 0 ? (
+                      <div className="space-y-3">
+                        {parsedTemplate.fields.map((field) => (
+                          <div key={field.name} className="p-4 border border-[#e8e8ed] rounded-xl bg-white">
+                            <div className="flex items-start justify-between">
+                              <div className="flex-1">
+                                <p className="text-[13px] font-medium text-[#1d1d1f]">{field.name}</p>
+                                <p className="text-[12px] text-[#6e6e73] mt-1">{field.description}</p>
+                                {field.example !== undefined && (
+                                  <p className="text-[11px] text-[#86868b] mt-2 italic">
+                                    Example: {typeof field.example === 'object' ? JSON.stringify(field.example) : String(field.example)}
+                                  </p>
+                                )}
+                              </div>
+                              <span className="px-2 py-0.5 text-[10px] font-medium text-[#6e6e73] bg-[#f5f5f7] rounded ml-2">
+                                {field.type}
+                              </span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="h-full flex flex-col items-center justify-center text-center">
+                        <svg className="w-12 h-12 text-[#d2d2d7] mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4" />
+                        </svg>
+                        <p className="text-[13px] text-[#86868b]">No fields defined</p>
+                        <p className="text-[11px] text-[#aeaeb2] mt-1">Fields will appear here after generation</p>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </div>
@@ -1537,6 +1730,14 @@ export function TemplateEditorModal({
           )}
         </div>
       </div>
+
+      {/* Asset Bank Modal */}
+      <AssetBankModal
+        isOpen={showAssetModal}
+        onClose={() => setShowAssetModal(false)}
+        selectedAssets={selectedAssets}
+        onToggleAsset={handleToggleAsset}
+      />
     </div>
   );
 }

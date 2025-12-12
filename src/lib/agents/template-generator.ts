@@ -255,6 +255,20 @@ Always follow user instructions even if they deviate from the original.`;
 /**
  * Run the SVG template generator agent
  */
+// Brand kit types for colors and fonts
+interface BrandColor {
+  name: string;
+  value: string;
+  usage?: string;
+}
+
+interface BrandFont {
+  name: string;
+  family: string;
+  weights: string[];
+  usage?: string;
+}
+
 export async function runTemplateGeneratorAgent(
   pdfPageImages: string | string[],
   pdfFilename: string,
@@ -268,7 +282,10 @@ export async function runTemplateGeneratorAgent(
   feedback?: string,
   startVersion: number = 0,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  existingConversationHistory?: any[]
+  existingConversationHistory?: any[],
+  // Brand kit
+  brandColors?: BrandColor[],
+  brandFonts?: BrandFont[]
 ): Promise<TemplateGeneratorResult> {
   const pageImages = Array.isArray(pdfPageImages) ? pdfPageImages : [pdfPageImages];
   const isContinuation = !!(existingSvg && feedback);
@@ -291,6 +308,84 @@ export async function runTemplateGeneratorAgent(
   let isComplete = false;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let conversationHistory: any[] = existingConversationHistory || [];
+  let lastRenderPngBase64: string | null = null;
+
+  // Helper to render current SVG and emit version event
+  // containerId will be set before this is called
+  let containerIdForRender: string | null = null;
+
+  const renderCurrentVersion = async (): Promise<string | null> => {
+    if (!currentSvg) return null;
+    currentVersion++;
+    log.info(`\n--- RENDERING VERSION ${currentVersion} (on patch) ---`);
+    onEvent?.({ type: "status", content: `Rendering version ${currentVersion}...` });
+
+    try {
+      // Generate placeholder values for preview
+      const fieldsForRender: Record<string, unknown> = {};
+      if (currentJson) {
+        for (const field of currentJson.fields) {
+          if (field.type === "array") {
+            fieldsForRender[field.name] = [`{{${field.name}[0]}}`, `{{${field.name}[1]}}`];
+          } else {
+            fieldsForRender[field.name] = `{{${field.name}}}`;
+          }
+        }
+      }
+
+      // Render SVG with placeholders shown
+      const renderedSvg = renderSVGTemplate(currentSvg, fieldsForRender, {});
+
+      // Convert to PNG for preview
+      const pngBuffer = await svgToPng(renderedSvg);
+      const pngBase64 = `data:image/png;base64,${pngBuffer.toString("base64")}`;
+
+      // Try to convert to PDF
+      let pdfBase64: string | undefined;
+      try {
+        const pdfBuffer = await svgToPdf(renderedSvg);
+        pdfBase64 = `data:application/pdf;base64,${pdfBuffer.toString("base64")}`;
+      } catch (pdfErr) {
+        log.error("PDF conversion failed (continuing)", pdfErr);
+      }
+
+      log.info(`VERSION ${currentVersion} RENDER SUCCESS - PNG size: ${pngBase64.length} chars`);
+      versions.push({ version: currentVersion, previewBase64: pngBase64, pdfBase64 });
+      lastRenderPngBase64 = pngBase64;
+
+      // Emit version event immediately
+      onEvent?.({
+        type: "version",
+        content: `Version ${currentVersion} rendered`,
+        version: currentVersion,
+        previewUrl: pngBase64,
+        pdfUrl: pdfBase64,
+        templateCode: currentSvg,
+      });
+
+      // Upload PNG to container for model comparison (if container exists)
+      if (containerIdForRender) {
+        try {
+          const pngData = pngBase64.split(",")[1];
+          const versionPngPath = path.join(os.tmpdir(), `current_v${currentVersion}.png`);
+          fsSync.writeFileSync(versionPngPath, Buffer.from(pngData, "base64"));
+          const versionPngStream = fsSync.createReadStream(versionPngPath);
+          await openai.containers.files.create(containerIdForRender, { file: versionPngStream });
+          log.info(`V${currentVersion} PNG uploaded to container`);
+          fsSync.unlinkSync(versionPngPath);
+        } catch (e) {
+          log.error(`Failed to upload V${currentVersion} PNG to container`, e);
+        }
+      }
+
+      return pngBase64;
+    } catch (renderError) {
+      log.error(`VERSION ${currentVersion} RENDER FAILED`, renderError);
+      onEvent?.({ type: "status", content: `Render failed: ${renderError}` });
+      currentVersion--; // Rollback version number on failure
+      return null;
+    }
+  };
 
   // Container for code_interpreter
   let containerId: string | null = null;
@@ -311,6 +406,7 @@ export async function runTemplateGeneratorAgent(
       name: `svg-template-gen-${Date.now()}`,
     });
     containerId = container.id;
+    containerIdForRender = container.id; // Make container available to render helper
     log.info("Container created", containerId);
 
     // Upload PDF for analysis (if provided)
@@ -421,8 +517,12 @@ export async function runTemplateGeneratorAgent(
           currentSvg = newContent;
           log.info(`apply_patch:update - Updated SVG (${newContent.length} chars)`);
           await uploadSvgToContainer(newContent);
-          onEvent?.({ type: "tool_result", content: "SVG patched successfully", toolName: "apply_patch" });
-          return { status: "completed", output: `Updated ${SVG_TEMPLATE_PATH}. Will render after all tool calls complete.` };
+
+          // Render immediately after patch
+          await renderCurrentVersion();
+
+          onEvent?.({ type: "tool_result", content: "SVG patched and rendered", toolName: "apply_patch" });
+          return { status: "completed", output: `Updated ${SVG_TEMPLATE_PATH} and rendered V${currentVersion}.` };
         } catch (error) {
           log.error(`apply_patch:update failed`, error);
           return { status: "failed", output: String(error) };
@@ -445,7 +545,11 @@ export async function runTemplateGeneratorAgent(
         currentSvg = svg;
         log.info(`write_svg: ${svg.length} chars`);
         await uploadSvgToContainer(svg);
-        return "SVG template written to /mnt/user/template.svg. Will render after all tool calls complete.";
+
+        // Render immediately after write
+        await renderCurrentVersion();
+
+        return `SVG template written to /mnt/user/template.svg and rendered as V${currentVersion}.`;
       },
     });
 
@@ -543,10 +647,44 @@ export async function runTemplateGeneratorAgent(
     // Create shell executor for the shell tool
     const localShell = new LocalShell();
 
+    // Build system prompt with optional brand guidelines
+    let systemPrompt = SYSTEM_PROMPT;
+
+    if ((brandColors && brandColors.length > 0) || (brandFonts && brandFonts.length > 0)) {
+      let brandSection = "\n\n## BRAND GUIDELINES\nUSE THESE BRAND ASSETS when designing the template:\n";
+
+      if (brandColors && brandColors.length > 0) {
+        brandSection += "\n### Brand Colors\n";
+        for (const color of brandColors) {
+          brandSection += `- ${color.name}: ${color.value}${color.usage ? ` (${color.usage})` : ""}\n`;
+        }
+        brandSection += "\nUse these exact color codes in your SVG styles. Match usage types when applicable.\n";
+      }
+
+      if (brandFonts && brandFonts.length > 0) {
+        brandSection += "\n### Brand Fonts (Google Fonts)\n";
+        for (const font of brandFonts) {
+          brandSection += `- ${font.name}: "${font.family}" weights: ${font.weights.join(", ")}${font.usage ? ` (${font.usage})` : ""}\n`;
+        }
+        brandSection += `
+To use Google Fonts in SVG, add the @import in <defs><style>:
+<defs>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=FAMILY_NAME:wght@WEIGHTS&amp;display=swap');
+    .text { font-family: 'FAMILY_NAME', sans-serif; }
+  </style>
+</defs>
+`;
+      }
+
+      systemPrompt += brandSection;
+      log.info(`Added brand guidelines: ${brandColors?.length || 0} colors, ${brandFonts?.length || 0} fonts`);
+    }
+
     // Create agent
     const agent = new Agent({
       name: "SVGTemplateGenerator",
-      instructions: SYSTEM_PROMPT,
+      instructions: systemPrompt,
       model: "gpt-5.2",
       modelSettings: {
         reasoning: { effort: reasoning },
@@ -607,9 +745,6 @@ Best practices:
 
 START NOW: Create the SVG template based on the prompt.`}`;
     }
-
-    // Track last render for comparison
-    let lastRenderPngBase64: string | null = null;
 
     // Create a Runner with lifecycle hooks for real-time tool call updates
     const runner = new Runner();
@@ -708,9 +843,10 @@ If issues remain → use apply_patch to fix them.`;
         }
 
         if (lastRenderPngBase64) {
-          content.push({ type: "input_image", image: lastRenderPngBase64 });
+          const lastRender = lastRenderPngBase64 as string;
+          content.push({ type: "input_image", image: lastRender });
           const originalLen = pageImages[0] ? pageImages[0].length : 0;
-          log.info(`Sending comparison: original reference (${originalLen} chars) + current render (${lastRenderPngBase64.length} chars)`);
+          log.info(`Sending comparison: original reference (${originalLen} chars) + current render (${lastRender.length} chars)`);
         } else {
           log.error(`WARNING: No lastRenderPngBase64 available for iteration ${iteration + 1}! Model won't see current template.`);
         }
@@ -819,75 +955,7 @@ If issues remain → use apply_patch to fix them.`;
       const result = streamAny.result || streamAny._result || { history: conversationHistory };
       conversationHistory = result.history || conversationHistory;
 
-      // Render if SVG exists (always render, even if mark_complete was called, to get final output)
-      if (currentSvg) {
-        currentVersion++;
-        log.info(`\n--- RENDERING VERSION ${currentVersion} ---`);
-        onEvent?.({ type: "status", content: `Rendering version ${currentVersion}...` });
-
-        try {
-          // Generate placeholder values for preview
-          const fieldsForRender: Record<string, unknown> = {};
-          if (currentJson) {
-            for (const field of currentJson.fields) {
-              if (field.type === "array") {
-                fieldsForRender[field.name] = [`{{${field.name}[0]}}`, `{{${field.name}[1]}}`];
-              } else {
-                fieldsForRender[field.name] = `{{${field.name}}}`;
-              }
-            }
-          }
-
-          // Render SVG with placeholders shown
-          const renderedSvg = renderSVGTemplate(currentSvg, fieldsForRender, {});
-
-          // Convert to PNG for preview
-          const pngBuffer = await svgToPng(renderedSvg);
-          const pngBase64 = `data:image/png;base64,${pngBuffer.toString("base64")}`;
-
-          // Try to convert to PDF
-          let pdfBase64: string | undefined;
-          try {
-            const pdfBuffer = await svgToPdf(renderedSvg);
-            pdfBase64 = `data:application/pdf;base64,${pdfBuffer.toString("base64")}`;
-          } catch (pdfErr) {
-            log.error("PDF conversion failed (continuing)", pdfErr);
-          }
-
-          log.info(`VERSION ${currentVersion} RENDER SUCCESS - PNG size: ${pngBase64.length} chars`);
-          versions.push({ version: currentVersion, previewBase64: pngBase64, pdfBase64 });
-          lastRenderPngBase64 = pngBase64;
-          log.info(`Set lastRenderPngBase64 for next iteration comparison`);
-
-          // Emit version event
-          onEvent?.({
-            type: "version",
-            content: `Version ${currentVersion} rendered`,
-            version: currentVersion,
-            previewUrl: pngBase64,
-            pdfUrl: pdfBase64,
-            templateCode: currentSvg,
-          });
-
-          // Upload PNG to container (OpenAI doesn't support SVG files)
-          const pngData = pngBase64.split(",")[1];
-          const versionPngPath = path.join(os.tmpdir(), `current_v${currentVersion}.png`);
-          fsSync.writeFileSync(versionPngPath, Buffer.from(pngData, "base64"));
-          const versionPngStream = fsSync.createReadStream(versionPngPath);
-          try {
-            await openai.containers.files.create(containerId!, { file: versionPngStream });
-            log.info(`V${currentVersion} PNG uploaded to container`);
-          } catch (e) {
-            log.error(`Failed to upload V${currentVersion} PNG`, e);
-          }
-          fsSync.unlinkSync(versionPngPath);
-
-        } catch (renderError) {
-          log.error(`VERSION ${currentVersion} RENDER FAILED`, renderError);
-          onEvent?.({ type: "status", content: `Render failed: ${renderError}` });
-        }
-      }
-
+      // Note: Rendering now happens on each patch/write, not at end of iteration
       log.info(`Iteration ${iteration + 1} complete`, { isComplete, version: currentVersion });
     }
 
