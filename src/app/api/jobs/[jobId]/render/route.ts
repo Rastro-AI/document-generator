@@ -134,12 +134,13 @@ export async function POST(
     await saveJobOutputSvg(jobId, renderedSvg);
     await saveJobOutputPdf(jobId, pdfBuffer);
 
-    // Mark as rendered
-    await markJobRendered(jobId);
+    // Mark as rendered and get the updated job with the renderedAt timestamp
+    const updatedJob = await markJobRendered(jobId);
 
     return NextResponse.json({
       ok: true,
-      renderedAt: new Date().toISOString(),
+      // Use the same timestamp that was stored in DB to avoid sync issues
+      renderedAt: updatedJob?.renderedAt || new Date().toISOString(),
       format: "svg",
     });
   } catch (error) {
