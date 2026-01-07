@@ -490,7 +490,7 @@ function parseHtmlToReact(htmlString: string): React.ReactElement {
             const satoriStyle = convertStyleForSatori(styleObj as Record<string, string>);
 
             // Build new props with converted style
-            const newAttribs = { ...domNode.attribs, style: satoriStyle };
+            const newAttribs: Record<string, unknown> = { ...domNode.attribs, style: satoriStyle };
 
             // Handle img tags - check for placeholders or base64 FIRST
             if (domNode.name === "img") {
