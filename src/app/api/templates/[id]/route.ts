@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import fs from "fs/promises";
 import { getTemplate, pathExists } from "@/lib/fs-utils";
-import { getTemplateJsonPath, getTemplateDir, getTemplateSvgPath, getTemplateThumbnailPath } from "@/lib/paths";
-import { Template, TemplateField } from "@/lib/types";
+import { getTemplateJsonPath, getTemplateDir, getTemplateSvgPath, getTemplateThumbnailPath, getTemplateSatoriDocPath } from "@/lib/paths";
+import { Template, TemplateField, SatoriPageContent } from "@/lib/types";
 import { renderSVGTemplate, svgToPng } from "@/lib/svg-template-renderer";
+import { renderSatoriDocument } from "@/lib/satori-renderer";
 
 /**
  * Generate placeholder value for a field based on its type
@@ -78,7 +79,7 @@ export async function PUT(
 ) {
   try {
     const { id } = await params;
-    const body: Template = await request.json();
+    const body: Template & { satoriPages?: SatoriPageContent[] } = await request.json();
 
     // Ensure the template directory exists
     const templateDir = getTemplateDir(id);
@@ -86,35 +87,84 @@ export async function PUT(
       await fs.mkdir(templateDir, { recursive: true });
     }
 
-    // Ensure format is set to svg
-    body.format = "svg";
+    // Extract satoriPages if present (they're sent with the template but stored separately)
+    const satoriPages = body.satoriPages;
+    delete body.satoriPages;
+
+    // Set default format if not specified
+    if (!body.format) {
+      body.format = "svg";
+    }
 
     // Write the template.json
     const jsonPath = getTemplateJsonPath(id);
     await fs.writeFile(jsonPath, JSON.stringify(body, null, 2), "utf-8");
 
-    // Generate thumbnail if SVG template exists
-    const svgPath = getTemplateSvgPath(id);
-    if (await pathExists(svgPath)) {
-      try {
-        const svgContent = await fs.readFile(svgPath, "utf-8");
+    // Handle Satori format templates
+    if (body.format === "satori" && satoriPages && satoriPages.length > 0) {
+      // Save satori document
+      const satoriDocPath = getTemplateSatoriDocPath(id);
+      await fs.writeFile(satoriDocPath, JSON.stringify({ pages: satoriPages }, null, 2), "utf-8");
 
-        // Build sample fields from template - generate type-appropriate placeholders
+      // Generate thumbnail from Satori render
+      try {
+        // Build sample fields from template
         const sampleFields: Record<string, unknown> = {};
         for (const field of body.fields || []) {
           sampleFields[field.name] = generatePlaceholderValue(field);
         }
 
-        // Render SVG with placeholders
-        const renderedSvg = renderSVGTemplate(svgContent, sampleFields, {});
+        // Build sample assets (placeholder images)
+        const sampleAssets: Record<string, string> = {};
+        for (const slot of body.assetSlots || []) {
+          // Use a small gray placeholder
+          sampleAssets[slot.name] = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAGQAAABkCAYAAABw4pVUAAAABmJLR0QA/wD/AP+gvaeTAAAACXBIWXMAAAsTAAALEwEAmpwYAAAAB3RJTUUH6QwQCjUEm/YvVwAAABl0RVh0Q29tbWVudABDcmVhdGVkIHdpdGggR0lNUFeBDhcAAABYSURBVHja7cExAQAAAMKg9U9tCy+gAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA4GYNTgAB/dJqXwAAAABJRU5ErkJggg==";
+        }
 
-        // Convert to PNG for thumbnail
-        const pngBuffer = await svgToPng(renderedSvg);
-        const thumbnailPath = getTemplateThumbnailPath(id);
-        await fs.writeFile(thumbnailPath, pngBuffer);
+        const result = await renderSatoriDocument(
+          {
+            pageSize: body.satoriConfig?.pageSize || "A4",
+            header: body.satoriConfig?.header,
+            footer: body.satoriConfig?.footer,
+            pages: satoriPages,
+          },
+          sampleFields,
+          sampleAssets
+        );
+
+        if (result.pngBuffers.length > 0) {
+          const thumbnailPath = getTemplateThumbnailPath(id);
+          await fs.writeFile(thumbnailPath, result.pngBuffers[0]);
+        }
       } catch (thumbnailError) {
-        console.error("Failed to generate thumbnail:", thumbnailError);
+        console.error("Failed to generate Satori thumbnail:", thumbnailError);
         // Don't fail the save if thumbnail generation fails
+      }
+    }
+    // Handle SVG format templates
+    else if (body.format === "svg") {
+      const svgPath = getTemplateSvgPath(id);
+      if (await pathExists(svgPath)) {
+        try {
+          const svgContent = await fs.readFile(svgPath, "utf-8");
+
+          // Build sample fields from template - generate type-appropriate placeholders
+          const sampleFields: Record<string, unknown> = {};
+          for (const field of body.fields || []) {
+            sampleFields[field.name] = generatePlaceholderValue(field);
+          }
+
+          // Render SVG with placeholders
+          const renderedSvg = renderSVGTemplate(svgContent, sampleFields, {});
+
+          // Convert to PNG for thumbnail
+          const pngBuffer = await svgToPng(renderedSvg);
+          const thumbnailPath = getTemplateThumbnailPath(id);
+          await fs.writeFile(thumbnailPath, pngBuffer);
+        } catch (thumbnailError) {
+          console.error("Failed to generate thumbnail:", thumbnailError);
+          // Don't fail the save if thumbnail generation fails
+        }
       }
     }
 

@@ -7,6 +7,7 @@ import {
   getTemplateJsonPath,
   getTemplateTsxPath,
   getTemplateSvgPath,
+  getTemplateSatoriDocPath,
 } from "./paths";
 import {
   uploadFile,
@@ -47,8 +48,8 @@ export async function pathExists(filePath: string): Promise<boolean> {
   }
 }
 
-// List all SVG templates (from local filesystem)
-// Only returns templates that have a template.svg file
+// List all templates (from local filesystem)
+// Returns templates that have either a template.svg file OR are Satori format
 export async function listTemplates(): Promise<{ id: string; name: string }[]> {
   const entries = await fs.readdir(TEMPLATES_DIR, { withFileTypes: true });
   const templates: { id: string; name: string }[] = [];
@@ -58,11 +59,14 @@ export async function listTemplates(): Promise<{ id: string; name: string }[]> {
       const jsonPath = getTemplateJsonPath(entry.name);
       const svgPath = getTemplateSvgPath(entry.name);
 
-      // Only include templates with a .svg file
-      if (await pathExists(jsonPath) && await pathExists(svgPath)) {
+      if (await pathExists(jsonPath)) {
         const content = await fs.readFile(jsonPath, "utf-8");
         const template = JSON.parse(content) as Template;
-        templates.push({ id: template.id, name: template.name });
+
+        // Include template if it has SVG file OR is Satori format
+        if (template.format === "satori" || await pathExists(svgPath)) {
+          templates.push({ id: template.id, name: template.name });
+        }
       }
     }
   }
@@ -87,6 +91,18 @@ export async function getTemplateSvgContent(templateId: string): Promise<string 
     return null;
   }
   return await fs.readFile(svgPath, "utf-8");
+}
+
+// Get Satori document from template folder (for satori format templates)
+export async function getTemplateSatoriDocument(templateId: string): Promise<{
+  pages: Array<{ body: string; headerOverride?: string; footerOverride?: string }>;
+} | null> {
+  const docPath = getTemplateSatoriDocPath(templateId);
+  if (!(await pathExists(docPath))) {
+    return null;
+  }
+  const content = await fs.readFile(docPath, "utf-8");
+  return JSON.parse(content);
 }
 
 // ============================================================================
@@ -135,6 +151,38 @@ export async function updateJobAssets(
 ): Promise<Job | null> {
   if (!isDbConfigured()) return null;
   return await updateJobAssetsInDb(jobId, assets);
+}
+
+// Get Satori document content from job storage
+export async function getJobSatoriDocument(jobId: string): Promise<{
+  pages: Array<{ body: string; headerOverride?: string; footerOverride?: string }>;
+} | null> {
+  try {
+    const path = getJobFilePath(jobId, "satori-document.json");
+    console.log(`[getJobSatoriDocument] Loading from path: ${path}`);
+    const buffer = await downloadFile(BUCKETS.JOBS, path);
+    const doc = JSON.parse(buffer.toString("utf-8"));
+    console.log(`[getJobSatoriDocument] Loaded document with ${doc?.pages?.length || 0} pages`);
+    return doc;
+  } catch (err) {
+    console.log(`[getJobSatoriDocument] Failed to load:`, err);
+    return null;
+  }
+}
+
+// Update Satori document in job storage
+export async function updateJobSatoriDocument(
+  jobId: string,
+  document: {
+    pages: Array<{ body: string; headerOverride?: string | null; footerOverride?: string | null }>;
+  }
+): Promise<void> {
+  const path = getJobFilePath(jobId, "satori-document.json");
+  const content = JSON.stringify(document, null, 2);
+  await uploadFile(BUCKETS.JOBS, path, content, {
+    contentType: "application/json",
+    upsert: true,
+  });
 }
 
 // Update job initial message
@@ -311,6 +359,23 @@ export async function copySvgTemplateToJob(
       contentType: "image/svg+xml",
       upsert: true,
     });
+  }
+}
+
+// Copy satori-document.json from template folder to job storage
+export async function copySatoriTemplateToJob(
+  templateId: string,
+  jobId: string
+): Promise<void> {
+  const sourcePath = getTemplateSatoriDocPath(templateId);
+
+  if (await pathExists(sourcePath)) {
+    const content = await fs.readFile(sourcePath, "utf-8");
+    await uploadFile(BUCKETS.JOBS, getJobFilePath(jobId, "satori-document.json"), content, {
+      contentType: "application/json",
+      upsert: true,
+    });
+    console.log(`[copySatoriTemplateToJob] Copied satori document to job ${jobId}`);
   }
 }
 

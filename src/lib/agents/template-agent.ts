@@ -27,6 +27,8 @@ import {
   getTemplateSvgContent,
   updateJobAssets,
   updateJobFields,
+  getJobSatoriDocument,
+  updateJobSatoriDocument,
   getJob,
   getAssetFile,
   getAssetBankFile,
@@ -35,7 +37,10 @@ import {
   updateContainerId,
 } from "@/lib/fs-utils";
 import { renderSVGTemplate, prepareAssets, svgToPng } from "@/lib/svg-template-renderer";
+import { renderSatoriPage, renderSatoriDocument, SatoriDocument } from "@/lib/satori-renderer";
 import { getPublicUrl, BUCKETS } from "@/lib/supabase";
+import { SATORI_DOCUMENT_PROMPT } from "@/lib/prompts/satori-document";
+import type { SatoriPageContent, TemplateFont } from "@/lib/types";
 
 // Local types for apply_patch operations
 type CreateFileOperation = { type: "create_file"; path: string; diff: string };
@@ -126,6 +131,44 @@ DO NOT return after render_preview without calling apply_patch at least once.
 `.trim();
 
 /**
+ * Instructions for Satori document generation agent
+ */
+const SATORI_AGENT_INSTRUCTIONS = `
+You are a document generation assistant. You help users create multi-page documents by:
+1. Extracting data from uploaded files (Excel, PDF, images)
+2. Filling in template fields with extracted data
+3. Assigning images to the correct asset slots
+4. Creating document pages using Satori HTML format
+5. Verifying the output looks correct visually
+
+${SATORI_DOCUMENT_PROMPT}
+
+## TOOLS
+- code_interpreter: Use Python to read Excel/PDF files uploaded to /mnt/user/. Use pandas for Excel, PyMuPDF for PDFs.
+- update_fields: Set field values. Pass JSON {"FIELD_NAME": "value"}.
+- update_assets: Assign images to slots. Pass JSON {"SLOT_NAME": "filename.jpg"}.
+- update_satori_pages: Update the document pages. Pass JSON array of page bodies.
+- render_preview: Render and view the current document. ALWAYS use this to verify your work.
+
+## WORKFLOW
+1. If files are uploaded, use code_interpreter to extract data from documents in /mnt/user/
+2. Use update_fields to fill in all template fields with extracted data
+3. Use update_assets to assign uploaded images to the appropriate slots
+4. Use update_satori_pages to create the document structure with HTML page bodies
+5. Call render_preview to see the result and iterate on the layout
+6. ALWAYS end with a text response summarizing what you did
+
+## CRITICAL REQUIREMENTS
+1. ALWAYS call render_preview at least once before your final response
+2. Use {{FIELD_NAME}} placeholders in your HTML - they will be substituted at render time
+3. Use {{ASSET_NAME}} for image src attributes
+4. Keep content within page bounds - create new pages when approaching 85% of body height
+5. ALWAYS end your response with a text message summarizing what you did
+
+Your final message MUST accurately summarize ONLY the actions you actually took.
+`.trim();
+
+/**
  * Virtual file path for the SVG template
  */
 const SVG_TEMPLATE_PATH = "template.svg";
@@ -136,6 +179,8 @@ const SVG_TEMPLATE_PATH = "template.svg";
 let currentSvgContent = "";
 let sessionTemplateChanged = false;
 let sessionAssetsChanged = false;
+let currentSatoriPages: SatoriPageContent[] = [];
+let sessionSatoriPagesChanged = false;
 
 /**
  * Get SVG template content for a job
@@ -296,13 +341,57 @@ function createUpdateAssetsTool(
 }
 
 /**
+ * Create update_satori_pages tool for Satori format templates
+ */
+function createUpdateSatoriPagesTool(
+  jobId: string,
+  onEvent?: AgentEventCallback
+) {
+  return tool({
+    name: "update_satori_pages",
+    description: "Update the document pages. Pass a JSON array of page objects with 'body' containing JSX string for each page.",
+    parameters: z.object({
+      pages_json: z.string().describe('JSON array: [{"body": "<div>...</div>"}, {"body": "<div>...</div>"}]'),
+    }),
+    execute: async ({ pages_json }) => {
+      onEvent?.({ type: "status", content: "Updating document pages..." });
+      try {
+        const pages = JSON.parse(pages_json) as SatoriPageContent[];
+        if (!Array.isArray(pages)) {
+          return JSON.stringify({ error: "pages_json must be an array" });
+        }
+
+        // Validate each page has a body
+        for (let i = 0; i < pages.length; i++) {
+          if (!pages[i].body) {
+            return JSON.stringify({ error: `Page ${i} is missing 'body' property` });
+          }
+        }
+
+        // Save to storage
+        await updateJobSatoriDocument(jobId, { pages });
+        currentSatoriPages = pages;
+        sessionSatoriPagesChanged = true;
+
+        return JSON.stringify({ success: true, pageCount: pages.length });
+      } catch (error) {
+        return JSON.stringify({ error: String(error) });
+      }
+    },
+  });
+}
+
+/**
  * Create render_preview tool
  */
 function createRenderPreviewTool(
   jobId: string,
   getCurrentFields: () => Record<string, string | number | null>,
   getCurrentAssets: () => Record<string, string | null>,
-  onEvent?: AgentEventCallback
+  templateFormat: "svg" | "satori",
+  satoriConfig?: { pageSize: "A4" | "LETTER" | "LEGAL" | { width: number; height: number }; header?: { height: number; content: string }; footer?: { height: number; content: string } },
+  onEvent?: AgentEventCallback,
+  templateFonts?: TemplateFont[]
 ) {
   return tool({
     name: "render_preview",
@@ -344,25 +433,52 @@ function createRenderPreviewTool(
         }
 
         const preparedAssets = await prepareAssets(assets);
-        const renderedSvg = renderSVGTemplate(currentSvgContent, fields, preparedAssets);
-        const pngBuffer = await svgToPng(renderedSvg, 800);
+        let helpText: string;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const responseContent: any[] = [];
 
-        // Upload preview to storage and use URL (avoids bloating history with base64)
-        const previewFilename = `preview-${Date.now()}.png`;
-        await saveAssetFile(jobId, previewFilename, pngBuffer);
-        const storagePath = `${jobId}/assets/${previewFilename}`;
-        const previewUrl = getPublicUrl(BUCKETS.JOBS, storagePath);
+        // Always use Satori rendering
+        if (currentSatoriPages.length === 0) {
+          return JSON.stringify({ error: "No Satori pages to render. Use update_satori_pages first." });
+        }
 
-        return [
-          {
+        const satoriDoc: SatoriDocument = {
+          pageSize: satoriConfig?.pageSize || "A4",
+          header: satoriConfig?.header,
+          footer: satoriConfig?.footer,
+          pages: currentSatoriPages,
+        };
+        const result = await renderSatoriDocument(satoriDoc, fields, preparedAssets, templateFonts);
+
+        // Upload and show ALL pages
+        const timestamp = Date.now();
+        for (let i = 0; i < result.pngBuffers.length; i++) {
+          const pngBuffer = result.pngBuffers[i];
+          const previewFilename = `preview-${timestamp}-page${i + 1}.png`;
+          await saveAssetFile(jobId, previewFilename, pngBuffer);
+          const storagePath = `${jobId}/assets/${previewFilename}`;
+          const previewUrl = getPublicUrl(BUCKETS.JOBS, storagePath);
+
+          responseContent.push({
             type: "image_url",
             image_url: { url: previewUrl, detail: "high" },
-          },
-          {
-            type: "text",
-            text: "Preview rendered. Check for issues: text overflow, misalignment, broken images. Fix with apply_patch if needed.",
-          },
-        ];
+          });
+
+          // Emit preview event to UI for each page
+          onEvent?.({
+            type: "status",
+            content: `Rendered page ${i + 1} of ${result.pngBuffers.length}`
+          });
+        }
+
+        helpText = `Preview rendered (${result.svgs.length} page${result.svgs.length > 1 ? 's' : ''}). Check ALL pages for layout issues. Use update_satori_pages to fix.`;
+
+        responseContent.push({
+          type: "text",
+          text: helpText,
+        });
+
+        return responseContent;
       } catch (error) {
         return JSON.stringify({ error: `Render failed: ${String(error)}` });
       }
@@ -401,7 +517,10 @@ export async function runTemplateAgent(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   previousHistory: any[] = [],
   onEvent?: AgentEventCallback,
-  reasoning: "none" | "low" = "none"
+  reasoning: "none" | "low" = "none",
+  templateFormat: "svg" | "satori" = "satori", // SVG is deprecated, default to Satori
+  satoriConfig?: { pageSize: "A4" | "LETTER" | "LEGAL" | { width: number; height: number }; header?: { height: number; content: string }; footer?: { height: number; content: string } },
+  templateFonts?: Array<{ family: string; weights: Record<string, string | null> }>
 ): Promise<TemplateAgentResult> {
   ensureProvider();
   const openai = getOpenAI();
@@ -410,6 +529,7 @@ export async function runTemplateAgent(
   console.log(`[Agent] ========== STARTING TEMPLATE AGENT ==========`);
   console.log(`[Agent] Job: ${jobId}`);
   console.log(`[Agent] Template: ${templateId}`);
+  console.log(`[Agent] Format: ${templateFormat}`);
   console.log(`[Agent] Model: gpt-5.2`);
   console.log(`[Agent] Reasoning: ${reasoning}`);
   console.log(`[Agent] User message: "${userMessage.substring(0, 100)}${userMessage.length > 100 ? '...' : ''}"`);
@@ -420,6 +540,7 @@ export async function runTemplateAgent(
   // Reset session state
   sessionTemplateChanged = false;
   sessionAssetsChanged = false;
+  sessionSatoriPagesChanged = false;
 
   // Get job data
   onEvent?.({ type: "status", content: "Loading job data..." });
@@ -428,9 +549,11 @@ export async function runTemplateAgent(
   const uploadedFiles = job?.uploadedFiles || [];
   const liveFields = { ...currentFields };
 
-  // Load SVG template
+  // Load Satori document from storage (SVG is deprecated)
   onEvent?.({ type: "status", content: "Loading template..." });
-  currentSvgContent = await getSvgTemplateContentForJob(jobId, templateId);
+  const satoriDoc = await getJobSatoriDocument(jobId);
+  currentSatoriPages = satoriDoc?.pages || [];
+  console.log(`[Agent] Loaded ${currentSatoriPages.length} Satori pages from storage`);
 
   // Timing helper
   const timings: Record<string, number> = {};
@@ -509,19 +632,29 @@ export async function runTemplateAgent(
       ? `\nAvailable images: ${imageFiles.map(f => f.filename).join(", ")}`
       : "";
 
+    // Always use Satori context
+    const pagesJson = currentSatoriPages.length > 0
+      ? JSON.stringify(currentSatoriPages, null, 2)
+      : "(No pages yet - use update_satori_pages to create pages)";
+    const templateContext = `SATORI DOCUMENT PAGES:
+\`\`\`json
+${pagesJson}
+\`\`\`
+
+Page Size: ${satoriConfig?.pageSize || "A4"}
+Header: ${satoriConfig?.header ? `${satoriConfig.header.height}px` : "None"}
+Footer: ${satoriConfig?.footer ? `${satoriConfig.footer.height}px` : "None"}`;
+
     const contextText = `Current fields: ${JSON.stringify(liveFields)}
 Current assets: ${JSON.stringify(liveAssets)}${fileList}${imageList}
 
-SVG TEMPLATE:
-\`\`\`svg
-${currentSvgContent}
-\`\`\`
+${templateContext}
 
 Request: ${userMessage}`;
 
-    // Build input with optional initial screenshot (uploaded to storage, referenced by URL)
-    let initialScreenshotUrl: string | null = null;
-    let screenshotBuffer: Buffer | null = null;
+    // Build input with optional initial screenshots (uploaded to storage, referenced by URLs)
+    let initialScreenshotUrls: string[] = [];
+    let screenshotBuffers: Buffer[] = [];
     if (previousHistory.length === 0) {
       onEvent?.({ type: "status", content: "Preparing document preview..." });
       const screenshotTotalStart = Date.now();
@@ -543,24 +676,39 @@ Request: ${userMessage}`;
         }
         logTiming("Load assets for screenshot", assetLoadStart);
 
-        // Render SVG to PNG
+        // Render to PNG based on format
         const renderStart = Date.now();
         const preparedAssets = await prepareAssets(initialAssets);
-        const renderedSvg = renderSVGTemplate(currentSvgContent, liveFields, preparedAssets);
-        const pngBuffer = await svgToPng(renderedSvg, 1200);
-        logTiming("Render SVG to PNG", renderStart);
 
-        // Upload screenshot to storage and get public URL (avoids bloating history with base64)
+        // Always render Satori pages
+        if (currentSatoriPages.length > 0) {
+          const satoriDoc: SatoriDocument = {
+            pageSize: satoriConfig?.pageSize || "A4",
+            header: satoriConfig?.header,
+            footer: satoriConfig?.footer,
+            pages: currentSatoriPages,
+          };
+          const result = await renderSatoriDocument(satoriDoc, liveFields, preparedAssets, templateFonts);
+          screenshotBuffers = result.pngBuffers;
+          logTiming("Render Satori to PNG", renderStart);
+          console.log(`[Agent] Rendered ${screenshotBuffers.length} Satori pages for initial screenshot`);
+        } else {
+          console.log(`[Agent] No Satori pages to render for initial screenshot`);
+        }
+
+        // Upload all screenshots to storage and get public URLs
         const storageUploadStart = Date.now();
-        const screenshotFilename = `screenshot-${Date.now()}.png`;
-        await saveAssetFile(jobId, screenshotFilename, pngBuffer);
-        const storagePath = `${jobId}/assets/${screenshotFilename}`;
-        initialScreenshotUrl = getPublicUrl(BUCKETS.JOBS, storagePath);
-        logTiming("Upload screenshot to storage", storageUploadStart);
-        console.log(`[Agent] Uploaded screenshot to storage: ${storagePath}`);
-
-        // Store pngBuffer for later container upload (after container is ready)
-        screenshotBuffer = pngBuffer;
+        const timestamp = Date.now();
+        for (let i = 0; i < screenshotBuffers.length; i++) {
+          const screenshotFilename = screenshotBuffers.length > 1
+            ? `screenshot-${timestamp}-page${i + 1}.png`
+            : `screenshot-${timestamp}.png`;
+          await saveAssetFile(jobId, screenshotFilename, screenshotBuffers[i]);
+          const storagePath = `${jobId}/assets/${screenshotFilename}`;
+          initialScreenshotUrls.push(getPublicUrl(BUCKETS.JOBS, storagePath));
+          console.log(`[Agent] Uploaded screenshot page ${i + 1} to storage: ${storagePath}`);
+        }
+        logTiming("Upload screenshots to storage", storageUploadStart);
 
         logTiming("Total screenshot preparation", screenshotTotalStart);
       } catch (err) {
@@ -605,16 +753,21 @@ Request: ${userMessage}`;
       logTiming(`Upload ${documentFiles.length} document files`, uploadStart);
     }
 
-    // Upload screenshot to container if we have one (for both new and reused containers)
-    if (containerId && screenshotBuffer) {
+    // Upload screenshots to container if we have them (for both new and reused containers)
+    if (containerId && screenshotBuffers.length > 0) {
       const containerScreenshotStart = Date.now();
-      const tmpScreenshotPath = path.join(os.tmpdir(), "current_render.png");
-      fsSync.writeFileSync(tmpScreenshotPath, screenshotBuffer);
-      const screenshotStream = fsSync.createReadStream(tmpScreenshotPath);
-      await openai.containers.files.create(containerId!, { file: screenshotStream });
-      fsSync.unlinkSync(tmpScreenshotPath);
-      logTiming("Upload screenshot to container", containerScreenshotStart);
-      console.log(`[Agent] Uploaded screenshot to container as current_render.png`);
+      for (let i = 0; i < screenshotBuffers.length; i++) {
+        const filename = screenshotBuffers.length > 1
+          ? `current_render_page${i + 1}.png`
+          : "current_render.png";
+        const tmpScreenshotPath = path.join(os.tmpdir(), filename);
+        fsSync.writeFileSync(tmpScreenshotPath, screenshotBuffers[i]);
+        const screenshotStream = fsSync.createReadStream(tmpScreenshotPath);
+        await openai.containers.files.create(containerId!, { file: screenshotStream });
+        fsSync.unlinkSync(tmpScreenshotPath);
+        console.log(`[Agent] Uploaded screenshot to container as ${filename}`);
+      }
+      logTiming("Upload screenshots to container", containerScreenshotStart);
     }
 
     // Create tools - now that containerId is resolved
@@ -622,9 +775,12 @@ Request: ${userMessage}`;
     const tools: any[] = [
       createUpdateFieldsTool(jobId, liveFields, templateFields, onEvent),
       createUpdateAssetsTool(jobId, liveAssets, uploadedFiles, onEvent),
-      applyPatchTool({ editor: createSvgEditor(jobId, onEvent) }),
-      createRenderPreviewTool(jobId, () => liveFields, () => liveAssets, onEvent),
+      createRenderPreviewTool(jobId, () => liveFields, () => liveAssets, templateFormat, satoriConfig, onEvent, templateFonts),
     ];
+
+    // Add Satori tools (SVG is deprecated)
+    tools.push(createUpdateSatoriPagesTool(jobId, onEvent));
+    console.log(`[Agent] Using Satori format with update_satori_pages tool`);
 
     // Add code_interpreter if we have a container
     if (containerId) {
@@ -632,10 +788,11 @@ Request: ${userMessage}`;
       console.log(`[Agent] Added code_interpreter tool with container ${containerId}`);
     }
 
-    // Create agent
+    // Always use Satori instructions
+    const agentInstructions = SATORI_AGENT_INSTRUCTIONS;
     const agent = new Agent({
       name: "TemplateAgent",
-      instructions: AGENT_INSTRUCTIONS,
+      instructions: agentInstructions,
       model: "gpt-5.2",
       modelSettings: { reasoning: { effort: reasoning } },
       tools,
@@ -643,14 +800,23 @@ Request: ${userMessage}`;
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let inputMessage: any;
-    if (initialScreenshotUrl && previousHistory.length === 0) {
+    if (initialScreenshotUrls.length > 0 && previousHistory.length === 0) {
+      // Build input with all page screenshots
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const contentParts: any[] = [
+        { type: "input_text", text: `Current rendered document (${initialScreenshotUrls.length} page${initialScreenshotUrls.length > 1 ? 's' : ''}):` },
+      ];
+      for (let i = 0; i < initialScreenshotUrls.length; i++) {
+        if (initialScreenshotUrls.length > 1) {
+          contentParts.push({ type: "input_text", text: `Page ${i + 1}:` });
+        }
+        contentParts.push({ type: "input_image", image: initialScreenshotUrls[i], detail: "high" });
+      }
+      contentParts.push({ type: "input_text", text: contextText });
+
       inputMessage = {
         role: "user",
-        content: [
-          { type: "input_text", text: "Current rendered document:" },
-          { type: "input_image", image: initialScreenshotUrl, detail: "high" },
-          { type: "input_text", text: contextText },
-        ],
+        content: contentParts,
       };
     } else {
       inputMessage = { role: "user", content: contextText };
@@ -693,12 +859,12 @@ Request: ${userMessage}`;
     const contextAnalysis = {
       previousHistoryLength: previousHistory.length,
       previousHistoryTokens: estimateTokens(previousHistory),
-      svgLength: currentSvgContent.length,
-      svgTokens: estimateTokens(currentSvgContent),
+      satoriPagesCount: currentSatoriPages.length,
+      satoriPagesTokens: estimateTokens(currentSatoriPages),
       fieldsTokens: estimateTokens(liveFields),
       assetsTokens: estimateTokens(liveAssets),
-      hasScreenshot: !!initialScreenshotUrl,
-      screenshotUrl: initialScreenshotUrl || "none",
+      screenshotCount: initialScreenshotUrls.length,
+      screenshotUrls: initialScreenshotUrls.length > 0 ? initialScreenshotUrls : ["none"],
       userMessageLength: userMessage.length,
       totalInputTokens: estimateTokens(input),
       // Break down history by message type
@@ -713,10 +879,10 @@ Request: ${userMessage}`;
 
     console.log(`[Agent] Context Analysis for job ${jobId}:`);
     console.log(`  Previous history: ${contextAnalysis.previousHistoryLength} messages, ~${contextAnalysis.previousHistoryTokens} tokens`);
-    console.log(`  SVG template: ${contextAnalysis.svgLength} chars, ~${contextAnalysis.svgTokens} tokens`);
+    console.log(`  Satori pages: ${contextAnalysis.satoriPagesCount}, ~${contextAnalysis.satoriPagesTokens} tokens`);
     console.log(`  Fields: ~${contextAnalysis.fieldsTokens} tokens`);
     console.log(`  Assets: ~${contextAnalysis.assetsTokens} tokens`);
-    console.log(`  Screenshot: ${contextAnalysis.screenshotUrl}`);
+    console.log(`  Screenshots: ${contextAnalysis.screenshotCount} page(s)`);
     console.log(`  User message: ${contextAnalysis.userMessageLength} chars`);
     console.log(`  TOTAL INPUT: ~${contextAnalysis.totalInputTokens} tokens (estimate)`);
 
@@ -776,7 +942,7 @@ Request: ${userMessage}`;
     }
 
     // Determine what changed
-    const needsRender = sessionTemplateChanged || sessionAssetsChanged;
+    const needsRender = sessionTemplateChanged || sessionAssetsChanged || sessionSatoriPagesChanged;
     let mode: "fields" | "template" | "both" | "none" = "none";
     const fieldsChanged = Object.keys(liveFields).some(k => liveFields[k] !== currentFields[k]);
     if (fieldsChanged) mode = "fields";
@@ -793,7 +959,7 @@ Request: ${userMessage}`;
     // Log tool usage summary for debugging
     const toolsUsed = traces.filter(t => t.type === "tool_call").map(t => t.toolName);
     console.log(`[Agent] Tools used for job ${jobId}:`, toolsUsed);
-    console.log(`[Agent] Session state: templateChanged=${sessionTemplateChanged}, assetsChanged=${sessionAssetsChanged}, fieldsChanged=${fieldsChanged}`);
+    console.log(`[Agent] Session state: templateChanged=${sessionTemplateChanged}, assetsChanged=${sessionAssetsChanged}, fieldsChanged=${fieldsChanged}, satoriPagesChanged=${sessionSatoriPagesChanged}`);
 
     // Log timing summary
     const totalTime = Date.now() - startTime;
@@ -805,11 +971,11 @@ Request: ${userMessage}`;
     }
     console.log(`[Agent] =================================================`);
 
-    // Detect potential hallucination: model claims SVG changes but didn't call apply_patch
-    if (result.finalOutput && !sessionTemplateChanged) {
-      const mentionsSvgChanges = /SVG|foreignObject|layout|overflow|wrap|template.*edit|edit.*template/i.test(result.finalOutput);
-      if (mentionsSvgChanges && !toolsUsed.includes("apply_patch")) {
-        console.warn(`[Agent] WARNING: Model may have hallucinated SVG changes. Message mentions SVG/layout changes but apply_patch was not called.`);
+    // Detect potential hallucination: model claims template changes but didn't call update_satori_pages
+    if (result.finalOutput && !sessionSatoriPagesChanged) {
+      const mentionsSatoriChanges = /page|layout|JSX|document|body|header|footer/i.test(result.finalOutput);
+      if (mentionsSatoriChanges && !toolsUsed.includes("update_satori_pages")) {
+        console.warn(`[Agent] WARNING: Model may have hallucinated Satori changes. Message mentions page/layout changes but update_satori_pages was not called.`);
       }
     }
 

@@ -23,7 +23,7 @@ export async function POST(
   requestTiming.start("parse_params");
   const { jobId } = await params;
   const body = await request.json();
-  const { message, mode, reasoning = "none" } = body;
+  const { message, reasoning = "none" } = body;
   requestTiming.end();
 
   if (!message) {
@@ -55,14 +55,6 @@ export async function POST(
 
   // Save request init timing (this runs before agent starts)
   requestTiming.save();
-
-  // Only support auto and template modes for streaming
-  if (mode !== "auto" && mode !== "template") {
-    return new Response(JSON.stringify({ error: "Streaming only supports auto/template mode" }), {
-      status: 400,
-      headers: { "Content-Type": "application/json" },
-    });
-  }
 
   // Create SSE stream
   const encoder = new TextEncoder();
@@ -96,7 +88,7 @@ export async function POST(
       } catch (e) {
         console.error("Failed to capture SVG snapshot:", e);
       }
-      await addJobHistoryEntry(jobId, mode === "auto" ? "AI edit" : "Design edit", svgSnapshot);
+      await addJobHistoryEntry(jobId, "AI edit", svgSnapshot);
       timing.end();
 
       timing.start("get_agent_history");
@@ -113,6 +105,8 @@ export async function POST(
       };
 
       timing.start("run_template_agent");
+      // Always use the full agent - it can update fields AND make design changes
+      // The agent will render previews, check results, and make tweaks as needed
       const agentResult = await runTemplateAgent(
         jobId,
         job.templateId,
@@ -121,7 +115,10 @@ export async function POST(
         template.fields,
         previousHistory,
         onEvent,
-        reasoning as "none" | "low"
+        reasoning as "none" | "low",
+        "satori", // Always Satori format
+        template.satoriConfig,
+        template.fonts
       );
       timing.end();
 

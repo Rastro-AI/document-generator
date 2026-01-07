@@ -7,19 +7,18 @@ import {
   saveUploadedFile,
   saveAssetFile,
   copyTemplateToJob,
-  copySvgTemplateToJob,
   listAssetBankFiles,
   getAssetBankFile,
   markJobRendered,
-  getJobSvgContent,
+  getJobSatoriDocument,
   saveJobOutputPdf,
-  updateJobFields as updateJobFieldsInDb,
   updateJobInitialMessage,
+  getAssetFile,
 } from "@/lib/fs-utils";
 import { Job, UploadedFile } from "@/lib/types";
 import { runTemplateAgent } from "@/lib/agents/template-agent";
-import { renderSVGTemplate, prepareAssets, svgToPdf } from "@/lib/svg-template-renderer";
-import { getAssetFile, getAssetBankFile as getAssetBankFileBuffer } from "@/lib/fs-utils";
+import { prepareAssets } from "@/lib/svg-template-renderer";
+import { renderSatoriDocument, SatoriDocument } from "@/lib/satori-renderer";
 
 export const runtime = "nodejs";
 export const maxDuration = 300; // 5 minutes for long-running agent tasks
@@ -184,9 +183,8 @@ export async function POST(request: NextRequest) {
 
       await createJob(job);
 
-      // Copy template files to job storage
+      // Copy template files to job storage (Satori templates use JSON, not SVG)
       await copyTemplateToJob(templateId, jobId);
-      await copySvgTemplateToJob(templateId, jobId);
 
       // Build the agent prompt
       const hasFiles = uploadedFiles.length > 0;
@@ -199,6 +197,11 @@ export async function POST(request: NextRequest) {
       // Run the unified template agent
       sendEvent("trace", { type: "status", content: "Processing..." });
 
+      // Determine template format and config
+      // Always use Satori format - SVG is deprecated
+      const templateFormat = "satori" as const;
+      const satoriConfig = template.satoriConfig;
+
       const agentResult = await runTemplateAgent(
         jobId,
         templateId,
@@ -207,7 +210,10 @@ export async function POST(request: NextRequest) {
         template.fields,
         [], // No previous history
         (trace) => sendEvent("trace", trace),
-        reasoning
+        reasoning,
+        templateFormat,
+        satoriConfig,
+        template.fonts
       );
 
       // Re-fetch the updated job
@@ -220,38 +226,50 @@ export async function POST(request: NextRequest) {
       // Render the final PDF so it's ready immediately
       sendEvent("trace", { type: "status", content: "Generating PDF..." });
       try {
-        const svgContent = await getJobSvgContent(jobId);
-        if (svgContent && finalJob) {
-          // Prepare assets as data URLs
-          const assetDataUrls: Record<string, string | null> = {};
-          for (const [key, value] of Object.entries(finalJob.assets || {})) {
-            if (value) {
-              try {
-                const assetFilename = value.includes("/") ? value.split("/").pop()! : value;
-                let imageBuffer: Buffer | null = await getAssetFile(jobId, assetFilename);
-                if (!imageBuffer) imageBuffer = await getAssetBankFileBuffer(assetFilename);
-                if (imageBuffer) {
-                  const ext = assetFilename.split(".").pop()?.toLowerCase() || "png";
-                  const mimeTypes: Record<string, string> = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", svg: "image/svg+xml" };
-                  assetDataUrls[key] = `data:${mimeTypes[ext] || "application/octet-stream"};base64,${imageBuffer.toString("base64")}`;
-                } else {
-                  assetDataUrls[key] = null;
-                }
-              } catch {
+        // Prepare assets as data URLs (needed for both formats)
+        const assetDataUrls: Record<string, string | null> = {};
+        for (const [key, value] of Object.entries(finalJob?.assets || {})) {
+          if (value) {
+            try {
+              const assetFilename = value.includes("/") ? value.split("/").pop()! : value;
+              let imageBuffer: Buffer | null = await getAssetFile(jobId, assetFilename);
+              if (!imageBuffer) imageBuffer = await getAssetBankFile(assetFilename);
+              if (imageBuffer) {
+                const ext = assetFilename.split(".").pop()?.toLowerCase() || "png";
+                const mimeTypes: Record<string, string> = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", svg: "image/svg+xml" };
+                assetDataUrls[key] = `data:${mimeTypes[ext] || "application/octet-stream"};base64,${imageBuffer.toString("base64")}`;
+              } else {
                 assetDataUrls[key] = null;
               }
-            } else {
+            } catch {
               assetDataUrls[key] = null;
             }
+          } else {
+            assetDataUrls[key] = null;
           }
-
-          const preparedAssets = await prepareAssets(assetDataUrls);
-          const renderedSvg = renderSVGTemplate(svgContent, finalJob.fields, preparedAssets);
-          const pdfBuffer = await svgToPdf(renderedSvg);
-          await saveJobOutputPdf(jobId, pdfBuffer);
-          finalJob = await markJobRendered(jobId) || finalJob;
-          console.log(`[JobStream] PDF rendered for job ${jobId}, renderedAt: ${finalJob?.renderedAt}`);
         }
+        const preparedAssets = await prepareAssets(assetDataUrls);
+
+        // Always use Satori rendering
+        const satoriDocument = await getJobSatoriDocument(jobId);
+
+        if (!satoriDocument || satoriDocument.pages.length === 0) {
+          throw new Error("No Satori document pages found for job");
+        }
+
+        console.log(`[JobStream] Using Satori renderer (${satoriDocument.pages.length} pages)`);
+        const satoriDoc: SatoriDocument = {
+          pageSize: satoriConfig?.pageSize || "A4",
+          header: satoriConfig?.header,
+          footer: satoriConfig?.footer,
+          pages: satoriDocument.pages,
+        };
+        const result = await renderSatoriDocument(satoriDoc, finalJob?.fields || {}, preparedAssets);
+        const pdfBuffer = result.pdfBuffer;
+
+        await saveJobOutputPdf(jobId, pdfBuffer);
+        finalJob = await markJobRendered(jobId) || finalJob;
+        console.log(`[JobStream] PDF rendered for job ${jobId}, renderedAt: ${finalJob?.renderedAt}`);
       } catch (err) {
         console.error("[JobStream] Failed to render PDF:", err);
       }

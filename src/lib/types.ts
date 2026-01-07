@@ -40,6 +40,24 @@ export interface TemplateFont {
   weights: Record<string, string | null>;
 }
 
+// Satori document configuration
+export interface SatoriHeaderFooterConfig {
+  height: number;
+  content: string; // JSX string
+}
+
+export interface SatoriPageContent {
+  body: string; // JSX string
+  headerOverride?: string | null;
+  footerOverride?: string | null;
+}
+
+export interface SatoriDocumentConfig {
+  pageSize: "A4" | "LETTER" | "LEGAL" | { width: number; height: number };
+  header?: SatoriHeaderFooterConfig;
+  footer?: SatoriHeaderFooterConfig;
+}
+
 export interface Template {
   id: string;
   name: string;
@@ -48,8 +66,10 @@ export interface Template {
   fonts: TemplateFont[];
   fields: TemplateField[];
   assetSlots: TemplateAssetSlot[];
-  // Template format: "tsx" (React-PDF) or "svg" (raw SVG with placeholders)
-  format?: "tsx" | "svg";
+  // Template format: "tsx" (React-PDF), "svg" (raw SVG), or "satori" (JSX pages)
+  format?: "tsx" | "svg" | "satori";
+  // Configuration for satori format templates
+  satoriConfig?: SatoriDocumentConfig;
 }
 
 export interface TemplateListItem {
