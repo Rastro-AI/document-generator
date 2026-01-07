@@ -3,14 +3,14 @@ import {
   getJob,
   getTemplate,
   markJobRendered,
-  getTemplateSvgContent,
-  getJobSvgContent,
+  getJobSatoriDocument,
   saveJobOutputPdf,
   saveJobOutputSvg,
   getAssetBankFile,
   getAssetFile,
 } from "@/lib/fs-utils";
-import { renderSVGTemplate, prepareAssets, svgToPdf } from "@/lib/svg-template-renderer";
+import { prepareAssets } from "@/lib/svg-template-renderer";
+import { renderSatoriDocument, SatoriDocument } from "@/lib/satori-renderer";
 
 export const maxDuration = 120; // 2 minutes for rendering
 
@@ -36,35 +36,15 @@ export async function POST(
       );
     }
 
-    // Get SVG template content
-    // Try job-specific SVG first, then fall back to template SVG
-    let svgContent = await getJobSvgContent(jobId);
-    const usedJobSvg = !!svgContent;
-    if (!svgContent) {
-      svgContent = await getTemplateSvgContent(job.templateId);
-    }
+    // Always use Satori format - SVG is deprecated
+    const satoriDocument = await getJobSatoriDocument(jobId);
 
-    if (!svgContent) {
+    if (!satoriDocument || satoriDocument.pages.length === 0) {
       return NextResponse.json(
-        { error: "SVG template not found" },
+        { error: "No Satori document pages found" },
         { status: 404 }
       );
     }
-
-    // Calculate hash for debugging sync issues
-    let svgHash = 0;
-    for (let i = 0; i < svgContent.length; i++) {
-      const char = svgContent.charCodeAt(i);
-      svgHash = ((svgHash << 5) - svgHash) + char;
-      svgHash = svgHash & svgHash;
-    }
-    const hashStr = svgHash.toString(16);
-    const timestamp = new Date().toISOString();
-    console.log(`[Render] [${timestamp}] Job ${jobId} - Using ${usedJobSvg ? "job-specific" : "template"} SVG (${svgContent.length} chars, hash=${hashStr})`);
-    console.log(`[Render] Job ${jobId} - SVG preview: ${svgContent.substring(0, 200)}...`);
-    // Log title font-size to debug state mismatch
-    const titleFontMatch = svgContent.match(/\.title-main\s*\{[^}]*font-size:\s*([^;]+)/);
-    console.log(`[Render] Job ${jobId} - Title font-size in SVG: ${titleFontMatch ? titleFontMatch[1] : 'NOT FOUND'}`);
 
     // Prepare assets - convert image paths/references to data URLs
     const assets: Record<string, string | null> = {};
@@ -108,7 +88,7 @@ export async function POST(
       }
     }
 
-    // Prepare assets for SVG rendering
+    // Prepare assets for rendering
     const preparedAssets = await prepareAssets(assets);
 
     // Debug: log fields and assets being rendered
@@ -118,17 +98,23 @@ export async function POST(
       `${k}: ${v ? (v.startsWith('data:') ? `data URL (${v.length} chars)` : v) : 'null'}`
     ));
 
-    // Render SVG template with field values
-    const renderedSvg = renderSVGTemplate(svgContent, job.fields, preparedAssets);
+    // Always use Satori rendering
+    console.log(`[Render] Job ${jobId} - Using Satori renderer (${satoriDocument.pages.length} pages)`);
 
-    // Debug: check if placeholders remain
-    const remainingPlaceholders = renderedSvg.match(/\{\{[A-Z_]+\}\}/g);
-    if (remainingPlaceholders && remainingPlaceholders.length > 0) {
-      console.log(`[Render] Job ${jobId} - Remaining placeholders:`, remainingPlaceholders);
-    }
+    const satoriDoc: SatoriDocument = {
+      pageSize: template.satoriConfig?.pageSize || "A4",
+      header: template.satoriConfig?.header,
+      footer: template.satoriConfig?.footer,
+      pages: satoriDocument.pages,
+    };
 
-    // Convert SVG to PDF
-    const pdfBuffer = await svgToPdf(renderedSvg);
+    const result = await renderSatoriDocument(satoriDoc, job.fields, preparedAssets, template.fonts);
+
+    // Use first page SVG as the "rendered" SVG for preview
+    const renderedSvg = result.svgs[0] || "<svg></svg>";
+    const pdfBuffer = result.pdfBuffer;
+
+    console.log(`[Render] Job ${jobId} - Satori rendered ${result.svgs.length} pages, PDF size: ${pdfBuffer.length}`);
 
     // Save both SVG and PDF outputs to Supabase storage
     await saveJobOutputSvg(jobId, renderedSvg);

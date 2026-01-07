@@ -243,11 +243,21 @@ export async function POST(request: NextRequest) {
     const reasoning = (formData.get("reasoning") as "none" | "low" | "high" | null) || "none";
 
     // For continuing from existing state (feedback mode)
-    const currentCode = formData.get("currentCode") as string | null;
+    const currentSatoriPagesJson = formData.get("currentSatoriPages") as string | null;
     const currentJson = formData.get("currentJson") as string | null;
     const feedback = formData.get("feedback") as string | null;
     const startVersion = parseInt(formData.get("startVersion") as string || "0", 10);
     const conversationHistoryJson = formData.get("conversationHistory") as string | null;
+
+    // Parse Satori pages if provided
+    let currentSatoriPages: Array<{ body: string; headerOverride?: string; footerOverride?: string }> | undefined;
+    if (currentSatoriPagesJson) {
+      try {
+        currentSatoriPages = JSON.parse(currentSatoriPagesJson);
+      } catch (e) {
+        log.error("Failed to parse currentSatoriPages", e);
+      }
+    }
 
     // Get all image files (for prompt-only mode)
     const imageFiles: File[] = [];
@@ -280,15 +290,15 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Either PDF or (prompt + optional images) is required
-    if (!pdfFile && !userPrompt) {
-      return new Response(JSON.stringify({ error: "Either a PDF file or a text prompt is required" }), {
+    // Either PDF, prompt, or images is required
+    if (!pdfFile && !userPrompt && imageFiles.length === 0) {
+      return new Response(JSON.stringify({ error: "Either a PDF file, images, or a text prompt is required" }), {
         status: 400,
         headers: { "Content-Type": "application/json" },
       });
     }
 
-    const isContinuation = !!(currentCode && feedback);
+    const isContinuation = !!(currentSatoriPages && currentSatoriPages.length > 0 && feedback);
     log.info(isContinuation ? "Continuing generation with feedback" : "Starting new generation");
     log.info(`Mode: ${pdfFile ? "PDF reference" : "Prompt-only"}, Images: ${imageFiles.length}`);
 
@@ -381,7 +391,7 @@ export async function POST(request: NextRequest) {
           onEvent,
           reasoning,
           // Pass continuation state if available
-          currentCode || undefined,
+          currentSatoriPages,
           currentJson ? JSON.parse(currentJson) : undefined,
           feedback || undefined,
           startVersion,

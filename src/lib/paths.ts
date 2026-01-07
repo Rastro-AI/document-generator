@@ -69,6 +69,10 @@ export function getTemplateThumbnailPath(templateId: string): string {
   return path.join(getTemplateDir(templateId), "thumbnail.png");
 }
 
+export function getTemplateSatoriDocPath(templateId: string): string {
+  return path.join(getTemplateDir(templateId), "satori-document.json");
+}
+
 // Job paths
 export function getJobDir(jobId: string): string {
   return path.join(JOBS_DIR, jobId);

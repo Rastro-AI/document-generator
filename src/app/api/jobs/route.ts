@@ -7,6 +7,7 @@ import {
   saveAssetFile,
   copyTemplateToJob,
   copySvgTemplateToJob,
+  copySatoriTemplateToJob,
   getAssetBankFile,
 } from "@/lib/fs-utils";
 import { extractFieldsAndAssetsFromFiles } from "@/lib/llm";
@@ -214,9 +215,13 @@ export async function POST(request: NextRequest) {
 
     await createJob(job);
 
-    // Copy template files to job storage
+    // Copy template files to job storage based on format
     await copyTemplateToJob(templateId, jobId);
-    await copySvgTemplateToJob(templateId, jobId);
+    if (template.format === "satori") {
+      await copySatoriTemplateToJob(templateId, jobId);
+    } else {
+      await copySvgTemplateToJob(templateId, jobId);
+    }
 
     return NextResponse.json({ jobId });
   } catch (error) {
